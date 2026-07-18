@@ -1,0 +1,32 @@
+# --- 로컬 전용 문서 (원격 미공개) ---
+docs/
+HANDOFF.md
+
+# --- AI 도구 로컬 상태 ---
+.agentbridge/
+.codex/
+.claude/
+
+# --- macOS / iCloud ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# --- Xcode ---
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# --- Swift Package Manager ---
+.build/
+.swiftpm/
+Packages/
