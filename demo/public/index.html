@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>돌봄시설 실시간 위치 관제 (시뮬)</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --ink: #e6edf3;
+    --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --alarm: #f85149;
+    --hazard: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, "SF Pro", "Pretendard", "Apple SD Gothic Neo", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .status { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .dot-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ok); margin-right: 6px; vertical-align: middle; }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .card h2 { font-size: 13px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line);
+    color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .card .body { padding: 14px; }
+  #mapWrap { padding: 12px; }
+  canvas { width: 100%; height: auto; display: block; border-radius: 6px; background: #0a0e14; }
+  .legend { display: flex; gap: 16px; padding: 8px 14px 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; }
+  .controls button {
+    display: block; width: 100%; margin: 6px 0; padding: 9px 12px; text-align: left;
+    background: #21262d; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; cursor: pointer; font-size: 13px;
+  }
+  .controls button:hover { border-color: var(--accent); }
+  /* 3D 전환 스텁 패널 */
+  #view3d { display: none; }
+  #view3d.on { display: block; }
+  #view3d .body { text-align: center; padding: 22px 14px; }
+  #view3d .badge { display: inline-block; padding: 3px 10px; border-radius: 999px;
+    background: rgba(248,81,73,.15); color: var(--alarm); font-size: 11px; font-weight: 700;
+    letter-spacing: .04em; margin-bottom: 12px; }
+  #view3d .who { font-size: 20px; font-weight: 700; }
+  #view3d .where { color: var(--muted); margin-top: 4px; }
+  #view3d .stub {
+    margin: 16px 0; padding: 28px 14px; border: 1px dashed var(--line); border-radius: 8px;
+    color: var(--muted); font-size: 12px; background: #0a0e14;
+  }
+  #view3d .resolve { margin-top: 6px; background: var(--alarm); border-color: var(--alarm);
+    color: #fff; font-weight: 650; text-align: center; }
+  .alertlog { font-size: 12px; }
+  .alertlog .row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .alertlog .row:last-child { border: 0; }
+  .alertlog .t { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 12px; }
+  .state-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .state-pill.alerting { color: var(--alarm); border-color: var(--alarm); }
+</style>
+</head>
+<body>
+<header>
+  <h1>돌봄시설 실시간 위치 관제</h1>
+  <span class="sub">3DGS x UWB · 시뮬 스트림 (source: sim)</span>
+  <span class="status"><span class="dot-live" id="live"></span><span id="statusText">연결 중…</span>
+    &nbsp;·&nbsp; 상태 <span class="state-pill" id="statePill">idle (2D)</span></span>
+</header>
+
+<main>
+  <section class="card" id="mapCard">
+    <h2>2D 개요 뷰</h2>
+    <div id="mapWrap"><canvas id="map" width="1000" height="600"></canvas></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#58a6ff"></i>정상</span>
+      <span><i class="swatch" style="background:#f85149"></i>낙상 후보</span>
+      <span><i class="swatch" style="background:#d29922;border-radius:2px"></i>위험구역</span>
+      <span>원: UWB 오차 반경(xy)</span>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card" id="view3d">
+      <h2>3D 실사 뷰 (자동 전환)</h2>
+      <div class="body">
+        <span class="badge">낙상 후보 감지</span>
+        <div class="who" id="v3dWho">—</div>
+        <div class="where" id="v3dWhere">—</div>
+        <div class="stub">언리얼 3D 실사 씬이 이 대상의 구역으로 전환되는 지점(스텁).<br>W2에서 전환 신호 연동, W3에서 학교 실사 3DGS로 교체.</div>
+        <button class="resolve" id="resolveBtn">확인 완료 · 2D 복귀</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>낙상 주입 (데모 트리거)</h2>
+      <div class="body controls" id="tagButtons"><span class="empty">태그 로딩 중…</span></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>경보 로그</h2>
+      <div class="body alertlog" id="alertLog"><span class="empty">아직 경보 없음</span></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+(function () {
+  const cv = document.getElementById('map');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height, PAD = 24;
+  let map = null, scale = 1;
+  const tags = new Map();     // tagId -> 최신 payload
+  let alerting = null;        // 현재 경보 중인 tagId
+
+  // 미터 -> 픽셀 (원점 좌하단, y 뒤집기).
+  function mx(x) { return PAD + x * scale; }
+  function my(y) { return H - PAD - y * scale; }
+
+  fetch('/map').then(r => r.json()).then(m => {
+    map = m;
+    const [bx0, bx1] = m.bounds.x, [by0, by1] = m.bounds.y;
+    const sx = (W - PAD * 2) / (bx1 - bx0);
+    const sy = (H - PAD * 2) / (by1 - by0);
+    scale = Math.min(sx, sy);
+    draw();
+  });
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    if (!map) return;
+
+    // 구역.
+    ctx.lineWidth = 1;
+    for (const z of map.zones) {
+      const [rx, ry, rw, rh] = z.rect;
+      ctx.strokeStyle = '#30363d';
+      ctx.fillStyle = 'rgba(88,166,255,0.04)';
+      ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
+      ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
+      ctx.fillStyle = '#6e7681';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(z.label, mx(rx) + 6, my(ry + rh) + 16);
+    }
+    // 위험구역.
+    for (const h of (map.hazards || [])) {
+      const [rx, ry, rw, rh] = h.rect;
+      ctx.strokeStyle = 'rgba(210,153,34,0.7)';
+      ctx.fillStyle = 'rgba(210,153,34,0.08)';
+      ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
+      ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
+    }
+
+    // 태그.
+    for (const [id, t] of tags) {
+      const px = mx(t.pos.x), py = my(t.pos.y);
+      const isAlert = id === alerting;
+      // 오차 반경(xy).
+      ctx.beginPath();
+      ctx.arc(px, py, (t.err?.xy || 0.2) * scale, 0, Math.PI * 2);
+      ctx.fillStyle = isAlert ? 'rgba(248,81,73,0.18)' : 'rgba(88,166,255,0.15)';
+      ctx.fill();
+      // 점.
+      ctx.beginPath();
+      ctx.arc(px, py, 7, 0, Math.PI * 2);
+      ctx.fillStyle = isAlert ? '#f85149' : '#58a6ff';
+      ctx.fill();
+      if (isAlert) {
+        ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
+      }
+      // 이름.
+      ctx.fillStyle = '#e6edf3';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(t.name || id, px + 11, py + 4);
+    }
+  }
+
+  // SSE 연결.
+  const es = new EventSource('/stream');
+  const live = document.getElementById('live');
+  const statusText = document.getElementById('statusText');
+  es.onopen = () => { statusText.textContent = '스트림 연결됨'; live.style.background = 'var(--ok)'; };
+  es.onerror = () => { statusText.textContent = '재연결 중…'; live.style.background = 'var(--muted)'; };
+
+  es.addEventListener('position', (e) => {
+    const p = JSON.parse(e.data);
+    tags.set(p.tagId, p);
+    draw();
+  });
+
+  es.addEventListener('alert', (e) => {
+    const a = JSON.parse(e.data);
+    triggerAlert(a);
+  });
+
+  // 낙상 경보 -> 2D 강조 + 3D 스텁 자동 전환.
+  function triggerAlert(a) {
+    alerting = a.tagId;
+    setState('alerting');
+    document.getElementById('v3dWho').textContent = (a.name || a.tagId) + ' · 낙상 후보';
+    document.getElementById('v3dWhere').textContent =
+      `${a.zone} · (${a.pos.x}, ${a.pos.y})m · 피크 ${a.peakAccel}g`;
+    document.getElementById('view3d').classList.add('on');
+    logAlert(a);
+    draw();
+  }
+
+  document.getElementById('resolveBtn').onclick = () => {
+    alerting = null;
+    setState('idle');
+    document.getElementById('view3d').classList.remove('on');
+    draw();
+  };
+
+  function setState(s) {
+    const pill = document.getElementById('statePill');
+    if (s === 'alerting') { pill.textContent = 'alerting (3D auto)'; pill.classList.add('alerting'); }
+    else { pill.textContent = 'idle (2D)'; pill.classList.remove('alerting'); }
+  }
+
+  function logAlert(a) {
+    const box = document.getElementById('alertLog');
+    if (box.querySelector('.empty')) box.innerHTML = '';
+    const time = new Date(a.ts).toLocaleTimeString('ko-KR');
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<b>${a.name || a.tagId}</b> 낙상 후보 · ${a.zone}` +
+      `<div class="t">${time} · 피크 ${a.peakAccel}g · (${a.pos.x}, ${a.pos.y})m</div>`;
+    box.prepend(row);
+  }
+
+  // 태그별 낙상 주입 버튼.
+  fetch('/tags').then(r => r.json()).then(list => {
+    const box = document.getElementById('tagButtons');
+    box.innerHTML = '';
+    for (const t of list) {
+      const b = document.createElement('button');
+      b.textContent = `${t.name} (${t.id}) 낙상 주입`;
+      b.onclick = () => fetch('/inject-fall?tagId=' + encodeURIComponent(t.id));
+      box.appendChild(b);
+    }
+  });
+})();
+</script>
+</body>
+</html>

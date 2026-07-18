@@ -5,6 +5,15 @@ import SwiftUI
 struct Phase1ContentView: View {
     @StateObject private var mgr = MultiPeerNIManager()
 
+    // 워치는 화면이 좁아 거리값이 잘리므로 폰트·칸폭을 줄인다(폰은 그대로).
+    #if os(watchOS)
+    private let idWidth: CGFloat = 44
+    private let distFont: Font = .system(.caption, design: .rounded)
+    #else
+    private let idWidth: CGFloat = 68
+    private let distFont: Font = .system(.body, design: .rounded)
+    #endif
+
     var body: some View {
         if mgr.role == nil {
             roleChooser
@@ -36,9 +45,10 @@ struct Phase1ContentView: View {
             Text(mgr.role?.myID ?? "-").font(.headline)
             ForEach(mgr.peers) { p in
                 HStack(spacing: 6) {
-                    Text(p.id).font(.caption).frame(width: 68, alignment: .leading)
+                    Text(p.id).font(.caption2).frame(width: idWidth, alignment: .leading)
                     Text(p.distance.map { String(format: "%.2f m", $0) } ?? "-- m")
-                        .font(.system(.body, design: .rounded)).bold().monospacedDigit()
+                        .font(distFont).bold().monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.5)
                     Spacer()
                     Text(String(format: "%.0f Hz", p.hz)).font(.caption2).monospacedDigit()
                     Text(p.chan).font(.caption2).foregroundStyle(.secondary)
