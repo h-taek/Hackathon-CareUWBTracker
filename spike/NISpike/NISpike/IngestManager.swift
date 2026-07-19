@@ -4,6 +4,7 @@ import WatchConnectivity
 import Combine
 #if os(watchOS)
 import CoreMotion
+import HealthKit
 #endif
 
 /// E3(메인폰 -> 서버 ingest 전송)의 매니저.
@@ -58,6 +59,10 @@ final class IngestManager: NSObject, ObservableObject {
     private let sendHz = 10.0
     private var seq = 0
     private var lastSent = Date.distantPast
+    // 손목을 내려 화면이 꺼지면 앱이 백그라운드로 가 CoreMotion 샘플·WCSession 전송이 멈춘다.
+    // 운동(모션) 세션을 켜두면 백그라운드 실행이 유지돼 낙상 드롭 순간에도 측정·전송이 끊기지 않는다.
+    private let healthStore = HKHealthStore()
+    private var workoutSession: HKWorkoutSession?
     #else
     let platform = "PHONE"
     private lazy var urlSession: URLSession = {
@@ -92,6 +97,7 @@ final class IngestManager: NSObject, ObservableObject {
     func stop() {
         #if os(watchOS)
         motion.stopAccelerometerUpdates()
+        endWorkout()
         #endif
         retryTimer?.invalidate()
         niSession?.invalidate()
@@ -151,11 +157,41 @@ final class IngestManager: NSObject, ObservableObject {
         motion.accelerometerUpdateInterval = 1.0 / sampleHz
         seq = 0
         lastSent = .distantPast
+        startWorkoutKeepAlive()   // 손목 내려도 앱 유지(백그라운드 실행 확보)
         setStatus("측정 시작 · 샘플 \(Int(sampleHz))Hz · 전송 \(Int(sendHz))Hz")
         motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
             guard let self = self, let a = data?.acceleration else { return }
             self.onSample(ax: a.x, ay: a.y, az: a.z)
         }
+    }
+
+    // MARK: 운동 세션(손목 내려도 앱 유지) — 실제 건강 데이터는 저장 안 하고 백그라운드 실행만 얻는다.
+    private func startWorkoutKeepAlive() {
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        let share: Set = [HKObjectType.workoutType()]
+        // 세션 실행 자체는 권한이 필요없지만, 최초 1회 권한 흐름을 태워 시스템이 세션을 허용하게 한다.
+        healthStore.requestAuthorization(toShare: share, read: []) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.beginWorkoutSession() }
+        }
+    }
+
+    private func beginWorkoutSession() {
+        guard workoutSession == nil else { return }
+        let config = HKWorkoutConfiguration()
+        config.activityType = .other
+        config.locationType = .indoor
+        do {
+            let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
+            session.startActivity(with: Date())
+            workoutSession = session
+        } catch {
+            setStatus("운동 세션 실패: \(error.localizedDescription)")
+        }
+    }
+
+    private func endWorkout() {
+        workoutSession?.end()
+        workoutSession = nil
     }
 
     /// CoreMotion 콜백(.main). 전송 틱(10Hz)에만 프레임 생성·전송. 거리는 최신 NI 측정값을 실어 보낸다.
