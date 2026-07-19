@@ -51,6 +51,8 @@
 				TelemetryFrame.swift,
 				TelemetryManager.swift,
 				TelemetryView.swift,
+				IngestManager.swift,
+				IngestView.swift,
 			);
 			target = B60DC214300A503500168302 /* NISpike Watch App Watch App */;
 		};

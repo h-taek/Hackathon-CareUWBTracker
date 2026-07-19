@@ -67,6 +67,12 @@ if [[ -n "$WATCH_UDID" ]]; then
     echo "▶ 워치 설치: $(basename "$WATCH_APP")"
     xcrun devicectl device install app --device "$WATCH_UDID" "$WATCH_APP" \
       || echo "  ⚠ 워치 설치 실패(터널 유휴 등) — 폰 companion 전파로 폴백" >&2
+    # 재설치만 하면 실행 중인 워치 앱은 옛 바이너리를 계속 띄운다. 강제 재실행해 새 코드 로드.
+    # (--terminate-existing: 켜져 있던 인스턴스 종료 후 새로 시작. 워치 잠금/미착용이면 실패할 수 있어 폴백 안내.)
+    echo "▶ 워치 앱 재실행(새 코드 로드)"
+    xcrun devicectl device process launch --terminate-existing \
+      --device "$WATCH_UDID" com.test.NISpike.watchkitapp \
+      || echo "  ⚠ 워치 앱 자동 실행 실패 — 워치에서 앱을 직접 종료 후 다시 여세요" >&2
   fi
 fi
 
