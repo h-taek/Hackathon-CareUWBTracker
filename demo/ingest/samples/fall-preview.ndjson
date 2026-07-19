@@ -1,0 +1,9 @@
+# 50Hz replay preview: normal -> freefall -> impact
+{"tagId":"tag-watch","ts":0,"ranges":[{"anchorId":"phoneMain","distance":1.414},{"anchorId":"phoneSub","distance":3.162}],"accel":{"x":0.12,"y":-0.08,"z":9.76},"source":"sim"}
+{"tagId":"tag-watch","ts":20,"ranges":[{"anchorId":"phoneMain","distance":1.421},{"anchorId":"phoneSub","distance":3.156}],"accel":{"x":-0.15,"y":0.1,"z":9.88},"source":"sim"}
+{"tagId":"tag-watch","ts":40,"ranges":[{"anchorId":"phoneMain","distance":1.428},{"anchorId":"phoneSub","distance":3.149}],"accel":{"x":0.1,"y":0.1,"z":0.2},"source":"sim"}
+{"tagId":"tag-watch","ts":60,"ranges":[{"anchorId":"phoneMain","distance":1.435},{"anchorId":"phoneSub","distance":3.143}],"accel":{"x":0.1,"y":0.1,"z":0.2},"source":"sim"}
+{"tagId":"tag-watch","ts":80,"ranges":[{"anchorId":"phoneMain","distance":1.442},{"anchorId":"phoneSub","distance":3.136}],"accel":{"x":0.1,"y":0.1,"z":0.2},"source":"sim"}
+{"tagId":"tag-watch","ts":100,"ranges":[{"anchorId":"phoneMain","distance":1.449},{"anchorId":"phoneSub","distance":3.13}],"accel":{"x":0.1,"y":0.1,"z":0.2},"source":"sim"}
+{"tagId":"tag-watch","ts":120,"ranges":[{"anchorId":"phoneMain","distance":1.456},{"anchorId":"phoneSub","distance":3.123}],"accel":{"x":4,"y":3,"z":32},"source":"sim"}
+{"tagId":"tag-watch","ts":140,"ranges":[{"anchorId":"phoneMain","distance":1.463},{"anchorId":"phoneSub","distance":3.117}],"accel":{"x":4,"y":3,"z":32},"source":"sim"}

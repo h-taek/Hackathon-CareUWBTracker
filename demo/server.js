@@ -7,6 +7,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { handleIngest } = require('./ingest/endpoint');
+const { createPositioningHandler } = require('./positioning/handler');
 const { Simulator } = require('./sim');
 
 const PORT = process.env.PORT || 8080;
@@ -14,13 +16,18 @@ const map = JSON.parse(fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8')
 
 const sim = new Simulator(map);
 const clients = new Set(); // 현재 연결된 SSE 응답 객체들
-let ingestCount = 0;       // 앵커폰 -> /ingest 누적 수신 수(수신 검증용)
 
 // 시뮬 이벤트 -> 모든 SSE 클라이언트로 브로드캐스트.
 function broadcast(event, data) {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(frame);
 }
+const handlePositioning = createPositioningHandler({
+  mainAnchorId: process.env.MAIN_ANCHOR_ID || 'phoneMain',
+  subAnchorId: process.env.SUB_ANCHOR_ID || 'phoneSub',
+  anchorDistance: Number(process.env.ANCHOR_DISTANCE || 4),
+  halfPlane: process.env.HALF_PLANE || 'positive',
+}, (position) => broadcast('position', position));
 sim.on('position', (p) => broadcast('position', p));
 sim.on('alert', (a) => broadcast('alert', a));
 sim.start(5); // 5Hz
@@ -50,6 +57,14 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
 
+  // 기기/B0 하네스의 원시 거리·가속도 수집. B2는 onIngest에서 연결한다.
+  if (pathname === '/ingest') {
+    handleIngest(req, res, {
+      onIngest: handlePositioning,
+    });
+    return;
+  }
+
   // 1) SSE 위치/경보 스트림.
   if (pathname === '/stream') {
     res.writeHead(200, {
@@ -78,34 +93,7 @@ const server = http.createServer((req, res) => {
     return sendJSON(res, sim.tags.map((t) => ({ id: t.id, name: t.name })));
   }
 
-  // 5) 수집(ingest) 수신: 메인 앵커폰 -> 서버 (spec 03 §5). 얇은 폰이 보낸 원시 거리·가속도.
-  //    지금은 수신 검증용 로그·카운트만. 전병윤이 여기서 삼각측량(x,y)·낙상 판정 -> position/alert SSE로 확장.
-  if (pathname === '/ingest' && req.method === 'POST') {
-    let raw = '';
-    req.on('data', (c) => {
-      raw += c;
-      if (raw.length > 1e6) req.destroy(); // 폭주 방지
-    });
-    req.on('end', () => {
-      try {
-        const f = JSON.parse(raw);
-        ingestCount++;
-        const a = f.accel || {};
-        const rs = (f.ranges || []).map((r) => `${r.anchorId}=${(+r.distance).toFixed(2)}m`).join(',') || '(없음)';
-        const smv = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
-        console.log(
-          `[INGEST #${ingestCount}] ${f.tagId} src=${f.source} ranges=[${rs}] ` +
-          `accel=(${(a.x||0).toFixed(2)},${(a.y||0).toFixed(2)},${(a.z||0).toFixed(2)}) m/s² |a|=${smv.toFixed(2)}`
-        );
-        sendJSON(res, { ok: true, n: ingestCount });
-      } catch (e) {
-        sendJSON(res, { ok: false, error: 'bad json' }, 400);
-      }
-    });
-    return;
-  }
-
-  // 6) 대시보드 정적 파일.
+  // 5) 대시보드 정적 파일.
   if (pathname === '/' || pathname === '/index.html') {
     return sendFile(res, path.join(__dirname, 'public', 'index.html'), 'text/html; charset=utf-8');
   }
@@ -118,5 +106,5 @@ server.listen(PORT, () => {
   console.log(`시뮬 스트림 서버 실행: http://localhost:${PORT}`);
   console.log(`  대시보드   http://localhost:${PORT}/`);
   console.log(`  SSE 스트림 http://localhost:${PORT}/stream`);
-  console.log(`  ingest 수신 POST http://<맥 LAN IP>:${PORT}/ingest  (앵커폰이 전송)`);
+  console.log(`  ingest     POST http://localhost:${PORT}/ingest`);
 });
