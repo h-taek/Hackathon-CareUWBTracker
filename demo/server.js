@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { handleIngest } = require('./ingest/endpoint');
+const { createPositioningHandler } = require('./positioning/handler');
 const { Simulator } = require('./sim');
 
 const PORT = process.env.PORT || 8080;
@@ -21,6 +22,12 @@ function broadcast(event, data) {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(frame);
 }
+const handlePositioning = createPositioningHandler({
+  mainAnchorId: process.env.MAIN_ANCHOR_ID || 'phoneMain',
+  subAnchorId: process.env.SUB_ANCHOR_ID || 'phoneSub',
+  anchorDistance: Number(process.env.ANCHOR_DISTANCE || 4),
+  halfPlane: process.env.HALF_PLANE || 'positive',
+}, (position) => broadcast('position', position));
 sim.on('position', (p) => broadcast('position', p));
 sim.on('alert', (a) => broadcast('alert', a));
 sim.start(5); // 5Hz
@@ -53,10 +60,7 @@ const server = http.createServer((req, res) => {
   // 기기/B0 하네스의 원시 거리·가속도 수집. B2는 onIngest에서 연결한다.
   if (pathname === '/ingest') {
     handleIngest(req, res, {
-      onIngest: (payload) => {
-        // B2 연결 전에는 수신·검증까지만 수행한다.
-        void payload;
-      },
+      onIngest: handlePositioning,
     });
     return;
   }
