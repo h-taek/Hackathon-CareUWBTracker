@@ -3,7 +3,7 @@ import SwiftUI
 /// 앱 진입 시 먼저 뜨는 선택 화면. Phase 0(검증된 단일 거리)과 Phase 1(2세션 테스트)을 고른다.
 /// Phase 0 코드는 손대지 않고 그대로 두고, 여기서 한 번 탭으로 들어간다.
 struct RootView: View {
-    enum Screen { case menu, phase0, phase1 }
+    enum Screen { case menu, phase0, phase1, telemetry }
     @State private var screen: Screen = .menu
 
     var body: some View {
@@ -15,6 +15,8 @@ struct RootView: View {
                     .buttonStyle(.borderedProminent)
                 Button("Phase 1 · 2세션 테스트") { screen = .phase1 }
                     .buttonStyle(.borderedProminent)
+                Button("Phase 2 · 텔레메트리(가속도)") { screen = .telemetry }
+                    .buttonStyle(.borderedProminent)
             }
             .font(.caption)
             .padding()
@@ -22,6 +24,8 @@ struct RootView: View {
             ContentView()
         case .phase1:
             Phase1ContentView()
+        case .telemetry:
+            TelemetryView()
         }
     }
 }

@@ -1,0 +1,11 @@
+{
+  // Code Runner: 기본 Swift 명령(swift <file>)은 iOS/watchOS 프레임워크가 없어 우리 앱에선 실패한다.
+  // 그래서 Swift 실행을 우리 스크립트로 갈아끼운다 → Run 버튼 = 빌드+아이폰 설치+실행+로그(전체).
+  // 컴파일만 빠르게 하려면 tasks.json "NISpike: Build" (Cmd+Shift+B) 사용.
+  "code-runner.executorMap": {
+    "swift": "cd \"$workspaceRoot/spike/NISpike\" && ./run.sh"
+  },
+  // 로그 스트림/색상 출력을 위해 Output 패널이 아니라 통합 터미널에서 실행.
+  "code-runner.runInTerminal": true,
+  "code-runner.clearPreviousOutput": true
+}

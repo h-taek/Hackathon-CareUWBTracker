@@ -1,5 +1,11 @@
 # NI 스파이크 — 아이폰↔애플워치 단일 세션 UWB 실측
 
+> **[2026-07-19 갱신] 빌드 방법 — 이 폴더가 곧 빌드 프로젝트다.**
+> 이제 소스=빌드가 이 `spike/NISpike/` 한 곳이다(옛 `~/Developer/NISpike` 외부 복사본·복사 스텝 폐기). GUI(Xcode) 없이:
+> - `./run.sh` — 빌드 → 아이폰 설치 → 실행 → 콘솔 로그(워치앱 자동 동반). `./run.sh build`는 컴파일만.
+> - Antigravity/VSCode: Run 버튼(`.vscode/tasks.json`) 또는 Code Runner Run(=컴파일 검증).
+> - DerivedData는 기본값(`~/Library`, iCloud 밖). 아래 "Xcode 프로젝트 만들기"는 최초 구성 이력이라 이제 실행 불필요(트러블슈팅 참고용).
+
 목적 한 줄: **"아이폰↔애플워치 Nearby Interaction이 거리값을 주는가, 몇 Hz로, 얼마나 정확한가"를 폰1+워치1로 실측**한다.
 이게 통과해야 나중에 폰2+워치1(앵커2+태그1) 2앵커 삼각측량으로 넘어간다. (근거: `docs/spec/06_hardware.md` 4.4절)
 

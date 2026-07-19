@@ -1,4 +1,4 @@
-import SwiftUI
+  import SwiftUI
 
 /// iOS/watchOS 공용 스파이크 화면. 두 타깃에 함께 add 한다.
 /// 거리(m), 업데이트율(Hz), 누적 콜백 수, 피어 연결/상태를 크게 표시해 육안 실측이 쉽도록 한다.
