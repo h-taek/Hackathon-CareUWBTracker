@@ -3,6 +3,7 @@
 
 const { IngestGenerator } = require('./generator');
 const { ReplayPlayer, loadNdjson } = require('./replay');
+const { createHttpWriter } = require('./sender');
 
 const USAGE = `Usage:
   node demo/ingest/cli.js generate [options]
@@ -13,9 +14,11 @@ Generate options:
   --anchor-distance <meters>   Distance between anchors (default: 4)
   --count <number>             Stop after this many records (default: unlimited)
   --fall-after <seconds>       Inject one fall after the given time
+  --url <http-url>             POST records instead of printing NDJSON
 
 Replay options:
   --speed <number>             Playback speed multiplier (default: 1)
+  --url <http-url>             POST records instead of printing NDJSON
 
 Output:
   One spec-03 ingest JSON object per line (NDJSON).`;
@@ -25,7 +28,7 @@ function parseArgs(argv) {
   if (!command || command === '--help' || command === '-h') return { command: 'help' };
 
   if (command === 'generate') {
-    const options = parseOptions(rest, new Set(['hz', 'anchor-distance', 'count', 'fall-after']));
+    const options = parseOptions(rest, new Set(['hz', 'anchor-distance', 'count', 'fall-after', 'url']));
     return {
       command,
       hz: positiveNumber(options.hz ?? 50, 'hz'),
@@ -34,16 +37,18 @@ function parseArgs(argv) {
       fallAfter: options['fall-after'] === undefined
         ? null
         : nonNegativeNumber(options['fall-after'], 'fall-after'),
+      url: options.url,
     };
   }
 
   if (command === 'replay') {
     if (!rest[0] || rest[0].startsWith('--')) throw new Error('replay requires an NDJSON file');
-    const options = parseOptions(rest.slice(1), new Set(['speed']));
+    const options = parseOptions(rest.slice(1), new Set(['speed', 'url']));
     return {
       command,
       file: rest[0],
       speed: positiveNumber(options.speed ?? 1, 'speed'),
+      url: options.url,
     };
   }
 
@@ -122,9 +127,9 @@ function main(argv) {
     if (config.command === 'help') {
       process.stdout.write(`${USAGE}\n`);
     } else if (config.command === 'generate') {
-      runGenerate(config);
+      runGenerate(config, config.url ? createHttpWriter(config.url) : writeNdjson);
     } else {
-      runReplay(config);
+      runReplay(config, config.url ? createHttpWriter(config.url) : writeNdjson);
     }
   } catch (error) {
     process.stderr.write(`Error: ${error.message}\n\n${USAGE}\n`);

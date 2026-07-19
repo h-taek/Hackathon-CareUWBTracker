@@ -7,14 +7,14 @@ const { parseArgs, runGenerate } = require('./cli');
 test('generate CLI 옵션을 파싱한다', () => {
   assert.deepEqual(
     parseArgs(['generate', '--hz', '25', '--anchor-distance', '5', '--count', '10', '--fall-after', '2']),
-    { command: 'generate', hz: 25, anchorDistance: 5, count: 10, fallAfter: 2 },
+    { command: 'generate', hz: 25, anchorDistance: 5, count: 10, fallAfter: 2, url: undefined },
   );
 });
 
 test('replay CLI 옵션을 파싱한다', () => {
   assert.deepEqual(
-    parseArgs(['replay', 'sample.ndjson', '--speed', '2']),
-    { command: 'replay', file: 'sample.ndjson', speed: 2 },
+    parseArgs(['replay', 'sample.ndjson', '--speed', '2', '--url', 'http://localhost:8080/ingest']),
+    { command: 'replay', file: 'sample.ndjson', speed: 2, url: 'http://localhost:8080/ingest' },
   );
 });
 

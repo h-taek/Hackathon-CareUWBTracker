@@ -7,6 +7,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { handleIngest } = require('./ingest/endpoint');
 const { Simulator } = require('./sim');
 
 const PORT = process.env.PORT || 8080;
@@ -49,6 +50,17 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
 
+  // 기기/B0 하네스의 원시 거리·가속도 수집. B2는 onIngest에서 연결한다.
+  if (pathname === '/ingest') {
+    handleIngest(req, res, {
+      onIngest: (payload) => {
+        // B2 연결 전에는 수신·검증까지만 수행한다.
+        void payload;
+      },
+    });
+    return;
+  }
+
   // 1) SSE 위치/경보 스트림.
   if (pathname === '/stream') {
     res.writeHead(200, {
@@ -90,4 +102,5 @@ server.listen(PORT, () => {
   console.log(`시뮬 스트림 서버 실행: http://localhost:${PORT}`);
   console.log(`  대시보드   http://localhost:${PORT}/`);
   console.log(`  SSE 스트림 http://localhost:${PORT}/stream`);
+  console.log(`  ingest     POST http://localhost:${PORT}/ingest`);
 });
