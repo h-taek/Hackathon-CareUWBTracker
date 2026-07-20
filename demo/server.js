@@ -11,11 +11,14 @@ const { handleIngest } = require('./ingest/endpoint');
 const { createPositioningHandler } = require('./positioning/handler');
 const { Simulator } = require('./sim');
 const { formatIngestLine, DEFAULT_GRAVITY } = require('./lib/ingest-log');
+const { createFallDetector, optionsFromEnv } = require('./detection/fall');
+const { zoneAt } = require('./lib/zone');
 
 const PORT = process.env.PORT || 8080;
 const map = JSON.parse(fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'));
 
 const sim = new Simulator(map);
+const fallDetector = createFallDetector(optionsFromEnv());
 const clients = new Set(); // 현재 연결된 SSE 응답 객체들
 
 // 시뮬 이벤트 -> 모든 SSE 클라이언트로 브로드캐스트.
@@ -42,6 +45,11 @@ function logAndPosition(payload) {
     subAnchorId: SUB_ANCHOR_ID,
     gravity: DEFAULT_GRAVITY,
   }));
+  for (const evt of fallDetector.observe(payload, position)) {
+    if (evt.pos) evt.zone = zoneAt(map, evt.pos.x, evt.pos.y);
+    console.log(`[fall] ${evt.type} ${evt.tagId} peak=${evt.peakAccel}g freefall=${evt.freefall} zone=${evt.zone ?? '-'}`);
+    broadcast('alert', evt);
+  }
   return position;
 }
 sim.on('position', (p) => broadcast('position', p));
