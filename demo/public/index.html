@@ -194,20 +194,34 @@
 
   es.addEventListener('alert', (e) => {
     const a = JSON.parse(e.data);
-    triggerAlert(a);
+    if (a.type === 'fall_canceled') { clearAlert(a); return; }
+    triggerAlert(a); // fall_candidate | fall_confirmed
   });
 
-  // 낙상 경보 -> 2D 강조 + 3D 스텁 자동 전환.
+  // 후보=주황 주목, 확진=빨강 승격. pos 없으면(accel-only) 위치 미상 표기.
   function triggerAlert(a) {
+    const confirmed = a.type === 'fall_confirmed';
     alerting = a.tagId;
     setState('alerting');
-    document.getElementById('v3dWho').textContent = (a.name || a.tagId) + ' · 낙상 후보';
-    document.getElementById('v3dWhere').textContent =
-      `${a.zone} · (${a.pos.x}, ${a.pos.y})m · 피크 ${a.peakAccel}g`;
+    const where = a.pos ? `(${round1(a.pos.x)}, ${round1(a.pos.y)})m` : '위치 미상';
+    const label = confirmed ? '낙상 확진' : '낙상 후보';
+    document.getElementById('v3dWho').textContent = `${a.name || a.tagId} · ${label}`;
+    document.getElementById('v3dWhere').textContent = `${a.zone || '미지정'} · ${where} · 피크 ${a.peakAccel}g`;
     document.getElementById('view3d').classList.add('on');
-    logAlert(a);
+    logAlert(a, label, where);
     draw();
   }
+
+  // 취소(움직임 재개): 현재 경보 태그와 같으면 idle 복귀.
+  function clearAlert(a) {
+    if (alerting !== a.tagId) return;
+    alerting = null;
+    setState('idle');
+    document.getElementById('view3d').classList.remove('on');
+    draw();
+  }
+
+  function round1(n) { return Math.round(n * 10) / 10; }
 
   document.getElementById('resolveBtn').onclick = () => {
     alerting = null;
@@ -222,14 +236,14 @@
     else { pill.textContent = 'idle (2D)'; pill.classList.remove('alerting'); }
   }
 
-  function logAlert(a) {
+  function logAlert(a, label, where) {
     const box = document.getElementById('alertLog');
     if (box.querySelector('.empty')) box.innerHTML = '';
     const time = new Date(a.ts).toLocaleTimeString('ko-KR');
     const row = document.createElement('div');
     row.className = 'row';
-    row.innerHTML = `<b>${a.name || a.tagId}</b> 낙상 후보 · ${a.zone}` +
-      `<div class="t">${time} · 피크 ${a.peakAccel}g · (${a.pos.x}, ${a.pos.y})m</div>`;
+    row.innerHTML = `<b>${a.name || a.tagId}</b> ${label} · ${a.zone || '미지정'}` +
+      `<div class="t">${time} · 피크 ${a.peakAccel}g · ${where}</div>`;
     box.prepend(row);
   }
 
