@@ -51,14 +51,21 @@ test('스키마 오류를 issues와 함께 400으로 반환한다', async () => 
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(validPayload({ tagId: '', ranges: [] })),
+      body: JSON.stringify(validPayload({
+        tagId: '',
+        ranges: [
+          { anchorId: 'phoneMain', distance: 1 },
+          { anchorId: 'phoneSub', distance: 2 },
+          { anchorId: 'phoneThird', distance: 3 },
+        ],
+      })),
     });
     const body = await response.json();
 
     assert.equal(response.status, 400);
     assert.equal(body.error, 'invalid_ingest');
     assert.ok(body.issues.includes('tagId must be a non-empty string'));
-    assert.ok(body.issues.includes('ranges must contain one or two anchors'));
+    assert.ok(body.issues.includes('ranges must be an array of at most two anchors'));
   });
 });
 

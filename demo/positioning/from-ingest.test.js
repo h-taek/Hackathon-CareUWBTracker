@@ -59,6 +59,13 @@ test('필요한 앵커가 하나라도 없으면 좌표 계산을 보류한다',
   ]), OPTIONS), null);
 });
 
+test('accel-only ingest(빈/없는 ranges)면 크래시 없이 좌표 계산을 보류한다', () => {
+  assert.equal(positionFromIngest(ingest([]), OPTIONS), null);
+  const noRanges = ingest([]);
+  delete noRanges.ranges;
+  assert.equal(positionFromIngest(noRanges, OPTIONS), null);
+});
+
 test('음수 반평면과 사용자 지정 오차 반경을 전달한다', () => {
   const position = positionFromIngest(ingest([
     { anchorId: 'phoneMain', distance: Math.sqrt(5) },

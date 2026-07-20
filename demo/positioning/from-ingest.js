@@ -5,6 +5,9 @@ const { triangulateTwoAnchors } = require('./triangulate');
 function positionFromIngest(payload, options) {
   validateOptions(options);
 
+  // accel-only ingest면 ranges가 없거나 비어 있다 → 좌표 계산 보류(낙상은 가속도로 별도 판정).
+  if (!Array.isArray(payload.ranges) || payload.ranges.length === 0) return null;
+
   const mainRange = payload.ranges.find((range) => range.anchorId === options.mainAnchorId);
   const subRange = payload.ranges.find((range) => range.anchorId === options.subAnchorId);
   if (!mainRange || !subRange) return null;

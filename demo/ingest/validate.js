@@ -31,8 +31,13 @@ function validateIngest(payload) {
 }
 
 function validateRanges(ranges, issues) {
-  if (!Array.isArray(ranges) || ranges.length < 1 || ranges.length > 2) {
-    issues.push('ranges must contain one or two anchors');
+  // accel-only ingest: 낙상 판정은 가속도만으로 하므로 NI(UWB)가 붙기 전/끊긴 구간엔
+  // ranges가 비어 온다. 빈/없는 ranges는 허용하고 위치 계산만 보류한다(spec 03 §5.1).
+  if (ranges === undefined || ranges === null || (Array.isArray(ranges) && ranges.length === 0)) {
+    return;
+  }
+  if (!Array.isArray(ranges) || ranges.length > 2) {
+    issues.push('ranges must be an array of at most two anchors');
     return;
   }
 

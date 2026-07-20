@@ -10,6 +10,7 @@ const path = require('path');
 const { handleIngest } = require('./ingest/endpoint');
 const { createPositioningHandler } = require('./positioning/handler');
 const { Simulator } = require('./sim');
+const { formatIngestLine, DEFAULT_GRAVITY } = require('./lib/ingest-log');
 
 const PORT = process.env.PORT || 8080;
 const map = JSON.parse(fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'));
@@ -22,12 +23,27 @@ function broadcast(event, data) {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(frame);
 }
+const MAIN_ANCHOR_ID = process.env.MAIN_ANCHOR_ID || 'phoneMain';
+const SUB_ANCHOR_ID = process.env.SUB_ANCHOR_ID || 'phoneSub';
+
 const handlePositioning = createPositioningHandler({
-  mainAnchorId: process.env.MAIN_ANCHOR_ID || 'phoneMain',
-  subAnchorId: process.env.SUB_ANCHOR_ID || 'phoneSub',
+  mainAnchorId: MAIN_ANCHOR_ID,
+  subAnchorId: SUB_ANCHOR_ID,
   anchorDistance: Number(process.env.ANCHOR_DISTANCE || 4),
   halfPlane: process.env.HALF_PLANE || 'positive',
 }, (position) => broadcast('position', position));
+
+// 수신 관측용: 삼각측량을 시도(2앵커면 좌표, 부족하면 null)한 뒤, 프레임을 콘솔 한 줄로 찍는다.
+// 포맷은 lib/ingest-log.js가 담당(순수 함수). accel-only(ranges:[])도 여기서 보이므로 "폰->서버 도착" 확인 가능.
+function logAndPosition(payload) {
+  const position = handlePositioning(payload);
+  console.log(formatIngestLine(payload, position, {
+    mainAnchorId: MAIN_ANCHOR_ID,
+    subAnchorId: SUB_ANCHOR_ID,
+    gravity: DEFAULT_GRAVITY,
+  }));
+  return position;
+}
 sim.on('position', (p) => broadcast('position', p));
 sim.on('alert', (a) => broadcast('alert', a));
 sim.start(5); // 5Hz
@@ -60,7 +76,7 @@ const server = http.createServer((req, res) => {
   // 기기/B0 하네스의 원시 거리·가속도 수집. B2는 onIngest에서 연결한다.
   if (pathname === '/ingest') {
     handleIngest(req, res, {
-      onIngest: handlePositioning,
+      onIngest: logAndPosition,
     });
     return;
   }

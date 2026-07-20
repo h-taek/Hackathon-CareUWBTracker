@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { IngestGenerator } = require('../ingest/generator');
+const { IngestGenerator } = require('../harness/generator');
 const { createPositioningHandler } = require('./handler');
 
 const OPTIONS = Object.freeze({

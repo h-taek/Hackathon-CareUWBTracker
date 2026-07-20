@@ -36,8 +36,28 @@ test('객체가 아닌 payload와 필수 필드 누락을 거부한다', () => {
   assert.throws(
     () => validateIngest({}),
     (error) => error.issues.includes('tagId must be a non-empty string')
-      && error.issues.includes('ranges must contain one or two anchors')
       && error.issues.includes('accel must be an object'),
+  );
+});
+
+test('accel-only ingest: 빈/없는 ranges를 허용한다(NI 붙기 전 낙상 감지용)', () => {
+  assert.doesNotThrow(() => validateIngest(validPayload({ ranges: [] })));
+
+  const noRanges = validPayload();
+  delete noRanges.ranges;
+  assert.doesNotThrow(() => validateIngest(noRanges));
+});
+
+test('앵커가 3개 이상이면 거부한다', () => {
+  assert.throws(
+    () => validateIngest(validPayload({
+      ranges: [
+        { anchorId: 'phoneMain', distance: 1 },
+        { anchorId: 'phoneSub', distance: 2 },
+        { anchorId: 'phoneThird', distance: 3 },
+      ],
+    })),
+    (error) => error.issues.includes('ranges must be an array of at most two anchors'),
   );
 });
 
