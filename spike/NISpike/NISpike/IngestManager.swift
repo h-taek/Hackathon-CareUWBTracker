@@ -76,6 +76,10 @@ final class IngestManager: NSObject, ObservableObject {
     private var wc: WCSession?
     private var retryTimer: Timer?
     private var watchdog: Timer?
+    // 거리값은 NI 델리게이트(메인 큐)가 쓰고, 워치의 가속도 전용 큐가 프레임에 실으려 읽는다.
+    // 두 쓰레드가 같은 메모리를 만지므로 락으로 보호되는 스냅샷 하나로만 주고받는다(links는 메인 큐 전용 유지).
+    private let rangeLock = NSLock()
+    private var sendRanges: [String: Double] = [:]
     #if os(iOS)
     private var net: NetworkTokenChannel?
     #endif
@@ -84,10 +88,25 @@ final class IngestManager: NSObject, ObservableObject {
     let platform = "WATCH"
     private let motion = CMMotionManager()
     private let sampleHz = 50.0
-    private let sendHz = 10.0
+    // 전송 메시지 주기. 10Hz 전송은 낙상 충격 피크를 못 잡는다(SisFall 200Hz 실측: 중앙값 42% 손실·7.7% 미검출, research 02 §5).
+    // "WCSession이 50Hz를 못 버틴다"는 E1 때 미검증 단정이었다 → 실제로 50Hz로 쏴서 폰 수신 Hz(recordRecvHz)를 실측한다.
+    //   · 폰 수신 Hz ≈ 50 → 배치 불필요, 이대로 확정.
+    //   · 10~20에서 막히거나 지연 누적 → 그 숫자를 근거로 "50Hz 샘플을 배치로 묶어 ~10 메시지/초" 배칭 도입.
+    private let sendHz = 50.0
     private var seq = 0
     private var lastSent = Date.distantPast
-    private var stamps: [Date] = []          // 전송 Hz 계산용
+    private var inStamps: [Date] = []        // 가속도 센서 '수집' Hz 계산용 — 스로틀 전 모든 콜백을 센다
+    // 가속도 수집·전송 전용 큐. NI(UWB)·타이머가 점유하는 메인 큐와 분리해 50Hz 샘플이 밀리지 않게 한다.
+    // 직렬(maxConcurrent=1)이라 seq/lastSent/inStamps는 이 큐에서만 순차 접근된다(락 불필요).
+    private let accelQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInitiated
+        q.name = "accel.sampling"
+        return q
+    }()
+    private var lastHzPublish = Date.distantPast     // 수집 Hz 화면 반영 스로틀(계산은 매 샘플, 갱신만 ~10Hz)
+    private var lastFramePublish = Date.distantPast  // 최신 프레임(3축/SMV) 화면 반영 스로틀
     // 손목을 내려 화면이 꺼지면 앱이 백그라운드로 가 측정·전송이 멈춘다. 운동 세션으로 백그라운드 실행을 유지한다.
     private let healthStore = HKHealthStore()
     private var workoutSession: HKWorkoutSession?
@@ -166,6 +185,7 @@ final class IngestManager: NSObject, ObservableObject {
         for link in links.values { link.session.invalidate() }
         links.removeAll()
         sessionOwner.removeAll()
+        rangeLock.lock(); sendRanges.removeAll(); rangeLock.unlock()
         #if os(iOS)
         net?.stop(); net = nil
         lastFrameAt = nil
@@ -290,10 +310,18 @@ final class IngestManager: NSObject, ObservableObject {
     }
 
     // MARK: 거리 갱신/워치독
+    /// 메인 큐에서 link.distance를 바꿀 때마다 가속도 큐가 읽는 스냅샷도 락 걸고 함께 갱신한다.
+    private func updateSendRange(_ id: String, _ distance: Double?) {
+        rangeLock.lock()
+        if let d = distance { sendRanges[id] = d } else { sendRanges.removeValue(forKey: id) }
+        rangeLock.unlock()
+    }
+
     private func recordUpdate(_ id: String, distance: Double?) {
         guard let link = links[id] else { return }
         let now = Date()
         link.distance = distance
+        updateSendRange(id, distance)
         link.lastUpdate = now
         link.stamps.append(now)
         link.stamps.removeAll { now.timeIntervalSince($0) > 2.0 }
@@ -309,6 +337,7 @@ final class IngestManager: NSObject, ObservableObject {
             guard link.distance != nil else { continue }
             if let last = link.lastUpdate, now.timeIntervalSince(last) > IngestManager.staleAfter {
                 link.distance = nil
+                updateSendRange(id, nil)
                 setPeer(id) { $0.distance = nil; $0.hz = 0 }
             }
         }
@@ -336,30 +365,35 @@ final class IngestManager: NSObject, ObservableObject {
         motion.accelerometerUpdateInterval = 1.0 / sampleHz
         seq = 0
         lastSent = .distantPast
-        stamps.removeAll()
+        lastHzPublish = .distantPast
+        lastFramePublish = .distantPast
+        inStamps.removeAll()
         startWorkoutKeepAlive()
-        motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+        // 전용 큐로 콜백을 받는다 → NI 델리게이트(메인 큐)가 아무리 바빠도 가속도 샘플링이 밀리지 않는다.
+        motion.startAccelerometerUpdates(to: accelQueue) { [weak self] data, _ in
             guard let self = self, let a = data?.acceleration else { return }
             self.onSample(ax: a.x, ay: a.y, az: a.z)
         }
     }
 
-    /// 전송 틱(10Hz)에만 프레임 생성·전송. 붙어 있는(최신) 앵커 거리를 모두 담는다.
+    /// 전송 틱(sendHz)에만 프레임 생성·전송. 붙어 있는(최신) 앵커 거리를 모두 담는다.
+    /// accelQueue(가속도 전용 큐)에서 호출된다 — 메인 큐의 NI/타이머와 병렬로 돈다.
     private func onSample(ax: Double, ay: Double, az: Double) {
         guard rangingRunning else { return }
         let now = Date()
+        recordIntakeHz(now)   // 화면 표시용: 가속도 센서가 실제로 주는 수집 Hz(전송 스로틀과 무관)
         guard now.timeIntervalSince(lastSent) >= 1.0 / sendHz else { return }
         lastSent = now
-        // 링크 중 최신 거리가 있는 앵커만 담는다(워치독이 무효화한 것/미연결은 제외).
-        var ranges: [String: Double] = [:]
-        for (id, link) in links { if let d = link.distance { ranges[id] = d } }
+        // 거리 스냅샷을 락 걸고 복사한다. links 딕셔너리는 메인 큐 전용이라 여기서 직접 만지지 않는다.
+        rangeLock.lock()
+        let ranges = sendRanges
+        rangeLock.unlock()
         let frame = TelemetryFrame(seq: seq, ts: now.timeIntervalSince1970 * 1000,
                                    ax: ax, ay: ay, az: az,
                                    ranges: ranges.isEmpty ? nil : ranges)
         seq += 1
-        lastFrame = frame
-        recordSendHz(now)
         sendFrame(frame)
+        publishFrame(now, frame)
     }
 
     private func sendFrame(_ frame: TelemetryFrame) {
@@ -374,12 +408,24 @@ final class IngestManager: NSObject, ObservableObject {
         }
     }
 
-    private func recordSendHz(_ now: Date) {
-        stamps.append(now)
-        stamps.removeAll { now.timeIntervalSince($0) > 2.0 }
-        let span = stamps.count >= 2 ? now.timeIntervalSince(stamps.first!) : 0
-        let h = span > 0.001 ? Double(stamps.count - 1) / span : 0
+    /// 가속도 센서 수집 Hz(스로틀 전 전체 콜백)를 계산해 워치 화면 `hz`에 반영한다.
+    /// 계산은 매 샘플, @Published 반영만 ~10Hz로 스로틀(메인 큐를 다시 채우지 않게).
+    /// (@Published를 백그라운드 큐에서 직접 쓰면 SwiftUI가 경고하므로 반드시 메인으로 마샬)
+    private func recordIntakeHz(_ now: Date) {
+        inStamps.append(now)
+        inStamps.removeAll { now.timeIntervalSince($0) > 2.0 }
+        let span = inStamps.count >= 2 ? now.timeIntervalSince(inStamps.first!) : 0
+        let h = span > 0.001 ? Double(inStamps.count - 1) / span : 0
+        guard now.timeIntervalSince(lastHzPublish) >= 0.1 else { return }
+        lastHzPublish = now
         DispatchQueue.main.async { self.hz = h }
+    }
+
+    /// 최신 프레임(3축/SMV 표시용)을 ~10Hz로 스로틀해 메인으로 반영.
+    private func publishFrame(_ now: Date, _ frame: TelemetryFrame) {
+        guard now.timeIntervalSince(lastFramePublish) >= 0.1 else { return }
+        lastFramePublish = now
+        DispatchQueue.main.async { self.lastFrame = frame }
     }
 
     // MARK: 운동 세션(손목 내려도 앱 유지) — 건강 데이터는 저장 안 하고 백그라운드 실행만 얻는다.
@@ -537,6 +583,7 @@ extension IngestManager: NISessionDelegate {
                  reason: NINearbyObject.RemovalReason) {
         guard let id = sessionOwner[ObjectIdentifier(session)] else { return }
         if let link = links[id] { link.distance = nil; link.connected = false }
+        updateSendRange(id, nil)
         setPeer(id) { $0.distance = nil; $0.hz = 0; $0.connected = false }   // 사거리 이탈: 거리 없음
         if reason == .timeout, let cfg = links[id]?.lastConfig { session.run(cfg) }  // 자동 회복
     }

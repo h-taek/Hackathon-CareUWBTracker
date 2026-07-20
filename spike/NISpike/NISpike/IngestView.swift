@@ -61,8 +61,10 @@ struct IngestView: View {
 
             Divider()
             HStack(spacing: 6) {
-                Text(String(format: "%.0f Hz", mgr.hz)).monospacedDigit()
-                #if os(iOS)
+                #if os(watchOS)
+                Text(String(format: "센서 수집 %.0f Hz", mgr.hz)).monospacedDigit()   // 가속도 콜백 수집 Hz(전송 스로틀 전). 위 앵커 행 Hz = UWB.
+                #else
+                Text(String(format: "워치 수신 %.0f Hz", mgr.hz)).monospacedDigit()    // 워치→폰 프레임 실제 도착 Hz
                 Text("· POST \(mgr.postCount)")
                 #endif
             }
