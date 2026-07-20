@@ -108,6 +108,7 @@ class Simulator extends EventEmitter {
       type: 'fall_candidate',
       ts: Date.now(),
       trigger: 'imu_accel',
+      freefall: false,
       peakAccel: round(rand(2.8, 4.2)), // 충격 피크(g)
       pos: { x: round(tag.x), y: round(tag.y), z: 1.0 },
       confidence: 'candidate',

@@ -242,8 +242,14 @@
     const time = new Date(a.ts).toLocaleTimeString('ko-KR');
     const row = document.createElement('div');
     row.className = 'row';
-    row.innerHTML = `<b>${a.name || a.tagId}</b> ${label} · ${a.zone || '미지정'}` +
-      `<div class="t">${time} · 피크 ${a.peakAccel}g · ${where}</div>`;
+    const strong = document.createElement('b');
+    strong.textContent = a.name || a.tagId;
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(` ${label} · ${a.zone || '미지정'}`));
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = `${time} · 피크 ${a.peakAccel}g · ${where}`;
+    row.appendChild(t);
     box.prepend(row);
   }
 

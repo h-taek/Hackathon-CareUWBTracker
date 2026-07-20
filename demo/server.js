@@ -45,7 +45,13 @@ function logAndPosition(payload) {
     subAnchorId: SUB_ANCHOR_ID,
     gravity: DEFAULT_GRAVITY,
   }));
-  for (const evt of fallDetector.observe(payload, position)) {
+  let fallEvents = [];
+  try {
+    fallEvents = fallDetector.observe(payload, position);
+  } catch (err) {
+    console.error('[fall] detector error', err);
+  }
+  for (const evt of fallEvents) {
     if (evt.pos) evt.zone = zoneAt(map, evt.pos.x, evt.pos.y);
     console.log(`[fall] ${evt.type} ${evt.tagId} peak=${evt.peakAccel}g freefall=${evt.freefall} zone=${evt.zone ?? '-'}`);
     broadcast('alert', evt);

@@ -100,6 +100,18 @@ test('정착 이후 밴드~움직임 사이 흔들림은 무동작 시계를 리
   assert.ok(conf.ts >= 8100, `확진이 갭 이후로 지연됨(ts=${conf.ts})`);
 });
 
+test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
+  const det = createFallDetector();
+  const out = run(det, [
+    frame(0, 1),
+    frame(5000, 1),   // lastTs를 5000으로 전진(아직 IDLE)
+    frame(1000, 4.0), // 과거 ts(1000<5000) 충격: 무시되어 candidate 안 나옴
+  ]);
+  assert.strictEqual(out.length, 0, '과거 ts 충격은 무시');
+  const out2 = run(det, [frame(6000, 4.0)]); // 미래 ts 충격은 정상
+  assert.strictEqual(out2.filter((e) => e.type === 'fall_candidate').length, 1);
+});
+
 test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', () => {
   const det = createFallDetector();
   const pos = { pos: { x: 3, y: 4, z: 0 } };

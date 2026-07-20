@@ -42,7 +42,7 @@ function createFallDetector(options = {}) {
   function stateFor(tagId) {
     let st = states.get(tagId);
     if (!st) {
-      st = { phase: 'IDLE', impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, quietStartTs: 0 };
+      st = { phase: 'IDLE', lastTs: null, impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, quietStartTs: 0 };
       states.set(tagId, st);
     }
     return st;
@@ -65,6 +65,9 @@ function createFallDetector(options = {}) {
 
   function observe(payload, position) {
     const st = stateFor(payload.tagId);
+    // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 elapsed 계산 왜곡을 막는다.
+    if (st.lastTs !== null && payload.ts < st.lastTs) return [];
+    st.lastTs = payload.ts;
     if (position && position.pos) st.lastPos = position.pos;
 
     const a = payload.accel || {};
