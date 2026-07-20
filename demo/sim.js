@@ -5,6 +5,7 @@
 // 측위 소스가 sim일 뿐, 서버/대시보드 입장에서는 실측 UWB와 구분되지 않는다(source 필드로만 구분).
 
 const { EventEmitter } = require('events');
+const { zoneAt } = require('./lib/zone');
 
 const G = 9.81; // 1g, m/s^2
 
@@ -42,11 +43,7 @@ class Simulator extends EventEmitter {
 
   // (x,y) 미터 좌표가 속한 구역 라벨.
   zoneAt(x, y) {
-    for (const z of this.map.zones) {
-      const [rx, ry, rw, rh] = z.rect;
-      if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return z.label;
-    }
-    return '미지정';
+    return zoneAt(this.map, x, y);
   }
 
   step(dt) {
