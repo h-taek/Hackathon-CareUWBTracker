@@ -33,3 +33,16 @@ struct TelemetryFrame: Codable, Equatable {
         (ax * ax + ay * ay + az * az).squareRoot()
     }
 }
+
+/// 워치(태그) → 메인폰 배치 프레임. 가속도 샘플 N개(≈5)를 한 WCSession 메시지로 묶는다.
+///
+/// 왜 배치인가: 전송 병목은 데이터 양이 아니라 "메시지 횟수"였다(실측: 수집 50Hz 정상인데 단건 50회/초로
+/// 쏘면 도착이 30~50Hz로 요동). 원래 10Hz(검증된 안전 구간)로 전송 횟수를 되돌리되, 50Hz 전 샘플을 그대로
+/// 실어 시간해상도(낙상 충격 피크)를 보존한다. 대가는 최대 ~100ms 버퍼 지연뿐(낙상 감지엔 무해).
+///
+/// 거리(UWB ~10Hz)는 배치당 최신 스냅샷 1개만 싣는다 — 배치 주기와 같아 손실이 없고, 샘플마다 반복하지 않는다.
+struct TelemetryBatch: Codable, Equatable {
+    // 각 원소의 ranges는 nil(거리는 배치 레벨에만 존재). seq는 샘플별 순번(유실·순서 확인용).
+    let samples: [TelemetryFrame]
+    let ranges: [String: Double]?
+}

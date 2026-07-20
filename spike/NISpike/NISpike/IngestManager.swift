@@ -14,8 +14,9 @@ import Network   // 폰↔폰 토큰 교환용. watchOS는 로컬 네트워크 �
 ///
 /// 역할 분담(얇은 폰):
 /// - **워치 = 태그(전 측정).** 앵커마다 NI 세션을 하나씩(최대 2개: phoneMain·phoneSub) 열어 거리를 재고,
-///   CoreMotion으로 가속도를 50Hz 샘플한다. 붙어 있는 앵커 거리들을 한 프레임
-///   `{accel(g), ranges:{phoneMain:r, phoneSub:r}}`으로 묶어 WCSession으로 메인폰에 10Hz 전송.
+///   CoreMotion으로 가속도를 50Hz 샘플한다. 50Hz 샘플을 버퍼에 모아 10Hz로 배치(≈5개)로 묶어
+///   `TelemetryBatch{samples:[accel(g)…], ranges:{phoneMain:r, phoneSub:r}}` 한 메시지로 메인폰에 전송
+///   (전송 병목이 '메시지 횟수'였어서 횟수를 10회/초로 낮추되 50Hz 전 샘플은 보존).
 /// - **메인폰 = 게이트웨이 + 중계.** 워치와 거리 측정, 서브폰 토큰을 워치↔서브폰 사이에서 중계,
 ///   프레임을 받아 g→m/s² 변환 + ingest 스키마(spec 03 §5)로 포장해 서버에 POST만 한다(연산 0).
 /// - **서브폰 = 앵커2.** 워치와 거리 측정만. 서버 전송·중계 없음. (2대일 때만 사용)
@@ -30,7 +31,7 @@ import Network   // 폰↔폰 토큰 교환용. watchOS는 로컬 네트워크 �
 ///
 /// WCSession 한 채널에 두 종류를 흘린다(멀티플렉싱):
 /// - **NI 토큰**: raw 데이터(sendMessageData) 또는 userInfo["m"]. 주소가 붙어 있어 필요 시 메인폰이 중계.
-/// - **텔레메트리 프레임**: 키 메시지(sendMessage["frame"]). 워치→메인폰 단방향.
+/// - **텔레메트리 배치**: 키 메시지(sendMessage["batch"]). 워치→메인폰 단방향. + 제어(ctrl:stop) 양방향.
 ///
 /// 최신화(캐시·묵은 데이터 방지):
 /// - 시작할 때마다 세션·네트워크 채널을 새로 만든다(새 discoveryToken) → 묵은 토큰 latch 방지.
@@ -88,16 +89,16 @@ final class IngestManager: NSObject, ObservableObject {
     let platform = "WATCH"
     private let motion = CMMotionManager()
     private let sampleHz = 50.0
-    // 전송 메시지 주기. 10Hz 전송은 낙상 충격 피크를 못 잡는다(SisFall 200Hz 실측: 중앙값 42% 손실·7.7% 미검출, research 02 §5).
-    // "WCSession이 50Hz를 못 버틴다"는 E1 때 미검증 단정이었다 → 실제로 50Hz로 쏴서 폰 수신 Hz(recordRecvHz)를 실측한다.
-    //   · 폰 수신 Hz ≈ 50 → 배치 불필요, 이대로 확정.
-    //   · 10~20에서 막히거나 지연 누적 → 그 숫자를 근거로 "50Hz 샘플을 배치로 묶어 ~10 메시지/초" 배칭 도입.
-    private let sendHz = 50.0
+    // 전송 병목은 데이터 '양'이 아니라 '메시지 횟수'였다(실측: 수집 50Hz 정상인데 단건 50회/초로 쏘면 도착 30~50Hz 요동).
+    // → 50Hz 전 샘플을 버퍼에 모아 10Hz(≈5개/배치)로 묶어 한 메시지로 보낸다. 전송 횟수는 검증된 10회/초로 되돌리되
+    //   시간해상도(낙상 충격 피크)는 그대로 보존한다. 대가는 최대 ~100ms 버퍼 지연뿐(낙상 감지엔 무해).
+    private let batchHz = 10.0
     private var seq = 0
-    private var lastSent = Date.distantPast
+    private var lastFlush = Date.distantPast
+    private var batch: [TelemetryFrame] = []   // 전송 대기 샘플 버퍼(accelQueue 직렬 접근이라 락 불필요)
     private var inStamps: [Date] = []        // 가속도 센서 '수집' Hz 계산용 — 스로틀 전 모든 콜백을 센다
     // 가속도 수집·전송 전용 큐. NI(UWB)·타이머가 점유하는 메인 큐와 분리해 50Hz 샘플이 밀리지 않게 한다.
-    // 직렬(maxConcurrent=1)이라 seq/lastSent/inStamps는 이 큐에서만 순차 접근된다(락 불필요).
+    // 직렬(maxConcurrent=1)이라 seq/lastFlush/batch/inStamps는 이 큐에서만 순차 접근된다(락 불필요).
     private let accelQueue: OperationQueue = {
         let q = OperationQueue()
         q.maxConcurrentOperationCount = 1
@@ -177,7 +178,10 @@ final class IngestManager: NSObject, ObservableObject {
         setStatus("\(role.myID) 시작 · 피어 [\(role.peers.map { $0.id }.joined(separator: ", "))]")
     }
 
-    func stopRanging() {
+    /// signalPeer=true면 상대(워치↔폰)에게도 정지를 알린다 → 상대가 백그라운드로 계속 측정·전송하지 않게.
+    /// (버튼에서 부른 사용자 정지만 true. ctrl:stop 수신으로 부른 정지는 false여서 되돌려 보내지 않음 → 루프 방지)
+    func stopRanging(signalPeer: Bool = false) {
+        if signalPeer { signalPeerStop() }
         rangingRunning = false
         retryTimer?.invalidate(); retryTimer = nil
         watchdog?.invalidate(); watchdog = nil
@@ -285,6 +289,28 @@ final class IngestManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: 제어 신호(정지 전파) — 한쪽에서 멈추면 상대도 멈춰 백그라운드 유령 전송을 막는다.
+    /// 상대에게 "정지" 알림. 상대 앱이 백그라운드/미도달이어도 transferUserInfo로 큐잉해 다음 활성 때 전달한다.
+    private func signalPeerStop() {
+        guard let wc = wc, wc.activationState == .activated else { return }
+        if wc.isReachable {
+            wc.sendMessage(["ctrl": "stop"], replyHandler: nil) { [weak self] _ in
+                self?.wc?.transferUserInfo(["ctrl": "stop"])
+            }
+        } else {
+            wc.transferUserInfo(["ctrl": "stop"])
+        }
+    }
+
+    /// 상대가 보낸 제어 신호 처리. stop이면 이쪽도 정지(되돌려 보내지 않아 루프 없음).
+    private func handleControl(_ cmd: String) {
+        guard cmd == "stop" else { return }
+        DispatchQueue.main.async {
+            guard self.rangingRunning else { return }
+            self.stopRanging()   // signalPeer 기본 false
+        }
+    }
+
     // MARK: 토큰 수신 + (메인폰이면) 중계
     private func handleIncoming(_ data: Data, via: Chan) {
         guard rangingRunning,
@@ -364,10 +390,11 @@ final class IngestManager: NSObject, ObservableObject {
         guard motion.isAccelerometerAvailable else { setStatus("가속도계 없음"); return }
         motion.accelerometerUpdateInterval = 1.0 / sampleHz
         seq = 0
-        lastSent = .distantPast
+        lastFlush = .distantPast
         lastHzPublish = .distantPast
         lastFramePublish = .distantPast
         inStamps.removeAll()
+        batch.removeAll()
         startWorkoutKeepAlive()
         // 전용 큐로 콜백을 받는다 → NI 델리게이트(메인 큐)가 아무리 바빠도 가속도 샘플링이 밀리지 않는다.
         motion.startAccelerometerUpdates(to: accelQueue) { [weak self] data, _ in
@@ -376,31 +403,40 @@ final class IngestManager: NSObject, ObservableObject {
         }
     }
 
-    /// 전송 틱(sendHz)에만 프레임 생성·전송. 붙어 있는(최신) 앵커 거리를 모두 담는다.
-    /// accelQueue(가속도 전용 큐)에서 호출된다 — 메인 큐의 NI/타이머와 병렬로 돈다.
+    /// 매 샘플(50Hz)을 버퍼에 쌓고, batchHz(10Hz) 주기마다 묶어서 한 메시지로 flush.
+    /// accelQueue(직렬)에서만 호출 → seq/batch/lastFlush는 락 없이 순차 접근된다.
     private func onSample(ax: Double, ay: Double, az: Double) {
         guard rangingRunning else { return }
         let now = Date()
-        recordIntakeHz(now)   // 화면 표시용: 가속도 센서가 실제로 주는 수집 Hz(전송 스로틀과 무관)
-        guard now.timeIntervalSince(lastSent) >= 1.0 / sendHz else { return }
-        lastSent = now
+        recordIntakeHz(now)   // 화면 표시용: 가속도 센서가 실제로 주는 수집 Hz(배치와 무관)
+        // 전 샘플을 버퍼에 적재. 거리는 샘플엔 안 담는다 — flush 때 배치당 최신 스냅샷 1개로 붙인다.
+        batch.append(TelemetryFrame(seq: seq, ts: now.timeIntervalSince1970 * 1000,
+                                    ax: ax, ay: ay, az: az))
+        seq += 1
+        guard now.timeIntervalSince(lastFlush) >= 1.0 / batchHz else { return }
+        lastFlush = now
+        flushBatch(now)
+    }
+
+    /// 버퍼를 비우며 최신 거리 스냅샷과 함께 한 메시지로 전송.
+    private func flushBatch(_ now: Date) {
+        guard !batch.isEmpty else { return }
         // 거리 스냅샷을 락 걸고 복사한다. links 딕셔너리는 메인 큐 전용이라 여기서 직접 만지지 않는다.
         rangeLock.lock()
         let ranges = sendRanges
         rangeLock.unlock()
-        let frame = TelemetryFrame(seq: seq, ts: now.timeIntervalSince1970 * 1000,
-                                   ax: ax, ay: ay, az: az,
-                                   ranges: ranges.isEmpty ? nil : ranges)
-        seq += 1
-        sendFrame(frame)
-        publishFrame(now, frame)
+        let payload = TelemetryBatch(samples: batch, ranges: ranges.isEmpty ? nil : ranges)
+        let last = batch[batch.count - 1]
+        batch.removeAll(keepingCapacity: true)
+        sendBatch(payload)
+        publishFrame(now, last)   // 워치 화면엔 배치의 마지막 샘플만 반영(≈10Hz)
     }
 
-    private func sendFrame(_ frame: TelemetryFrame) {
+    private func sendBatch(_ payload: TelemetryBatch) {
         guard let wc = wc, wc.activationState == .activated,
-              let data = try? JSONEncoder().encode(frame) else { return }
+              let data = try? JSONEncoder().encode(payload) else { return }
         if wc.isReachable {
-            wc.sendMessage(["frame": data], replyHandler: nil, errorHandler: { [weak self] e in
+            wc.sendMessage(["batch": data], replyHandler: nil, errorHandler: { [weak self] e in
                 self?.setStatus("전송 오류: \(e.localizedDescription)")
             })
         } else {
@@ -459,19 +495,25 @@ final class IngestManager: NSObject, ObservableObject {
 
     // MARK: - 메인폰: 프레임 수신 -> ingest POST
     #if os(iOS)
-    private func onFrame(_ data: Data) {
+    private func onBatch(_ data: Data) {
         guard rangingRunning,
-              let frame = try? JSONDecoder().decode(TelemetryFrame.self, from: data) else { return }
+              let payload = try? JSONDecoder().decode(TelemetryBatch.self, from: data) else { return }
         DispatchQueue.main.async {
-            self.lastFrame = frame
-            self.lastFrameAt = Date()
-            self.recordRecvHz(Date())
-            // 화면: 프레임이 담아온 앵커 거리(phoneMain/phoneSub)만 반영. 폰 자신의 NI 거리는 표시 안 함(점멸 방지).
+            let now = Date()
+            self.lastFrameAt = now
+            // 배치 안 샘플을 순서대로 펼쳐 각각 처리(각 샘플에 배치 거리 스냅샷을 붙인다).
+            for s in payload.samples {
+                let frame = TelemetryFrame(seq: s.seq, ts: s.ts,
+                                           ax: s.ax, ay: s.ay, az: s.az, ranges: payload.ranges)
+                self.lastFrame = frame
+                self.recordRecvHz(now)   // 샘플 단위로 세어 '실제 데이터 도착 Hz'(≈50)를 표시
+                if self.serverPosting { self.postIngest(frame) }
+            }
+            // 화면: 배치가 담아온 앵커 거리(phoneMain/phoneSub)만 배치당 1회 반영(샘플마다 반복 불필요).
             for p in self.peers {
-                let d = frame.ranges?[p.id]
+                let d = payload.ranges?[p.id]
                 self.setPeer(p.id) { $0.distance = d; $0.connected = (d != nil); $0.hz = d != nil ? self.hz : 0 }
             }
-            if self.serverPosting { self.postIngest(frame) }
         }
     }
 
@@ -610,14 +652,16 @@ extension IngestManager: WCSessionDelegate {
         handleIncoming(messageData, via: .wc)
     }
 
-    // 키 메시지: "frame"=텔레메트리(폰만 수신), "m"=큐잉된 토큰
+    // 키 메시지: "ctrl"=제어(정지 전파), "batch"=텔레메트리 배치(폰만 수신), "m"=큐잉된 토큰
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if let cmd = message["ctrl"] as? String { handleControl(cmd); return }
         #if os(iOS)
-        if let d = message["frame"] as? Data { onFrame(d); return }
+        if let d = message["batch"] as? Data { onBatch(d); return }
         #endif
         if let d = message["m"] as? Data { handleIncoming(d, via: .wc) }
     }
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        if let cmd = userInfo["ctrl"] as? String { handleControl(cmd); return }
         if let data = userInfo["m"] as? Data { handleIncoming(data, via: .wc) }
     }
     func sessionReachabilityDidChange(_ session: WCSession) {

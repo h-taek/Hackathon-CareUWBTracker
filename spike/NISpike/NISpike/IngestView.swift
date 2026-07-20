@@ -90,7 +90,7 @@ struct IngestView: View {
 
             // 버튼 1) 워치 연결(거리 측정) 시작·정지
             Button(mgr.rangingRunning ? "워치 연결 정지" : "워치 연결 시작") {
-                if mgr.rangingRunning { mgr.stopRanging() } else { mgr.startRanging() }
+                if mgr.rangingRunning { mgr.stopRanging(signalPeer: true) } else { mgr.startRanging() }
             }
             .font(.caption)
             .buttonStyle(.borderedProminent)
