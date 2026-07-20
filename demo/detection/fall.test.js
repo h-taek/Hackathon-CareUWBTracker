@@ -84,6 +84,22 @@ test('cooldown 재무장: 확진 후 움직였다가 다시 충격 => 새 후보
   assert.strictEqual(events.filter((e) => e.type === 'fall_candidate').length, 2);
 });
 
+test('정착 이후 밴드~움직임 사이 흔들림은 무동작 시계를 리셋해 확진을 지연한다', () => {
+  const det = createFallDetector();
+  // 충격 -> 정지 3초 -> 갭(0.3g 움직임, 취소 아님) 한 프레임 -> 다시 정지. 갭 이후 5초 지나야 확진.
+  const frames = [
+    frame(0, 3.0),
+    ...seq(100, 100, Array(30).fill(1)), // 100~3000ms 정지 (아직 확진 전, <5000)
+    frame(3100, 1.3),                    // 갭: motion 0.3 (밴드 0.25 초과, 움직임 0.4 미만) -> 시계 리셋
+    ...seq(3200, 100, Array(60).fill(1)),// 3200~9100ms 정지: 리셋 시점(3100)+5000=8100에 확진
+  ];
+  const events = run(det, frames);
+  assert.ok(!events.some((e) => e.type === 'fall_canceled'), '갭은 취소가 아니다');
+  const conf = events.find((e) => e.type === 'fall_confirmed');
+  assert.ok(conf, '확진은 발생한다');
+  assert.ok(conf.ts >= 8100, `확진이 갭 이후로 지연됨(ts=${conf.ts})`);
+});
+
 test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', () => {
   const det = createFallDetector();
   const pos = { pos: { x: 3, y: 4, z: 0 } };

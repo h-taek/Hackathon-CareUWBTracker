@@ -13,7 +13,7 @@ const DEFAULTS = {
   freefallWindowMs: 500,
   settleMs: 400,
   immobilityMs: 5000,
-  immobilityBandG: 0.25, // 현재 로직은 movementG로 정지/움직임을 가르며, 밴드는 향후 정지 강도 판정 확장용
+  immobilityBandG: 0.25, // 정지 밴드: |SMV-1g|가 이내여야 무동작 시계가 이어짐(초과 시 리셋)
   movementG: 0.4,
 };
 
@@ -42,7 +42,7 @@ function createFallDetector(options = {}) {
   function stateFor(tagId) {
     let st = states.get(tagId);
     if (!st) {
-      st = { phase: 'IDLE', impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0 };
+      st = { phase: 'IDLE', impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, quietStartTs: 0 };
       states.set(tagId, st);
     }
     return st;
@@ -79,6 +79,7 @@ function createFallDetector(options = {}) {
       if (g >= cfg.impactG) {
         st.phase = 'MONITORING';
         st.impactTs = ts;
+        st.quietStartTs = ts;
         st.peakG = g;
         st.freefallSeen = st.freefallAt != null && (ts - st.freefallAt) <= cfg.freefallWindowMs;
         events.push(makeEvent(st, payload, 'fall_candidate', 'candidate'));
@@ -87,14 +88,18 @@ function createFallDetector(options = {}) {
       if (g > st.peakG) st.peakG = g;
       const elapsed = ts - st.impactTs;
       if (elapsed <= cfg.settleMs) {
-        // 정착 구간: 바운스 무시(판정 보류)
+        // 정착 구간: 바운스 무시(판정 보류). quietStartTs는 impactTs 유지.
       } else if (motion > cfg.movementG) {
         st.phase = 'IDLE';
         st.freefallAt = null;
         events.push(makeEvent(st, payload, 'fall_canceled', 'cleared'));
-      } else if (elapsed >= cfg.immobilityMs) {
-        st.phase = 'COOLDOWN';
-        events.push(makeEvent(st, payload, 'fall_confirmed', 'confirmed'));
+      } else {
+        // 정지 밴드 초과(단 움직임 임계 미만): 완전 정지가 아니므로 무동작 시계 리셋(취소는 안 함).
+        if (motion > cfg.immobilityBandG) st.quietStartTs = ts;
+        if (ts - st.quietStartTs >= cfg.immobilityMs) {
+          st.phase = 'COOLDOWN';
+          events.push(makeEvent(st, payload, 'fall_confirmed', 'confirmed'));
+        }
       }
     } else if (st.phase === 'COOLDOWN') {
       if (motion > cfg.movementG) {
