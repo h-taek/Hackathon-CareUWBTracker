@@ -43,14 +43,8 @@
 		B60DC2AA300A503600168302 /* Exceptions for "NISpike" folder in "NISpike Watch App Watch App" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				ContentView.swift,
-				NIRangingManager.swift,
-				MultiPeerNIManager.swift,
-				Phase1ContentView.swift,
 				RootView.swift,
 				TelemetryFrame.swift,
-				TelemetryManager.swift,
-				TelemetryView.swift,
 				IngestManager.swift,
 				IngestView.swift,
 			);

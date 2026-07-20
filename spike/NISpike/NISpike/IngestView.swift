@@ -1,29 +1,51 @@
 import SwiftUI
 
-/// Phase 3 화면(E3). 워치=측정 송신(거리 r_A + accel), 폰=게이트웨이(수신 -> ingest POST).
-/// 한 View로 양 플랫폼. 폰 전용(서버 host 입력·POST 상태)만 `#if os(iOS)`로 감싼다.
+/// 최종 화면. 워치=측정 송신(앵커별 거리 + accel), 폰=게이트웨이(수신 -> ingest POST).
+/// 한 View로 양 플랫폼. 폰 전용(역할 선택·서버 host·POST)만 `#if os(iOS)`로 감싼다.
+///
+/// 버튼 2개(독립):
+///  - 워치 연결: NI/WCSession 링크(거리 측정) 시작·정지
+///  - 서버 전송: ingest POST 링크 시작·정지 (메인폰 전용)
 struct IngestView: View {
     @StateObject private var mgr = IngestManager()
 
     var body: some View {
-        // 워치 작은 화면에서 내용이 넘치므로 ScrollView로 감싼다(스크롤 가능). 폰에도 무해.
-        ScrollView {
+        ScrollView {   // 워치 작은 화면 대비 스크롤. 폰에도 무해.
         VStack(spacing: 10) {
-            Text(mgr.platform == "WATCH" ? "측정 송신 (r_A+accel)" : "게이트웨이 (ingest POST)")
+            Text(mgr.platform == "WATCH" ? "측정 송신 (거리+accel)" : "게이트웨이 (ingest POST)")
                 .font(.headline)
 
+            #if os(iOS)
+            // 폰 역할 선택(연결 중엔 잠금 — 역할 바꾸려면 먼저 정지).
+            Picker("역할", selection: $mgr.phoneRole) {
+                ForEach(IngestManager.PhoneRole.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .disabled(mgr.rangingRunning)
+            #endif
+
+            // 연결 상태 점
             HStack {
-                Circle().fill(mgr.peerConnected ? .green : .gray).frame(width: 8, height: 8)
-                Text(mgr.peerConnected ? "레인징 연결" : "토큰 교환 대기")
+                Circle().fill(mgr.anyPeerConnected ? .green : .gray).frame(width: 8, height: 8)
+                Text(mgr.anyPeerConnected ? "레인징 연결" : (mgr.rangingRunning ? "토큰 교환 대기" : "정지"))
                     .font(.caption2).foregroundStyle(.secondary)
             }
 
-            // r_A 거리
-            HStack {
-                Text("r_A").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text(mgr.distance.map { String(format: "%.2f m", $0) } ?? "—")
-                    .bold().monospacedDigit()
+            // 앵커별 거리
+            if mgr.peers.isEmpty {
+                Text("앵커 없음").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(mgr.peers) { p in
+                    HStack {
+                        Circle().fill(p.connected ? .green : .gray).frame(width: 6, height: 6)
+                        Text(p.id).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(p.distance.map { String(format: "%.2f m", $0) } ?? "—")
+                            .bold().monospacedDigit()
+                        Text(String(format: "%.0fHz", p.hz))
+                            .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
             }
 
             if let f = mgr.lastFrame {
@@ -47,26 +69,41 @@ struct IngestView: View {
             .font(.caption)
 
             #if os(iOS)
-            VStack(spacing: 4) {
-                HStack {
-                    Text("서버").font(.caption2).foregroundStyle(.secondary)
-                    TextField("host:port", text: $mgr.serverHost)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .font(.caption.monospaced())
-                }
-                if !mgr.lastPostStatus.isEmpty {
-                    Text(mgr.lastPostStatus).font(.caption2).foregroundStyle(.secondary)
+            if mgr.phoneRole == .main {
+                VStack(spacing: 4) {
+                    HStack {
+                        Text("서버").font(.caption2).foregroundStyle(.secondary)
+                        TextField("host:port", text: $mgr.serverHost)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.caption.monospaced())
+                    }
+                    if !mgr.lastPostStatus.isEmpty {
+                        Text(mgr.lastPostStatus).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             #endif
 
-            Button(mgr.running ? "정지" : "시작") {
-                if mgr.running { mgr.stop() } else { mgr.start() }
+            // 버튼 1) 워치 연결(거리 측정) 시작·정지
+            Button(mgr.rangingRunning ? "워치 연결 정지" : "워치 연결 시작") {
+                if mgr.rangingRunning { mgr.stopRanging() } else { mgr.startRanging() }
             }
             .font(.caption)
             .buttonStyle(.borderedProminent)
+
+            // 버튼 2) 서버 전송 시작·정지 (메인폰 전용, 워치 연결과 독립)
+            #if os(iOS)
+            if mgr.phoneRole == .main {
+                Button(mgr.serverPosting ? "서버 전송 정지" : "서버 전송 시작") {
+                    if mgr.serverPosting { mgr.stopPosting() } else { mgr.startPosting() }
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .tint(mgr.serverPosting ? .red : .blue)
+            }
+            #endif
 
             Text(mgr.status)
                 .font(.caption2).foregroundStyle(.secondary)

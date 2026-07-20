@@ -6,5 +6,11 @@
 	<array>
 		<string>_nispike._tcp</string>
 	</array>
+	<!-- 서버(.local / 사설 IP)로 평문 HTTP ingest 허용. 로컬 네트워크에 한정, 인터넷 임의 HTTP는 막힘. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

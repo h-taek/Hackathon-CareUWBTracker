@@ -6,51 +6,79 @@ import Combine
 import CoreMotion
 import HealthKit
 #endif
+#if os(iOS)
+import Network   // 폰↔폰 토큰 교환용. watchOS는 로컬 네트워크 금지라 이 채널을 안 쓴다.
+#endif
 
-/// E3(메인폰 -> 서버 ingest 전송)의 매니저.
+/// 최종 측위·텔레메트리 매니저. 앵커 폰이 **1대든 2대든** 동작한다.
 ///
 /// 역할 분담(얇은 폰):
-/// - **워치 = 전 측정.** NI 세션(-> 메인폰)으로 거리(r_A)를 재고, CoreMotion으로 가속도를 50Hz 샘플한다.
-///   둘을 한 프레임 `{accel(g), ranges:{phoneMain: r_A}}`으로 묶어 WCSession으로 메인폰에 10Hz 전송.
-/// - **메인폰 = 순수 게이트웨이.** 프레임을 받아 g->m/s² 변환 + ingest 스키마(spec 03 §5)로 포장해
-///   서버에 HTTP POST만 한다(연산 0). 서버가 삼각측량·낙상 판정을 한다.
+/// - **워치 = 태그(전 측정).** 앵커마다 NI 세션을 하나씩(최대 2개: phoneMain·phoneSub) 열어 거리를 재고,
+///   CoreMotion으로 가속도를 50Hz 샘플한다. 붙어 있는 앵커 거리들을 한 프레임
+///   `{accel(g), ranges:{phoneMain:r, phoneSub:r}}`으로 묶어 WCSession으로 메인폰에 10Hz 전송.
+/// - **메인폰 = 게이트웨이 + 중계.** 워치와 거리 측정, 서브폰 토큰을 워치↔서브폰 사이에서 중계,
+///   프레임을 받아 g→m/s² 변환 + ingest 스키마(spec 03 §5)로 포장해 서버에 POST만 한다(연산 0).
+/// - **서브폰 = 앵커2.** 워치와 거리 측정만. 서버 전송·중계 없음. (2대일 때만 사용)
+///
+/// 왜 이렇게 나눴나(다중세션·중계의 핵심):
+/// - NI는 "상대 1명당 NISession 1개"다. 앵커 2대와 재려면 세션 2개 → `links[peerID]`로 피어별 세션을 든다.
+/// - 각 세션은 자기 discoveryToken을 만든다. "이 토큰은 누구(from)→누구(to)"인지 주소를 붙여야 상대가
+///   올바른 세션에 꽂는다 → `AddressedToken{from,to,token}`.
+/// - 워치는 companion 폰(WCSession)하고만 통신 가능하다. 그래서 서브폰 토큰은 **메인폰이 중계**한다
+///   (워치→WC→메인폰→네트워크→서브폰, 반대도 동일). `relays=true`인 메인폰이 그 다리다.
+/// - UWB 거리 측정 자체는 토큰만 교환되면 두 라디오가 직접 잰다. 네트워크는 "전화번호(토큰) 교환"에만 쓴다.
 ///
 /// WCSession 한 채널에 두 종류를 흘린다(멀티플렉싱):
-/// - **NI 토큰**: 키 붙은 채널(sendMessage/userInfo/applicationContext, key `niToken`). 양방향.
-/// - **텔레메트리 프레임**: raw 데이터 채널(sendMessageData). 워치->폰 단방향.
-///   수신측은 "raw 데이터 == 프레임 / 키 있는 메시지 == 토큰"으로 구분한다.
+/// - **NI 토큰**: raw 데이터(sendMessageData) 또는 userInfo["m"]. 주소가 붙어 있어 필요 시 메인폰이 중계.
+/// - **텔레메트리 프레임**: 키 메시지(sendMessage["frame"]). 워치→메인폰 단방향.
 ///
-/// 거리 대칭성 메모: NI는 양방향이라 폰도 자기 세션에서 같은 거리를 얻지만, spec §5 문구(워치가 잰 값)와
-/// 양산 MaUWB(태그가 측정) 구조에 맞춰 **거리의 진실 출처는 워치 프레임**으로 둔다. 폰 세션은 토큰 상대로만 존재.
-///
-/// 앵커 확장: 지금은 메인폰 1개(anchorId="phoneMain"). 서브폰이 붙으면 워치가 세션 하나를 더 열어
-/// ranges["phoneSub"]를 채우고(토큰은 폰이 중계, Phase 1 B 로직), 폰은 그대로 배열로 내보낸다. 스키마 불변.
+/// 최신화(캐시·묵은 데이터 방지):
+/// - 시작할 때마다 세션·네트워크 채널을 새로 만든다(새 discoveryToken) → 묵은 토큰 latch 방지.
+/// - 정지하면 모든 세션·연결·타이머·상태를 완전히 비운다(teardown).
+/// - 워치독 타이머가 일정 시간 갱신 없는 앵커 거리를 nil로 만든다 → 얼어붙은 옛 거리가 남지 않는다.
 final class IngestManager: NSObject, ObservableObject {
 
+    // MARK: 식별자/상수
+    static let tagID = "tag-watch"
+    static let mainID = "phoneMain"
+    static let subID = "phoneSub"
+    static let gravity = 9.80665            // g -> m/s²
+    private static let staleAfter = 1.5     // 이 시간(s) 넘게 갱신 없는 거리는 무효(nil)로
+
+    /// 폰이 맡을 역할(화면에서 선택). 워치는 항상 태그라 이 값을 안 쓴다.
+    enum PhoneRole: String, CaseIterable, Identifiable {
+        case main = "메인폰(게이트웨이)"
+        case sub  = "서브폰(앵커2)"
+        var id: String { rawValue }
+    }
+
     // MARK: 공용 UI 상태
-    @Published var running = false
+    @Published var rangingRunning = false     // 워치/NI 링크 가동 여부
     @Published var status = "대기"
-    @Published var distance: Double?     // 현재 r_A(m). 워치=자기 측정, 폰=마지막 프레임값
+    @Published var peers: [PeerState] = []     // 앵커별 거리/Hz/연결
     @Published var lastFrame: TelemetryFrame?
-    @Published var peerConnected = false
-    @Published var hz: Double = 0        // 워치=전송 Hz, 폰=수신 Hz
+    @Published var hz: Double = 0             // 워치=전송 Hz, 폰=수신 Hz
 
     // 폰 전용
-    @Published var postCount = 0         // 성공 POST 수
-    @Published var lastPostStatus = ""   // 마지막 POST 결과(HTTP 코드/에러)
-    /// 서버 주소. 폰과 같은 Wi-Fi의 맥 LAN IP:포트. 화면에서 편집(기본값=현재 맥 LAN IP, 바뀌면 수정).
-    @Published var serverHost = "192.168.25.6:8080"
+    @Published var phoneRole: PhoneRole = .main
+    @Published var serverPosting = false      // 서버 전송(POST) 링크 가동 여부 — 워치 링크와 독립
+    @Published var postCount = 0
+    @Published var lastPostStatus = ""
+    /// 서버 주소. 맥의 Bonjour 이름(<맥이름>.local):포트 또는 사설 IP. DHCP로 IP가 바뀌어도 이름은 유지.
+    @Published var serverHost = "MacBook-Pro-39.local:8080"
 
-    static let anchorMainID = "phoneMain"
-    static let tagID = "tag-watch"
-    static let gravity = 9.80665         // g -> m/s²
+    var anyPeerConnected: Bool { peers.contains { $0.connected } }
 
+    // MARK: 내부 상태
+    private var role: Role?
+    private var links: [String: PeerLink] = [:]
+    private var sessionOwner: [ObjectIdentifier: String] = [:]   // NISession -> peerID 역인덱스
     private var wc: WCSession?
-    private var niSession: NISession?
-    private var lastConfig: NINearbyPeerConfiguration?
-    private var runningPeerTokenData: Data?
     private var retryTimer: Timer?
-    private var stamps: [Date] = []      // Hz 계산용
+    private var watchdog: Timer?
+    #if os(iOS)
+    private var net: NetworkTokenChannel?
+    #endif
 
     #if os(watchOS)
     let platform = "WATCH"
@@ -59,59 +87,134 @@ final class IngestManager: NSObject, ObservableObject {
     private let sendHz = 10.0
     private var seq = 0
     private var lastSent = Date.distantPast
-    // 손목을 내려 화면이 꺼지면 앱이 백그라운드로 가 CoreMotion 샘플·WCSession 전송이 멈춘다.
-    // 운동(모션) 세션을 켜두면 백그라운드 실행이 유지돼 낙상 드롭 순간에도 측정·전송이 끊기지 않는다.
+    private var stamps: [Date] = []          // 전송 Hz 계산용
+    // 손목을 내려 화면이 꺼지면 앱이 백그라운드로 가 측정·전송이 멈춘다. 운동 세션으로 백그라운드 실행을 유지한다.
     private let healthStore = HKHealthStore()
     private var workoutSession: HKWorkoutSession?
     #else
     let platform = "PHONE"
+    private var recvStamps: [Date] = []      // 수신 Hz 계산용
+    private var lastFrameAt: Date?           // 마지막 프레임 수신 시각(프레임 끊김 감지)
     private lazy var urlSession: URLSession = {
-        let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 2      // 라이브 스트림이라 오래 안 기다림
+        let cfg = URLSessionConfiguration.ephemeral   // 캐시/쿠키 없는 세션 — 묵은 응답 재사용 방지
+        cfg.timeoutIntervalForRequest = 2             // 라이브 스트림이라 오래 안 기다림
         cfg.waitsForConnectivity = false
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: cfg)
     }()
     #endif
 
-    // MARK: 시작/정지
-    func start() {
-        guard !running else { return }
+    // MARK: - 워치/NI 링크 시작·정지 (서버 전송과 독립)
+    func startRanging() {
+        guard !rangingRunning else { return }
         guard NISession.isSupported else { setStatus("이 기기는 NI 미지원(U1/U2 없음)"); return }
-        setupNI()
-        setupWC()
-        running = true
+        let role = makeRole()
+        self.role = role
+        rangingRunning = true
+
+        // 피어별 세션 생성(매번 새로 → 새 토큰, 묵은 토큰 latch 방지).
+        for spec in role.peers {
+            let s = NISession()
+            s.delegate = self
+            links[spec.id] = PeerLink(spec: spec, session: s)
+            sessionOwner[ObjectIdentifier(s)] = spec.id
+        }
+        // 표시 목록: 워치·서브폰은 자기 NI 링크(측정 상대)를, 메인폰은 프레임이 실어오는 앵커(phoneMain/phoneSub)를 보여준다.
+        #if os(iOS)
+        if role.myID == IngestManager.mainID {
+            peers = [PeerState(id: IngestManager.mainID, chan: "frame", distance: nil, hz: 0, connected: false),
+                     PeerState(id: IngestManager.subID,  chan: "frame", distance: nil, hz: 0, connected: false)]
+        } else {
+            peers = role.peers.map {
+                PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "NET", distance: nil, hz: 0, connected: false)
+            }
+        }
+        #else
+        peers = role.peers.map {
+            PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "NET", distance: nil, hz: 0, connected: false)
+        }
+        #endif
+
+        if role.usesWC { setupWC() }
+        #if os(iOS)
+        if role.usesNet { setupNet() }
+        #endif
         #if os(watchOS)
         startSampling()
-        #else
-        setStatus("수신 대기 · 폰 앱 포그라운드 유지 · 서버 \(serverHost)")
         #endif
-        // 붙을 때까지 내 토큰 반복 전송(타이밍/묵은토큰 극복). 첫 거리 업데이트 오면 멈춤.
+
+        // 붙을 때까지 내 토큰들을 반복 전송(타이밍/묵은토큰 극복). 모든 피어가 실제 거리 갱신되면 멈춤.
         retryTimer?.invalidate()
         retryTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
-            guard let self = self else { t.invalidate(); return }
-            if self.peerConnected { t.invalidate(); return }
-            self.shareToken()
+            guard let self = self, self.rangingRunning else { t.invalidate(); return }
+            self.shareMyTokens()
+            if !self.links.isEmpty, self.links.values.allSatisfy({ $0.connected }) { t.invalidate() }
         }
+        // 워치독: 갱신 끊긴 거리를 주기적으로 무효화(얼어붙은 옛 거리 방지).
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.expireStaleDistances()
+        }
+        setStatus("\(role.myID) 시작 · 피어 [\(role.peers.map { $0.id }.joined(separator: ", "))]")
     }
 
-    func stop() {
+    func stopRanging() {
+        rangingRunning = false
+        retryTimer?.invalidate(); retryTimer = nil
+        watchdog?.invalidate(); watchdog = nil
+        // 모든 세션 무효화 + 역인덱스/링크 비우기(묵은 상태 제거).
+        for link in links.values { link.session.invalidate() }
+        links.removeAll()
+        sessionOwner.removeAll()
+        #if os(iOS)
+        net?.stop(); net = nil
+        lastFrameAt = nil
+        #endif
         #if os(watchOS)
         motion.stopAccelerometerUpdates()
         endWorkout()
         #endif
-        retryTimer?.invalidate()
-        niSession?.invalidate()
-        running = false
-        peerConnected = false
+        role = nil
+        peers = []
+        lastFrame = nil
+        hz = 0
         setStatus("정지")
     }
 
-    // MARK: NI 세션
-    private func setupNI() {
-        let s = NISession()
-        s.delegate = self
-        niSession = s
+    #if os(watchOS)
+    private func makeRole() -> Role {
+        Role(myID: IngestManager.tagID,
+             peers: [PeerSpec(id: IngestManager.mainID, chan: .wc),
+                     PeerSpec(id: IngestManager.subID, chan: .wc)],
+             relays: false)
     }
+    #else
+    private func makeRole() -> Role {
+        switch phoneRole {
+        case .main:  // 게이트웨이 + 중계: 워치와 거리(WC), 서브폰 토큰 중계(net)
+            return Role(myID: IngestManager.mainID,
+                        peers: [PeerSpec(id: IngestManager.tagID, chan: .wc)], relays: true)
+        case .sub:   // 앵커2: 워치와 거리(net으로 토큰, 메인폰이 중계)
+            return Role(myID: IngestManager.subID,
+                        peers: [PeerSpec(id: IngestManager.tagID, chan: .net)], relays: false)
+        }
+    }
+    #endif
+
+    // MARK: - 서버 전송 링크 시작·정지 (워치 링크와 독립, 메인폰 전용)
+    #if os(iOS)
+    func startPosting() {
+        guard phoneRole == .main else { setStatus("서브폰은 서버 전송을 하지 않습니다"); return }
+        postCount = 0
+        lastPostStatus = ""
+        serverPosting = true
+        setStatus("서버 전송 시작 · \(serverHost)")
+    }
+    func stopPosting() {
+        serverPosting = false
+        setStatus("서버 전송 정지")
+    }
+    #endif
 
     // MARK: WCSession
     private func setupWC() {
@@ -122,54 +225,167 @@ final class IngestManager: NSObject, ObservableObject {
         wc = s
     }
 
-    // MARK: NI 토큰 공유 (키 채널만! raw 채널은 프레임 전용이라 여기서 안 씀)
-    private func shareToken() {
-        guard let token = niSession?.discoveryToken,
-              let wc = wc, wc.activationState == .activated,
-              let data = try? NSKeyedArchiver.archivedData(withRootObject: token,
-                                                           requiringSecureCoding: true) else { return }
-        if wc.isReachable {
-            wc.sendMessage(["niToken": data], replyHandler: nil) { _ in
-                wc.transferUserInfo(["niToken": data])
-            }
-        } else {
-            wc.transferUserInfo(["niToken": data])   // 상대 앱 꺼져있으면 큐잉
+    #if os(iOS)
+    private func setupNet() {
+        let ch = NetworkTokenChannel(
+            onMessage:   { [weak self] data in self?.handleIncoming(data, via: .net) },
+            onConnected: { [weak self] in self?.shareMyTokens() },
+            log:         { _ in })
+        ch.start()
+        net = ch
+    }
+    #endif
+
+    // MARK: 토큰 공유 (피어별로 다름)
+    private func shareMyTokens() {
+        guard let role = role else { return }
+        for spec in role.peers {
+            guard let link = links[spec.id], let tok = link.session.discoveryToken,
+                  let tokData = try? NSKeyedArchiver.archivedData(withRootObject: tok,
+                                                                  requiringSecureCoding: true) else { continue }
+            let msg = AddressedToken(from: role.myID, to: spec.id, token: tokData)
+            guard let data = try? JSONEncoder().encode(msg) else { continue }
+            send(data, on: spec.chan)
         }
-        try? wc.updateApplicationContext(["niToken": data])  // 신뢰도 높은 최신상태 채널
     }
 
-    // MARK: 상대 토큰 수신 -> 레인징 시작
-    private func onToken(_ data: Data) {
-        guard data != runningPeerTokenData,
-              let token = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NIDiscoveryToken.self,
-                                                                  from: data) else { return }
-        runningPeerTokenData = data
-        let config = NINearbyPeerConfiguration(peerToken: token)
-        lastConfig = config
-        niSession?.run(config)
-        setStatus("레인징 시작")
+    private func send(_ data: Data, on chan: Chan) {
+        switch chan {
+        case .wc:
+            guard let wc = wc, wc.activationState == .activated else { return }
+            if wc.isReachable {
+                wc.sendMessageData(data, replyHandler: nil) { _ in wc.transferUserInfo(["m": data]) }
+            } else {
+                wc.transferUserInfo(["m": data])   // 상대 앱 꺼져있으면 큐잉
+            }
+        case .net:
+            #if os(iOS)
+            net?.broadcast(data)
+            #endif
+        }
     }
 
-    // MARK: 워치 — accel 샘플 + 프레임 송신
+    // MARK: 토큰 수신 + (메인폰이면) 중계
+    private func handleIncoming(_ data: Data, via: Chan) {
+        guard rangingRunning,
+              let msg = try? JSONDecoder().decode(AddressedToken.self, from: data) else { return }
+        if msg.to == role?.myID {
+            deliver(msg)
+        } else if role?.relays == true {
+            let out: Chan = (via == .wc) ? .net : .wc   // 온 채널의 반대쪽으로 넘김
+            send(data, on: out)
+        }
+    }
+
+    private func deliver(_ msg: AddressedToken) {
+        guard let link = links[msg.from] else { return }       // 내 피어가 아니면 무시
+        guard link.runningToken != msg.token else { return }   // 같은 토큰이면 스킵(묵은 토큰 방지)
+        guard let tok = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NIDiscoveryToken.self,
+                                                                from: msg.token) else { return }
+        link.runningToken = msg.token
+        let config = NINearbyPeerConfiguration(peerToken: tok)
+        link.lastConfig = config
+        link.session.run(config)
+        setPeer(msg.from) { $0.connected = true }
+    }
+
+    // MARK: 거리 갱신/워치독
+    private func recordUpdate(_ id: String, distance: Double?) {
+        guard let link = links[id] else { return }
+        let now = Date()
+        link.distance = distance
+        link.lastUpdate = now
+        link.stamps.append(now)
+        link.stamps.removeAll { now.timeIntervalSince($0) > 2.0 }
+        let span = link.stamps.count >= 2 ? now.timeIntervalSince(link.stamps.first!) : 0
+        let hz = span > 0.001 ? Double(link.stamps.count - 1) / span : 0
+        setPeer(id) { $0.distance = distance; $0.hz = hz }
+    }
+
+    /// 갱신이 끊긴 거리를 무효화 → 얼어붙은 옛 거리가 프레임/화면에 남지 않는다.
+    private func expireStaleDistances() {
+        let now = Date()
+        for (id, link) in links {
+            guard link.distance != nil else { continue }
+            if let last = link.lastUpdate, now.timeIntervalSince(last) > IngestManager.staleAfter {
+                link.distance = nil
+                setPeer(id) { $0.distance = nil; $0.hz = 0 }
+            }
+        }
+        #if os(iOS)
+        // 메인폰: 프레임(워치→폰)이 끊기면 표시 거리·가속도를 비운다(워치만 정지해도 화면이 최신화됨).
+        if role?.myID == IngestManager.mainID, let last = lastFrameAt,
+           now.timeIntervalSince(last) > IngestManager.staleAfter {
+            lastFrame = nil
+            for p in peers { setPeer(p.id) { $0.distance = nil; $0.hz = 0; $0.connected = false } }
+        }
+        #endif
+    }
+
+    private func setPeer(_ id: String, _ mut: @escaping (inout PeerState) -> Void) {
+        DispatchQueue.main.async {
+            guard let i = self.peers.firstIndex(where: { $0.id == id }) else { return }
+            var s = self.peers[i]; mut(&s); self.peers[i] = s
+        }
+    }
+
+    // MARK: - 워치: accel 샘플 + 프레임 송신
     #if os(watchOS)
     private func startSampling() {
         guard motion.isAccelerometerAvailable else { setStatus("가속도계 없음"); return }
         motion.accelerometerUpdateInterval = 1.0 / sampleHz
         seq = 0
         lastSent = .distantPast
-        startWorkoutKeepAlive()   // 손목 내려도 앱 유지(백그라운드 실행 확보)
-        setStatus("측정 시작 · 샘플 \(Int(sampleHz))Hz · 전송 \(Int(sendHz))Hz")
+        stamps.removeAll()
+        startWorkoutKeepAlive()
         motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
             guard let self = self, let a = data?.acceleration else { return }
             self.onSample(ax: a.x, ay: a.y, az: a.z)
         }
     }
 
-    // MARK: 운동 세션(손목 내려도 앱 유지) — 실제 건강 데이터는 저장 안 하고 백그라운드 실행만 얻는다.
+    /// 전송 틱(10Hz)에만 프레임 생성·전송. 붙어 있는(최신) 앵커 거리를 모두 담는다.
+    private func onSample(ax: Double, ay: Double, az: Double) {
+        guard rangingRunning else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastSent) >= 1.0 / sendHz else { return }
+        lastSent = now
+        // 링크 중 최신 거리가 있는 앵커만 담는다(워치독이 무효화한 것/미연결은 제외).
+        var ranges: [String: Double] = [:]
+        for (id, link) in links { if let d = link.distance { ranges[id] = d } }
+        let frame = TelemetryFrame(seq: seq, ts: now.timeIntervalSince1970 * 1000,
+                                   ax: ax, ay: ay, az: az,
+                                   ranges: ranges.isEmpty ? nil : ranges)
+        seq += 1
+        lastFrame = frame
+        recordSendHz(now)
+        sendFrame(frame)
+    }
+
+    private func sendFrame(_ frame: TelemetryFrame) {
+        guard let wc = wc, wc.activationState == .activated,
+              let data = try? JSONEncoder().encode(frame) else { return }
+        if wc.isReachable {
+            wc.sendMessage(["frame": data], replyHandler: nil, errorHandler: { [weak self] e in
+                self?.setStatus("전송 오류: \(e.localizedDescription)")
+            })
+        } else {
+            setStatus("폰 미도달 — 드롭(폰 앱 포그라운드 필요)")
+        }
+    }
+
+    private func recordSendHz(_ now: Date) {
+        stamps.append(now)
+        stamps.removeAll { now.timeIntervalSince($0) > 2.0 }
+        let span = stamps.count >= 2 ? now.timeIntervalSince(stamps.first!) : 0
+        let h = span > 0.001 ? Double(stamps.count - 1) / span : 0
+        DispatchQueue.main.async { self.hz = h }
+    }
+
+    // MARK: 운동 세션(손목 내려도 앱 유지) — 건강 데이터는 저장 안 하고 백그라운드 실행만 얻는다.
     private func startWorkoutKeepAlive() {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         let share: Set = [HKObjectType.workoutType()]
-        // 세션 실행 자체는 권한이 필요없지만, 최초 1회 권한 흐름을 태워 시스템이 세션을 허용하게 한다.
         healthStore.requestAuthorization(toShare: share, read: []) { [weak self] _, _ in
             DispatchQueue.main.async { self?.beginWorkoutSession() }
         }
@@ -193,45 +409,31 @@ final class IngestManager: NSObject, ObservableObject {
         workoutSession?.end()
         workoutSession = nil
     }
-
-    /// CoreMotion 콜백(.main). 전송 틱(10Hz)에만 프레임 생성·전송. 거리는 최신 NI 측정값을 실어 보낸다.
-    private func onSample(ax: Double, ay: Double, az: Double) {
-        let now = Date()
-        guard now.timeIntervalSince(lastSent) >= 1.0 / sendHz else { return }
-        lastSent = now
-        var ranges: [String: Double]? = nil
-        if let d = distance { ranges = [IngestManager.anchorMainID: d] }   // 세션 붙었을 때만 채움
-        let frame = TelemetryFrame(seq: seq, ts: now.timeIntervalSince1970 * 1000,
-                                   ax: ax, ay: ay, az: az, ranges: ranges)
-        seq += 1
-        lastFrame = frame
-        recordHz(now)
-        sendFrame(frame)
-    }
-
-    private func sendFrame(_ frame: TelemetryFrame) {
-        guard let wc = wc, wc.activationState == .activated,
-              let data = try? JSONEncoder().encode(frame) else { return }
-        if wc.isReachable {
-            wc.sendMessageData(data, replyHandler: nil, errorHandler: { [weak self] e in
-                self?.setStatus("전송 오류: \(e.localizedDescription)")
-            })
-        } else {
-            setStatus("폰 미도달 — 드롭(폰 앱 포그라운드 필요)")
-        }
-    }
     #endif
 
-    // MARK: 폰 — 프레임 수신 -> ingest POST
+    // MARK: - 메인폰: 프레임 수신 -> ingest POST
     #if os(iOS)
     private func onFrame(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(TelemetryFrame.self, from: data) else { return }
+        guard rangingRunning,
+              let frame = try? JSONDecoder().decode(TelemetryFrame.self, from: data) else { return }
         DispatchQueue.main.async {
             self.lastFrame = frame
-            self.distance = frame.ranges?[IngestManager.anchorMainID]
-            self.recordHz(Date())
-            self.postIngest(frame)
+            self.lastFrameAt = Date()
+            self.recordRecvHz(Date())
+            // 화면: 프레임이 담아온 앵커 거리(phoneMain/phoneSub)만 반영. 폰 자신의 NI 거리는 표시 안 함(점멸 방지).
+            for p in self.peers {
+                let d = frame.ranges?[p.id]
+                self.setPeer(p.id) { $0.distance = d; $0.connected = (d != nil); $0.hz = d != nil ? self.hz : 0 }
+            }
+            if self.serverPosting { self.postIngest(frame) }
         }
+    }
+
+    private func recordRecvHz(_ now: Date) {
+        recvStamps.append(now)
+        recvStamps.removeAll { now.timeIntervalSince($0) > 2.0 }
+        let span = recvStamps.count >= 2 ? now.timeIntervalSince(recvStamps.first!) : 0
+        hz = span > 0.001 ? Double(recvStamps.count - 1) / span : 0
     }
 
     /// 프레임 -> spec 03 §5 ingest JSON -> 서버 POST. 폰은 변환·포장만(연산 없음).
@@ -257,6 +459,7 @@ final class IngestManager: NSObject, ObservableObject {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.httpBody = payload
         urlSession.dataTask(with: req) { [weak self] _, resp, err in
             DispatchQueue.main.async {
@@ -272,76 +475,106 @@ final class IngestManager: NSObject, ObservableObject {
     }
     #endif
 
-    // MARK: Hz 집계 (최근 2초 창)
-    private func recordHz(_ now: Date) {
-        stamps.append(now)
-        stamps.removeAll { now.timeIntervalSince($0) > 2.0 }
-        let span = stamps.count >= 2 ? now.timeIntervalSince(stamps.first!) : 0
-        hz = span > 0.001 ? Double(stamps.count - 1) / span : 0
-    }
-
     private func setStatus(_ s: String) { DispatchQueue.main.async { self.status = s } }
-    private func fmt(_ v: Double) -> String { String(format: "%+.2f", v) }
 }
 
-// MARK: - NISessionDelegate (거리 측정)
+// MARK: - 토큰/역할 모델 (라우팅에 쓰는 값 타입)
+
+/// 주소가 붙은 토큰 메시지(JSON으로 직렬화해 WC/네트워크 어디로든 보냄).
+struct AddressedToken: Codable {
+    let from: String    // 보낸 기기 역할 ID
+    let to: String      // 받을 기기 역할 ID
+    let token: Data     // NSKeyedArchiver로 아카이브한 NIDiscoveryToken
+}
+
+enum Chan { case wc, net }   // 이 피어에게 내 토큰을 보낼 채널
+
+struct PeerSpec { let id: String; let chan: Chan }
+
+/// 이 기기가 맡을 역할.
+struct Role {
+    let myID: String
+    let peers: [PeerSpec]      // 내가 거리 잴 상대들 (각자 세션 1개)
+    let relays: Bool           // true면 나한테 안 온 메시지를 반대 채널로 중계(메인폰 전용)
+    var usesWC: Bool { relays || peers.contains { $0.chan == .wc } }
+    var usesNet: Bool { relays || peers.contains { $0.chan == .net } }
+}
+
+/// 피어별 링크(세션 + 상태).
+final class PeerLink {
+    let spec: PeerSpec
+    let session: NISession
+    var runningToken: Data?                       // 지금 돌고 있는 상대 토큰(묵은 토큰 추적)
+    var lastConfig: NINearbyPeerConfiguration?    // 타임아웃 시 재실행용
+    var connected = false                          // didUpdate를 받았는가(토큰 재전송 중단·연결 판단)
+    var distance: Double?                          // 최신 측정 거리(m). 워치독이 무효화 가능
+    var lastUpdate: Date?                          // 마지막 didUpdate 시각(워치독 판단용)
+    var stamps: [Date] = []                        // Hz 계산용
+    init(spec: PeerSpec, session: NISession) { self.spec = spec; self.session = session }
+}
+
+/// UI 노출용 앵커 상태.
+struct PeerState: Identifiable {
+    let id: String
+    var chan: String
+    var distance: Double?
+    var hz: Double
+    var connected: Bool
+}
+
+// MARK: - NISessionDelegate (세션 -> 어떤 피어인지 sessionOwner로 역추적)
 extension IngestManager: NISessionDelegate {
     func session(_ session: NISession, didUpdate nearbyObjects: [NINearbyObject]) {
-        guard let obj = nearbyObjects.first else { return }
-        DispatchQueue.main.async {
-            if !self.peerConnected { self.peerConnected = true; self.retryTimer?.invalidate() }
-            // 워치: 자기 세션 거리를 진실값으로 보관(프레임에 실림). 폰: 표시는 프레임값을 쓰므로 참고만.
-            #if os(watchOS)
-            if let d = obj.distance { self.distance = Double(d) }
-            #endif
-        }
+        guard rangingRunning,
+              let id = sessionOwner[ObjectIdentifier(session)],
+              let obj = nearbyObjects.first else { return }
+        links[id]?.connected = true
+        setPeer(id) { $0.connected = true }   // 표시 행이 있으면(워치·서브폰) 켜고, 메인폰의 tag-watch는 행이 없어 무시된다.
+        recordUpdate(id, distance: obj.distance.map { Double($0) })
     }
 
     func session(_ session: NISession, didRemove nearbyObjects: [NINearbyObject],
                  reason: NINearbyObject.RemovalReason) {
-        DispatchQueue.main.async {
-            #if os(watchOS)
-            self.distance = nil   // 사거리 이탈: 거리 없음 -> 프레임 ranges 비움
-            #endif
-        }
-        if reason == .timeout, let config = lastConfig { session.run(config) }  // 자동 회복
+        guard let id = sessionOwner[ObjectIdentifier(session)] else { return }
+        if let link = links[id] { link.distance = nil; link.connected = false }
+        setPeer(id) { $0.distance = nil; $0.hz = 0; $0.connected = false }   // 사거리 이탈: 거리 없음
+        if reason == .timeout, let cfg = links[id]?.lastConfig { session.run(cfg) }  // 자동 회복
     }
 
     func sessionWasSuspended(_ session: NISession) {}
     func sessionSuspensionEnded(_ session: NISession) {
-        if let config = lastConfig { session.run(config) }   // 재개 시 반드시 재실행
+        guard let id = sessionOwner[ObjectIdentifier(session)] else { return }
+        if let cfg = links[id]?.lastConfig { session.run(cfg) }   // 재개 시 반드시 재실행
     }
     func session(_ session: NISession, didInvalidateWith error: Error) {
         setStatus("세션 무효화: \(error.localizedDescription)")
     }
 }
 
-// MARK: - WCSessionDelegate (토큰=키채널 / 프레임=raw채널)
+// MARK: - WCSessionDelegate (토큰=raw/키'm' 채널 / 프레임=키'frame' 채널)
 extension IngestManager: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState,
                  error: Error?) {
-        DispatchQueue.main.async { self.shareToken() }
+        DispatchQueue.main.async { self.shareMyTokens() }
     }
 
-    // raw 데이터 == 텔레메트리 프레임 (폰만 수신)
+    // raw 데이터 == NI 토큰(AddressedToken)
     func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
-        #if os(iOS)
-        onFrame(messageData)
-        #endif
+        handleIncoming(messageData, via: .wc)
     }
 
-    // 키 있는 메시지 == NI 토큰 (양쪽)
+    // 키 메시지: "frame"=텔레메트리(폰만 수신), "m"=큐잉된 토큰
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        if let data = message["niToken"] as? Data { onToken(data) }
+        #if os(iOS)
+        if let d = message["frame"] as? Data { onFrame(d); return }
+        #endif
+        if let d = message["m"] as? Data { handleIncoming(d, via: .wc) }
     }
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        if let data = userInfo["niToken"] as? Data { onToken(data) }
-    }
-    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        if let data = applicationContext["niToken"] as? Data { onToken(data) }
+        if let data = userInfo["m"] as? Data { handleIncoming(data, via: .wc) }
     }
     func sessionReachabilityDidChange(_ session: WCSession) {
-        if !peerConnected { shareToken() }
+        if !anyPeerConnected { shareMyTokens() }
     }
 
     #if os(iOS)
