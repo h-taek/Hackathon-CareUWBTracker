@@ -15,7 +15,7 @@
   dataset,subject,placement,activity,trial,is_fall,src_hz,t_ms,ax_g,ay_g,az_g,smv_g
 
 의존성 0(순수 파이썬 stdlib). 데이터셋별 어댑터를 추가해 확장한다.
-사용: python3 tools/normalize_falls.py [--datasets SisFall,...] [--hz 50] [--out <master>] [--waist-out <waist>]
+사용: python3 ml/normalize_falls.py [--datasets SisFall,...] [--hz 50] [--out <master>] [--waist-out <waist>]
 
 --- 데이터셋별 규격(어댑터 근거) ------------------------------------------------
  SisFall      허리, 200Hz, ADXL345 ±16g/13bit → g=AD/256(중력포함). F*=낙상/D*=ADL.
@@ -42,8 +42,8 @@ subject 규칙: 출력 subject는 '<dataset>:<subj>'로 전역 유일화한다. 
 """
 import os, sys, csv, math, glob, re, argparse, statistics as st
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(REPO, "datasets")
+HERE = os.path.dirname(os.path.abspath(__file__))   # ml/
+DATA = os.path.join(HERE, "datasets")               # ml/datasets/ (원시 8종 + _normalized)
 TARGET_HZ = 50
 G = 9.80665
 
@@ -87,7 +87,7 @@ def uniform_ts(xyz, src_hz):
     return [(i * dt, x, y, z) for i, (x, y, z) in enumerate(xyz)]
 
 # --- SisFall 어댑터 ----------------------------------------------------------
-# datasets/SisFall/<SUBJ>/<ACT>_<SUBJ>_<TRIAL>.txt  (200Hz). 각 줄 9값(끝 ';' 가능):
+# ml/datasets/SisFall/<SUBJ>/<ACT>_<SUBJ>_<TRIAL>.txt  (200Hz). 각 줄 9값(끝 ';' 가능):
 # ADXL345(x,y,z), ITG3200 자이로(x,y,z), MMA8451Q(x,y,z). ADXL345 ±16g/13bit → g=AD/256.
 SISFALL_HZ = 200
 def sisfall_iter(root):
@@ -118,7 +118,7 @@ def sisfall_iter(root):
             yield subj, "waist", act, trial, is_fall, SISFALL_HZ, uniform_ts(xyz, SISFALL_HZ)
 
 # --- URFD 어댑터 -------------------------------------------------------------
-# datasets/URFD/{fall,adl}-NN-acc.csv. col0=t_ms(불규칙), col1=SMV, col2-4=x,y,z(g,중력포함).
+# ml/datasets/URFD/{fall,adl}-NN-acc.csv. col0=t_ms(불규칙), col1=SMV, col2-4=x,y,z(g,중력포함).
 def urfd_iter(root):
     for p in sorted(glob.glob(os.path.join(root, "*-acc.csv"))):
         base = os.path.basename(p)[:-8]           # fall-01
@@ -140,7 +140,7 @@ def urfd_iter(root):
             yield "na", "waist", kind, num, is_fall, "irregular", samples
 
 # --- UMAFall 어댑터 ----------------------------------------------------------
-# datasets/UMAFall/UMAFall_Subject_NN_{ADL|Fall}_<movement>_<k>_<date>.csv
+# ml/datasets/UMAFall/UMAFall_Subject_NN_{ADL|Fall}_<movement>_<k>_<date>.csv
 # 헤더(%)들 뒤 데이터: TimeStamp;SampleNo;X;Y;Z;SensorType;SensorID  (';' 구분, X/Y/Z=g,중력포함)
 UMA_POS = {0: "pocket", 1: "chest", 2: "waist", 3: "wrist", 4: "ankle"}
 def umafall_iter(root):
@@ -180,7 +180,7 @@ def umafall_iter(root):
                 yield subj, UMA_POS[sid], "fall" if is_fall else "adl", trial, is_fall, "irregular", samples
 
 # --- UCI-455 (Erciyes) 어댑터 ------------------------------------------------
-# datasets/UCI-455/Tests/<subj>/Testler Export/<code-name>/Test_<n>/<serial>.txt
+# ml/datasets/UCI-455/Tests/<subj>/Testler Export/<code-name>/Test_<n>/<serial>.txt
 # 헤더 '//'행 + 'Counter\t...'행 뒤 탭구분 데이터. Acc_X/Y/Z=col9/10/11(m/s²,중력포함).
 # 활동코드 9xx=낙상/8xx=ADL. 시리얼→위치.
 UCI_POS = {"340506": "head", "340527": "chest", "340535": "waist",
@@ -226,7 +226,7 @@ def uci455_iter(root):
             yield subj, UCI_POS[serial], code, trial, is_fall, src_hz, uniform_ts(xyz, src_hz)
 
 # --- FallAllD 어댑터 ---------------------------------------------------------
-# datasets/FallAllD/S<subj>_D<dev>_A<act>_T<trial>_A.dat  (_A=accelerometer, 238Hz)
+# ml/datasets/FallAllD/S<subj>_D<dev>_A<act>_T<trial>_A.dat  (_A=accelerometer, 238Hz)
 # 각 줄 x,y,z (raw int, LSM9DS1 ±8g → g=raw×0.000244, 중력포함). 활동ID≥101=낙상.
 FALLALLD_HZ = 238
 FALLALLD_SCALE = 0.000244
@@ -264,7 +264,7 @@ def fallalld_iter(root):
             yield subj, FALLALLD_POS[d], act, trial, is_fall, FALLALLD_HZ, uniform_ts(xyz, FALLALLD_HZ)
 
 # --- MMSys (Ojetola) 어댑터 --------------------------------------------------
-# datasets/MMSys/falls/subject_N.csv  (헤더행 有, 100Hz 연속녹음)
+# ml/datasets/MMSys/falls/subject_N.csv  (헤더행 有, 100Hz 연속녹음)
 # cols: ch_accel_x,y,z(0-2), ch_gyro(3-5), th_accel_x,y,z(6-8), th_gyro(9-11), annotation_1(12), annotation_2(13)
 # annotation_1: 1=낙상, 2=near-fall, 0=ADL. 동일라벨 연속구간을 이벤트로 분할(near-fall 제외).
 # g·중력포함. 긴 구간은 창(win)으로 잘라 트라이얼 크기 균질화.
@@ -316,7 +316,7 @@ def mmsys_iter(root):
                 yield subj, place, "fall" if lab else "adl", f"seg{k:04d}", lab, MMSYS_HZ, uniform_ts(seg, MMSYS_HZ)
 
 # --- Sensor-Based-8953 어댑터 ------------------------------------------------
-# datasets/Sensor-Based-8953/Dataset V4/<Activity>/accelerometer_data_*.csv (헤더행 有)
+# ml/datasets/Sensor-Based-8953/Dataset V4/<Activity>/accelerometer_data_*.csv (헤더행 有)
 # cols: AccX,AccY,AccZ,Magnitude,GyroX,... (col0-2=accel g,중력포함). 폴더 Falls=낙상, 그 외=ADL.
 # 가슴 스트랩(Geriatric device) 100Hz. subject 미표기 → na, trial=파일 타임스탬프.
 SENSORBASED_HZ = 100
@@ -350,7 +350,7 @@ def sensorbased_iter(root):
                 yield "na", "chest", act, trial, is_fall, SENSORBASED_HZ, uniform_ts(xyz, SENSORBASED_HZ)
 
 # --- KFall (Add-in) 어댑터 ---------------------------------------------------
-# datasets/KFall-Addin/sensor_data_new/SA<NN>/S<NN>T<task>R<rep>.csv (헤더행 有, 100Hz)
+# ml/datasets/KFall-Addin/sensor_data_new/SA<NN>/S<NN>T<task>R<rep>.csv (헤더행 有, 100Hz)
 # cols: TimeStamp(s),FrameCounter,AccX,AccY,AccZ,Gyr...,Euler... → col2-4=accel(g,중력포함).
 # 착용 위치 허리하부. 라벨: task 20~34=낙상(F01~F15), 1~19·35~36=ADL(D01~D21).
 #   (낙상 task는 subject별 label xlsx에도 onset/impact 프레임과 함께 나열됨 — is_fall은 task범위로 충분.

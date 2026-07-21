@@ -1,6 +1,6 @@
 'use strict';
 
-// 정규화 낙상 CSV(tools/normalize_falls.py 출력) 스트리밍 리더.
+// 정규화 낙상 CSV(ml/normalize_falls.py 출력) 스트리밍 리더.
 // 대용량(마스터 2.5GB)을 메모리에 다 안 올리고 한 줄씩 읽어 trial 단위로 끊는다.
 // CSV는 trial 단위로 연속 기록되므로(같은 키 행이 인접), 키가 바뀌는 지점에서 한 trial을 방출한다.
 

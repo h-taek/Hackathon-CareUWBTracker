@@ -62,10 +62,10 @@ CLI는 기본적으로 ingest JSON을 표준 출력으로 내보내며, `--url`�
 
 ## 평가 (evaluate) — 고전 감지기 베이스라인 성적
 
-정규화 CSV(`tools/normalize_falls.py` 출력)의 라벨된 trial을 고전 낙상 감지기(`demo/detection/fall.js`)에 통째로 흘려 혼동행렬을 뽑는다. 이 감지기의 성적이 곧 AI가 넘어야 할 기준선(spec 04 §6)이고, AI 감지기도 같은 하네스로 비교한다.
+정규화 CSV(`ml/normalize_falls.py` 출력)의 라벨된 trial을 고전 낙상 감지기(`demo/detection/fall.js`)에 통째로 흘려 혼동행렬을 뽑는다. 이 감지기의 성적이 곧 AI가 넘어야 할 기준선(spec 04 §6)이고, AI 감지기도 같은 하네스로 비교한다.
 
 ```bash
-node demo/harness/cli.js evaluate datasets/_normalized/waist_falls_50hz.csv
+node demo/harness/cli.js evaluate ml/datasets/_normalized/waist_falls_50hz.csv
 ```
 
 두 판정 수준을 함께 낸다.
@@ -80,7 +80,7 @@ CSV는 g 단위, 감지기는 m/s²를 기대하므로 하네스가 gravity를 �
 `--sweep`은 감지기의 전 임계값을 각각 단독으로 흔들어(1D 스윕, 나머지는 기본값) 민감도-특이도-헛경보 곡선을 낸다. 스윕 대상 위치는 기본 waist(다회 패스용으로 해당 위치 trial만 메모리에 타입배열로 압축 캐시), `all`이면 전체.
 
 ```bash
-node demo/harness/cli.js evaluate datasets/_normalized/waist_falls_50hz.csv --sweep --json demo/harness/results/waist_eval.json
+node demo/harness/cli.js evaluate ml/datasets/_normalized/waist_falls_50hz.csv --sweep --json demo/harness/results/waist_eval.json
 ```
 
 파라미터별 affects 표기: `candidate+confirmed`(impactG) / `confirmed`(settleMs·immobilityMs·immobilityBandG·movementG) / `flag-only`(freefallG·freefallWindowMs — 감지를 게이트하지 않고 이벤트의 freefall 표시 플래그만 바꿈, 곡선 불변). `--json`으로 기계가독 결과도 저장한다.
