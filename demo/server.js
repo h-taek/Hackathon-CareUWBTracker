@@ -12,13 +12,29 @@ const { createPositioningHandler } = require('./positioning/handler');
 const { Simulator } = require('./sim');
 const { formatIngestLine, DEFAULT_GRAVITY } = require('./lib/ingest-log');
 const { createFallDetector, optionsFromEnv } = require('./detection/fall');
+const { createCascadeDetector } = require('./detection/cascade');
 const { zoneAt } = require('./lib/zone');
 
 const PORT = process.env.PORT || 8080;
 const map = JSON.parse(fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'));
 
 const sim = new Simulator(map);
-const fallDetector = createFallDetector(optionsFromEnv());
+// 낙상 감지: 기본은 2단계 캐스케이드(고전+AI 정밀판정, research 04). FALL_AI=0이면 고전 단독.
+// 모델 로드 실패 시 크래시 대신 고전으로 폴백(데모 안정성 우선).
+const fallDetector = (() => {
+  if (process.env.FALL_AI === '0') {
+    console.log('[fall] 고전 단독 모드(FALL_AI=0)');
+    return createFallDetector(optionsFromEnv());
+  }
+  try {
+    const d = createCascadeDetector(optionsFromEnv());
+    console.log('[fall] 2단계 캐스케이드(고전+LightGBM) 모드');
+    return d;
+  } catch (err) {
+    console.error('[fall] AI 모델 로드 실패 → 고전 단독 폴백:', err.message);
+    return createFallDetector(optionsFromEnv());
+  }
+})();
 const clients = new Set(); // 현재 연결된 SSE 응답 객체들
 
 // 시뮬 이벤트 -> 모든 SSE 클라이언트로 브로드캐스트.
@@ -53,7 +69,8 @@ function logAndPosition(payload) {
   }
   for (const evt of fallEvents) {
     if (evt.pos) evt.zone = zoneAt(map, evt.pos.x, evt.pos.y);
-    console.log(`[fall] ${evt.type} ${evt.tagId} peak=${evt.peakAccel}g freefall=${evt.freefall} zone=${evt.zone ?? '-'}`);
+    const ai = evt.aiScore != null ? ` ai=${evt.aiScore}` : '';
+    console.log(`[fall] ${evt.type} ${evt.tagId} peak=${evt.peakAccel}g freefall=${evt.freefall}${ai} zone=${evt.zone ?? '-'}`);
     broadcast('alert', evt);
   }
   return position;
