@@ -31,8 +31,16 @@
  MMSys        가슴+허벅지 Shimmer 100Hz(g,중력포함). 연속녹음 → annotation_1(1=낙상,2=near-fall,0=ADL)
               동일 라벨 연속구간을 이벤트로 분할(near-fall 제외). 긴 구간은 창으로 자름.
  Sensor-Based 가슴 스트랩(Geriatric device) 100Hz. AccX/Y/Z(col0-2, g중력포함). 폴더 Falls=낙상.
+ KFall        허리하부, 100Hz. S<subj>T<task>R<rep>.csv의 col2-4=accel(g,중력포함). 32명(SA06~SA38).
+              task 20~34=낙상(F01~F15) / 1~19·35~36=ADL(D01~D21). 낙상 onset/impact 프레임은 label
+              xlsx에 있으나 is_fall엔 task범위로 충분(프레임은 이후 충격윈도우 추출기용).
+
+subject 규칙: 출력 subject는 '<dataset>:<subj>'로 전역 유일화한다. SisFall과 KFall이 둘 다
+  SA06~SA38을 쓰는 등 데이터셋 간 라벨 충돌이 있어, 네임스페이스 없이는 LOSO에서 다른 사람이
+  한 피험자로 뭉쳐 누수된다. subject 미상(URFD/SensorBased)은 '<dataset>:<activity>-<trial>'로
+  trial 단위 가짜피험자화 — 원 피험자 매핑이 비공개라 각 trial을 단독 홀드아웃으로 둔다.
 """
-import os, sys, csv, math, glob, argparse, statistics as st
+import os, sys, csv, math, glob, re, argparse, statistics as st
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "datasets")
@@ -341,6 +349,40 @@ def sensorbased_iter(root):
             if xyz:
                 yield "na", "chest", act, trial, is_fall, SENSORBASED_HZ, uniform_ts(xyz, SENSORBASED_HZ)
 
+# --- KFall (Add-in) 어댑터 ---------------------------------------------------
+# datasets/KFall-Addin/sensor_data_new/SA<NN>/S<NN>T<task>R<rep>.csv (헤더행 有, 100Hz)
+# cols: TimeStamp(s),FrameCounter,AccX,AccY,AccZ,Gyr...,Euler... → col2-4=accel(g,중력포함).
+# 착용 위치 허리하부. 라벨: task 20~34=낙상(F01~F15), 1~19·35~36=ADL(D01~D21).
+#   (낙상 task는 subject별 label xlsx에도 onset/impact 프레임과 함께 나열됨 — is_fall은 task범위로 충분.
+#    프레임 라벨은 이후 충격윈도우 추출기에서 사용 예정, 정규화 단계에선 미사용.)
+KFALL_HZ = 100
+def kfall_iter(root):
+    for p in sorted(glob.glob(os.path.join(root, "sensor_data_new", "SA*", "S*T*R*.csv"))):
+        subj = os.path.basename(os.path.dirname(p))          # SA06 (폴더가 진실)
+        base = os.path.basename(p)[:-4]                       # S06T20R01
+        m = re.match(r"S\d+T(\d+)R(\d+)$", base)
+        if not m:
+            continue
+        task = int(m.group(1)); rep = m.group(2)
+        is_fall = 1 if 20 <= task <= 34 else 0
+        xyz = []
+        with open(p) as fh:
+            first = True
+            for ln in fh:
+                if first:                                    # 헤더행
+                    first = False
+                    continue
+                c = ln.strip().split(",")
+                if len(c) < 5:
+                    continue
+                try:
+                    ax = float(c[2]); ay = float(c[3]); az = float(c[4])
+                except ValueError:
+                    continue
+                xyz.append((ax, ay, az))
+        if xyz:
+            yield subj, "waist", f"T{task:02d}", rep, is_fall, KFALL_HZ, uniform_ts(xyz, KFALL_HZ)
+
 ADAPTERS = {
     "SisFall":     lambda: sisfall_iter(os.path.join(DATA, "SisFall")),
     "URFD":        lambda: urfd_iter(os.path.join(DATA, "URFD")),
@@ -349,6 +391,7 @@ ADAPTERS = {
     "FallAllD":    lambda: fallalld_iter(os.path.join(DATA, "FallAllD")),
     "MMSys":       lambda: mmsys_iter(os.path.join(DATA, "MMSys")),
     "SensorBased": lambda: sensorbased_iter(os.path.join(DATA, "Sensor-Based-8953")),
+    "KFall":       lambda: kfall_iter(os.path.join(DATA, "KFall-Addin")),
 }
 ALL = ",".join(ADAPTERS)
 
@@ -378,6 +421,10 @@ def main():
                 xyz = resample_nn(samples, a.hz)
                 if not xyz:
                     continue
+                # subject 전역 유일화: 데이터셋으로 네임스페이스(SisFall SA06 ≠ KFall SA06).
+                # subject 미상('na', URFD·SensorBased)은 trial 단위 가짜피험자로 대체 —
+                # 원 피험자 매핑이 공개돼 있지 않으므로 각 trial을 단독 홀드아웃(LOSO 누수 0).
+                gsubj = f"{name}:{act}-{trial}" if subj == "na" else f"{name}:{subj}"
                 key = (name, place)
                 s = stats.setdefault(key, [0, 0, 0, []])
                 s[0] += 1; s[1] += is_fall
@@ -385,7 +432,7 @@ def main():
                 for i, (ax, ay, az) in enumerate(xyz):
                     smv = math.sqrt(ax * ax + ay * ay + az * az)
                     smvs.append(smv)
-                    row = [name, subj, place, act, trial, is_fall, src_hz,
+                    row = [name, gsubj, place, act, trial, is_fall, src_hz,
                            round(i * dt_ms, 1), round(ax, 5), round(ay, 5),
                            round(az, 5), round(smv, 5)]
                     wm.writerow(row)
