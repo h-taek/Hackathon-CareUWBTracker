@@ -32,3 +32,6 @@ Packages/
 
 # 낙상 공개 데이터셋(용량 커서 git 제외, iCloud 동기화는 유지)
 datasets/
+
+# Node / TypeScript
+node_modules/

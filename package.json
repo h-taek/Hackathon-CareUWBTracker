@@ -1,0 +1,16 @@
+{
+  "name": "care-uwb-tracker",
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node demo/server.ts",
+    "test": "node --test \"demo/**/*.test.js\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}

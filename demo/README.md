@@ -1,24 +1,33 @@
 # demo — 실내 측위 + 낙상 감지 데모 서버
 
-의존성 0(Node 내장 모듈만). 워치·폰이 보낸 ingest를 받아 2앵커 삼각측량 좌표와 가속도를 SSE로 흘리고 2D 대시보드에 그린다.
+Node 내장 HTTP와 TypeScript로 구현한 데모 서버다. 워치·폰이 보낸 ingest를 받아 2앵커 삼각측량 좌표와 가속도를 SSE로 흘리고 2D 대시보드에 그린다. 기존 JavaScript 도메인 모듈은 검증된 동작을 유지하며 TypeScript 서버에서 재사용한다.
+
+## 요구 사항
+
+- Node.js 22.18 이상(내장 TypeScript 실행 사용)
 
 ## 실행
 
 ```bash
-node demo/server.js          # http://localhost:8080 (대시보드 / SSE / ingest)
+npm install
+npm start                    # http://localhost:8080 (대시보드 / SSE / ingest)
 ```
+
+기존 명령인 `node demo/server.js`도 계속 지원한다.
 
 ## 테스트
 
 ```bash
-node --test "demo/**/*.test.js"   # 전체 (런타임 + 하네스)
+npm test
+npm run typecheck
 ```
 
 ## 디스크 구조 (책임별)
 
 ```
 demo/
-  server.js            HTTP 서버 · 라우팅 · SSE 허브 · sim 배선(조립부)
+  server.ts            TypeScript HTTP 서버 · 라우팅 · SSE 허브 · sim 배선(조립부)
+  server.js            기존 Node 실행 호환 진입점
   sim.js               데모용 시뮬레이터(가짜 보행/낙상 주입) — 기기 없이 대시보드 확인
   map.json             좌표계 범위·구역 메타
   lib/
@@ -41,4 +50,4 @@ demo/
   public/index.html    2D 대시보드
 ```
 
-런타임 경로: `server.js` → `ingest/`(수신) + `positioning/`(측위) + `sim.js`(데모) + `lib/`(포맷). `harness/`는 서버가 로드하지 않는 독립 개발 도구다.
+런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `sim.js`(데모) + `lib/`(포맷). `harness/`는 서버가 로드하지 않는 독립 개발 도구다.
