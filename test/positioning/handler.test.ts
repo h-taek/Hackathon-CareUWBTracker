@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { IngestGenerator } from '../../harness/generator.ts';
-import { createPositioningHandler } from '../../demo/positioning/handler.ts';
+import { IngestGenerator } from '../../tools/generator.ts';
+import { createPositioningHandler } from '../../server/positioning/handler.ts';
 
 const OPTIONS = Object.freeze({
   mainAnchorId: 'phoneMain',

@@ -8,5 +8,5 @@
     "strict": true,
     "target": "ES2022"
   },
-  "include": ["demo/**/*.ts", "harness/**/*.ts", "test/**/*.ts"]
+  "include": ["server/**/*.ts", "tools/**/*.ts", "test/**/*.ts"]
 }

@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as http from 'node:http';
 import * as test from 'node:test';
-import { handleIngest } from '../../demo/ingest/endpoint.ts';
+import { handleIngest } from '../../server/ingest/endpoint.ts';
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

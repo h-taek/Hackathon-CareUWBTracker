@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { IngestGenerator } from '../../harness/generator.ts';
+import { IngestGenerator } from '../../tools/generator.ts';
 
 test('spec 03 ingest payload를 생성한다', () => {
   const generator = new IngestGenerator({

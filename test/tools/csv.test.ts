@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseHeader, parseRow, trialKey, groupTrials, EXPECTED } from '../../harness/csv.ts';
+import { parseHeader, parseRow, trialKey, groupTrials, EXPECTED } from '../../tools/csv.ts';
 
 const HEADER = EXPECTED.join(',');
 

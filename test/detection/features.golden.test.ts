@@ -8,8 +8,8 @@ import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { computeFeatures, FEATURE_NAMES, type FeatureMap } from '../../demo/detection/features.ts';
-import { createModel } from '../../demo/detection/lgbm.ts';
+import { computeFeatures, FEATURE_NAMES, type FeatureMap } from '../../server/detection/features.ts';
+import { createModel } from '../../server/detection/lgbm.ts';
 
 const golden = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'golden.json'), 'utf8'));
 const model = createModel();

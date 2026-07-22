@@ -7,8 +7,8 @@ import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { createCascadeDetector } from '../../demo/detection/cascade.ts';
-import { createFallDetector } from '../../demo/detection/fall.ts';
+import { createCascadeDetector } from '../../server/detection/cascade.ts';
+import { createFallDetector } from '../../server/detection/fall.ts';
 
 const GRAVITY = 9.80665;
 const golden = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'golden.json'), 'utf8'));

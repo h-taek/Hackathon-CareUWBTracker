@@ -1,8 +1,8 @@
 """확정 모델(LightGBM)을 Node 이식용으로 덤프 + 골든 픽스처 생성 (research 04).
 
 산출:
-  demo/detection/model-lgbm.json          트리 앙상블(간결 노드) + 특징순서 + 임계
-  demo/detection/__fixtures__/golden.json  실제 trial 원신호 + Python 특징/확률(동치 검증용)
+  server/detection/model-lgbm.json          트리 앙상블(간결 노드) + 특징순서 + 임계
+  server/detection/__fixtures__/golden.json  실제 trial 원신호 + Python 특징/확률(동치 검증용)
 
 핵심: JS가 돌릴 트리 평가 로직을 Python으로 먼저 재현(eval_trees)해 sklearn predict_proba와
 일치하는지 self-check한다. 여기서 맞으면 JS는 이 로직을 그대로 옮기기만 하면 된다.
@@ -22,8 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 FEATURES_CSV = os.path.join(HERE, "_out", "features_waist.csv")
 MASTER_CSV = os.path.join(HERE, "datasets", "_normalized", "falls_all_50hz.csv")
-MODEL_OUT = os.path.join(REPO, "demo", "detection", "model-lgbm.json")
-GOLDEN_OUT = os.path.join(REPO, "demo", "detection", "__fixtures__", "golden.json")
+MODEL_OUT = os.path.join(REPO, "server", "detection", "model-lgbm.json")
+GOLDEN_OUT = os.path.join(REPO, "server", "detection", "__fixtures__", "golden.json")
 
 # 마스터 컬럼
 DS, SUBJ, PLACE, ACT, TR, ISF, SRCHZ, TMS, AX, AY, AZ, SMV = range(12)

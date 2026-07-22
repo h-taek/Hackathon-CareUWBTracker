@@ -12,9 +12,9 @@ import {
 import { formatEvaluation, formatSweep } from './report.ts';
 
 const USAGE = `Usage:
-  node demo/harness/cli.js generate [options]
-  node demo/harness/cli.js replay <file.ndjson> [options]
-  node demo/harness/cli.js evaluate <normalized.csv> [options]
+  node tools/cli.ts generate [options]
+  node tools/cli.ts replay <file.ndjson> [options]
+  node tools/cli.ts evaluate <normalized.csv> [options]
 
 Generate options:
   --hz <number>                Sample rate (default: 50)

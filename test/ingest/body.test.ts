@@ -6,7 +6,7 @@ import {
   PayloadTooLargeError,
   UnsupportedMediaTypeError,
   readJsonBody,
-} from '../../demo/ingest/body.ts';
+} from '../../server/ingest/body.ts';
 
 function request(body: string | null, headers: Record<string, string> = { 'content-type': 'application/json' }) {
   const req = Readable.from(body === null ? [] : [body]) as any;

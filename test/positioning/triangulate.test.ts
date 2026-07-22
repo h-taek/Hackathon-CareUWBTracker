@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { triangulateTwoAnchors } from '../../demo/positioning/triangulate.ts';
+import { triangulateTwoAnchors } from '../../server/positioning/triangulate.ts';
 
 function assertClose(actual: number, expected: number, tolerance = 1e-9): void {
   assert.ok(

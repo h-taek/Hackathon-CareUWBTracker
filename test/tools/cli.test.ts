@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseArgs, runGenerate } from '../../harness/cli.ts';
-import type { ReplayRecord } from '../../harness/replay.ts';
+import { parseArgs, runGenerate } from '../../tools/cli.ts';
+import type { ReplayRecord } from '../../tools/replay.ts';
 
 test('generate CLI 옵션을 파싱한다', () => {
   assert.deepEqual(

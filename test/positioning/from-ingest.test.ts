@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { positionFromIngest } from '../../demo/positioning/from-ingest.ts';
+import { positionFromIngest } from '../../server/positioning/from-ingest.ts';
 
 const OPTIONS = Object.freeze({
   mainAnchorId: 'phoneMain',

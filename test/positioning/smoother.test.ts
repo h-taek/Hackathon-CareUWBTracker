@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPositionSmoother } from '../../demo/positioning/smoother.ts';
+import { createPositionSmoother } from '../../server/positioning/smoother.ts';
 
 function position(tagId: string, x: number, y = 0, z = 0) {
   return {

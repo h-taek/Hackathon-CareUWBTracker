@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatIngestLine, type IngestPayload } from '../../demo/lib/ingest-log.ts';
+import { formatIngestLine, type IngestPayload } from '../../server/lib/ingest-log.ts';
 
 const OPTS = { mainAnchorId: 'phoneMain', subAnchorId: 'phoneSub', gravity: 9.80665 };
 

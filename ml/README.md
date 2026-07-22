@@ -1,6 +1,6 @@
 # fall_ml — 낙상 AI 정밀판정 학습 파이프 (오프라인 개발 도구)
 
-고전 감지기(`demo/detection/fall.js`) 위에 얹을 2단계 AI 정밀판정(research 02 §6-하이브리드)의
+고전 감지기(`server/detection/fall.js`) 위에 얹을 2단계 AI 정밀판정(research 02 §6-하이브리드)의
 **학습·비교 코드**. 배포 서버(Node·무의존)와 분리된 오프라인 도구다.
 
 ## 환경 (한 번만)

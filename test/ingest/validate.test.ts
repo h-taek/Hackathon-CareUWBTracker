@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import * as test from 'node:test';
-import { IngestValidationError, validateIngest } from '../../demo/ingest/validate.ts';
+import { IngestValidationError, validateIngest } from '../../server/ingest/validate.ts';
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
