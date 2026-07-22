@@ -29,6 +29,7 @@ export interface Sample {
   ay: number;
   az: number;
   smv: number;
+  [key: string]: unknown;
 }
 
 export interface Trial {

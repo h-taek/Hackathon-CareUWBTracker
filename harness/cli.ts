@@ -230,19 +230,19 @@ export async function runEvaluate(
   return result;
 }
 
-function positiveNumber(value: string | boolean | undefined, name: string): number {
+function positiveNumber(value: string | boolean | number | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new Error(`--${name} must be a positive number`);
   return number;
 }
 
-function nonNegativeNumber(value: string | boolean | undefined, name: string): number {
+function nonNegativeNumber(value: string | boolean | number | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) throw new Error(`--${name} must be zero or greater`);
   return number;
 }
 
-function positiveInteger(value: string | boolean | undefined, name: string): number {
+function positiveInteger(value: string | boolean | number | undefined, name: string): number {
   const number = positiveNumber(value, name);
   if (!Number.isInteger(number)) throw new Error(`--${name} must be an integer`);
   return number;

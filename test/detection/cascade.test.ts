@@ -21,7 +21,7 @@ function impactStream(spikeG = 3.0, n = 80, spikeAt = 40): number[] {
 }
 
 function feed(
-  detector: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { x: number; y: number } | null) => Array<{ type: string }> },
+  detector: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { pos?: { x: number; y: number; z?: number } } | null) => Array<{ type: string }> },
   azSeq: number[],
   tagId = 't',
 ) {
@@ -64,7 +64,7 @@ test('aiEnabled=false면 순수 고전과 동일', () => {
 
 // 실모델 재생: g단위 golden 원신호를 스트림으로.
 function replayReal(
-  detector: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { x: number; y: number } | null) => Array<{ type: string; aiScore?: number }> },
+  detector: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { pos?: { x: number; y: number; z?: number } } | null) => Array<{ type: string; aiScore?: number }> },
   g: { ax: number[]; ay: number[]; az: number[] },
 ) {
   let candidate = false; let ai = null;

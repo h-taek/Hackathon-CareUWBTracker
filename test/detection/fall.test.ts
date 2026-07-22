@@ -8,9 +8,9 @@ const frame = (ts: number, gMag: number, tagId = 'tag-watch') => ({ tagId, ts, a
 
 // 감지기에 프레임 배열을 순차 투입하고 방출된 모든 이벤트를 모은다.
 function run(
-  det: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { x: number; y: number } | null) => Array<{ type: string; [key: string]: unknown }> },
+  det: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { pos?: { x: number; y: number; z?: number } } | null) => Array<{ type: string; [key: string]: unknown }> },
   frames: ReturnType<typeof frame>[],
-  position: { x: number; y: number } | null = null,
+  position: { pos?: { x: number; y: number; z?: number } } | null = null,
 ) {
   const out: Array<{ type: string; [key: string]: unknown }> = [];
   for (const f of frames) out.push(...det.observe(f, position));
@@ -117,7 +117,7 @@ test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
 
 test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', () => {
   const det = createFallDetector();
-  const pos = { pos: { x: 3, y: 4, z: 0 } } as unknown as { x: number; y: number };
+  const pos = { pos: { x: 3, y: 4, z: 0 } };
   const withPos = run(det, [frame(0, 3.0)], pos);
   assert.deepStrictEqual(withPos[0].pos, { x: 3, y: 4, z: 0 });
 

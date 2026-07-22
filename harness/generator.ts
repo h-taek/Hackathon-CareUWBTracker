@@ -51,6 +51,7 @@ interface IngestPayload {
   ranges: IngestRange[];
   accel: Accel;
   source: string;
+  [key: string]: unknown;
 }
 
 const DEFAULTS: ResolvedOptions = Object.freeze({
@@ -60,7 +61,7 @@ const DEFAULTS: ResolvedOptions = Object.freeze({
   anchorDistance: 4,
   start: { x: 1, y: 1 },
   velocity: { x: 0.4, y: 0.2 },
-  bounds: { x: [0.2, 3.8], y: [0.2, 3.8] },
+  bounds: { x: [0.2, 3.8] as [number, number], y: [0.2, 3.8] as [number, number] },
   rangeNoise: 0.02,
   sampleHz: 50,
 });

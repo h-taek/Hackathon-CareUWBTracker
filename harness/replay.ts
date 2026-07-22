@@ -52,7 +52,7 @@ export class ReplayPlayer {
     this.records = records;
     this.speed = options.speed ?? 1;
     this.schedule = options.schedule || setTimeout;
-    this.cancelSchedule = options.cancelSchedule || clearTimeout;
+    this.cancelSchedule = options.cancelSchedule || ((timer: unknown) => clearTimeout(timer as NodeJS.Timeout));
     this.timer = null;
     this.stopped = true;
 
