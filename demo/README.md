@@ -46,6 +46,7 @@ demo/
     handler.js         ingest → 위치 핸들러 팩토리
     from-ingest.js     main/sub 거리 추출 → 삼각측량 → 위치 레코드
     triangulate.js     2앵커 기하(순수 함수)
+    smoother.ts        태그별 최근 5개 좌표 이동평균(방출 전 적용)
   harness/             개발용 도구(서버 런타임과 무관, 기기 없이 ingest 생성/재생)
     cli.js             generate/replay CLI
     generator.js       합성 ingest 프레임 + 낙상 시나리오
