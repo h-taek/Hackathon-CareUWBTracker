@@ -1,9 +1,12 @@
-'use strict';
+import * as http from 'node:http';
+import { HttpBodyError, readJsonBody } from './body.ts';
+import { IngestValidationError, validateIngest, type IngestPayload } from './validate.ts';
 
-const { HttpBodyError, readJsonBody } = require('./body');
-const { IngestValidationError, validateIngest } = require('./validate');
-
-async function handleIngest(req, res, options = {}) {
+export async function handleIngest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  options: { bodyLimit?: number; onIngest?: (payload: IngestPayload) => unknown } = {},
+): Promise<void> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed' });
@@ -34,13 +37,13 @@ async function handleIngest(req, res, options = {}) {
   }
 }
 
-function bodyErrorCode(statusCode) {
+function bodyErrorCode(statusCode: number): string {
   if (statusCode === 413) return 'payload_too_large';
   if (statusCode === 415) return 'unsupported_media_type';
   return 'invalid_json';
 }
 
-function sendJson(res, statusCode, data) {
+function sendJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
   const body = JSON.stringify(data);
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -49,5 +52,3 @@ function sendJson(res, statusCode, data) {
   });
   res.end(body);
 }
-
-module.exports = { handleIngest };

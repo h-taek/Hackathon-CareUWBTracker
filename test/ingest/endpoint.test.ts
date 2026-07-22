@@ -1,11 +1,9 @@
-'use strict';
+import * as assert from 'node:assert/strict';
+import * as http from 'node:http';
+import * as test from 'node:test';
+import { handleIngest } from '../../demo/ingest/endpoint.ts';
 
-const assert = require('node:assert/strict');
-const http = require('node:http');
-const test = require('node:test');
-const { handleIngest } = require('./endpoint');
-
-function validPayload(overrides = {}) {
+function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     tagId: 'tag-watch',
     ts: 123456789,
@@ -19,19 +17,22 @@ function validPayload(overrides = {}) {
   };
 }
 
-async function withServer(options, run) {
+async function withServer(
+  options: Parameters<typeof handleIngest>[2],
+  run: (url: string) => Promise<void>,
+): Promise<void> {
   const server = http.createServer((req, res) => handleIngest(req, res, options));
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address() as { port: number };
   try {
     await run(`http://127.0.0.1:${address.port}/ingest`);
   } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }
 }
 
-test('정상 ingest를 콜백에 넘기고 202를 반환한다', async () => {
-  const received = [];
+test.test('정상 ingest를 콜백에 넘기고 202를 반환한다', async () => {
+  const received: unknown[] = [];
   await withServer({ onIngest: (payload) => received.push(payload) }, async (url) => {
     const payload = validPayload();
     const response = await fetch(url, {
@@ -46,7 +47,7 @@ test('정상 ingest를 콜백에 넘기고 202를 반환한다', async () => {
   });
 });
 
-test('스키마 오류를 issues와 함께 400으로 반환한다', async () => {
+test.test('스키마 오류를 issues와 함께 400으로 반환한다', async () => {
   await withServer({}, async (url) => {
     const response = await fetch(url, {
       method: 'POST',
@@ -69,7 +70,7 @@ test('스키마 오류를 issues와 함께 400으로 반환한다', async () => 
   });
 });
 
-test('잘못된 JSON과 Content-Type을 각각 400, 415로 반환한다', async () => {
+test.test('잘못된 JSON과 Content-Type을 각각 400, 415로 반환한다', async () => {
   await withServer({}, async (url) => {
     const invalidJson = await fetch(url, {
       method: 'POST',
@@ -89,7 +90,7 @@ test('잘못된 JSON과 Content-Type을 각각 400, 415로 반환한다', async 
   });
 });
 
-test('POST가 아닌 메서드는 Allow 헤더와 405를 반환한다', async () => {
+test.test('POST가 아닌 메서드는 Allow 헤더와 405를 반환한다', async () => {
   await withServer({}, async (url) => {
     const response = await fetch(url);
     assert.equal(response.status, 405);

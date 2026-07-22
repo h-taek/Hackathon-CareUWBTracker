@@ -1,34 +1,39 @@
-'use strict';
+import * as http from 'node:http';
 
-const DEFAULT_BODY_LIMIT = 64 * 1024;
+export const DEFAULT_BODY_LIMIT = 64 * 1024;
 
-class HttpBodyError extends Error {
-  constructor(message, statusCode) {
+export class HttpBodyError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode: number) {
     super(message);
     this.name = this.constructor.name;
     this.statusCode = statusCode;
   }
 }
 
-class UnsupportedMediaTypeError extends HttpBodyError {
+export class UnsupportedMediaTypeError extends HttpBodyError {
   constructor() {
     super('Content-Type must be application/json', 415);
   }
 }
 
-class PayloadTooLargeError extends HttpBodyError {
-  constructor(limit) {
+export class PayloadTooLargeError extends HttpBodyError {
+  constructor(limit: number) {
     super(`request body exceeds ${limit} bytes`, 413);
   }
 }
 
-class InvalidJsonError extends HttpBodyError {
-  constructor(message) {
+export class InvalidJsonError extends HttpBodyError {
+  constructor(message: string) {
     super(message, 400);
   }
 }
 
-async function readJsonBody(req, options = {}) {
+export async function readJsonBody(
+  req: http.IncomingMessage,
+  options: { limit?: number } = {},
+): Promise<unknown> {
   const limit = options.limit ?? DEFAULT_BODY_LIMIT;
   if (!Number.isInteger(limit) || limit <= 0) throw new RangeError('body limit must be a positive integer');
 
@@ -40,7 +45,7 @@ async function readJsonBody(req, options = {}) {
     throw new PayloadTooLargeError(limit);
   }
 
-  const chunks = [];
+  const chunks: Buffer[] = [];
   let size = 0;
 
   for await (const chunk of req) {
@@ -56,15 +61,7 @@ async function readJsonBody(req, options = {}) {
   try {
     return JSON.parse(text);
   } catch (error) {
-    throw new InvalidJsonError(`malformed JSON: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new InvalidJsonError(`malformed JSON: ${message}`);
   }
 }
-
-module.exports = {
-  DEFAULT_BODY_LIMIT,
-  HttpBodyError,
-  InvalidJsonError,
-  PayloadTooLargeError,
-  UnsupportedMediaTypeError,
-  readJsonBody,
-};

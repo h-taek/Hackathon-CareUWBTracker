@@ -1,19 +1,17 @@
-'use strict';
-
 // 충격 윈도우 + 코어 19특징 — ml/features.py의 Node 포팅(정본은 Python, 이건 이식본).
 // numpy/scipy 의미를 정확히 재현한다(percentile linear, scipy skew/kurtosis, find_peaks prominence).
 // 동치는 __fixtures__/golden.json으로 골든테스트(features.golden.test.js)에서 강제.
 // 값은 g 단위(정지≈1g). 정본 상수 변경 시 Python과 함께 바꿔야 한다.
 
-const WINDOW = 150;
-const FS = 50.0;
+export const WINDOW = 150;
+export const FS = 50.0;
 const HALF = 75;
 const STILL_BAND = 0.25;
 const GRAV_SEG = 25;
-const PEAK_PROMINENCE = 0.3;
+export const PEAK_PROMINENCE = 0.3;
 const EPS = 1e-9;
 
-const FEATURE_NAMES = [
+export const FEATURE_NAMES = [
   'smv_max', 'smv_min', 'smv_range', 'freefall_dur', 'impact_slope',
   'tilt_change', 'post_activity', 'post_still_ratio', 'pre_post_ratio',
   'smv_mean', 'smv_std', 'smv_rms', 'smv_mad', 'smv_kurtosis',
@@ -22,31 +20,31 @@ const FEATURE_NAMES = [
 
 // ---------- 배열 유틸(numpy 의미) ----------
 
-function smvOf(ax, ay, az) {
+export function smvOf(ax: number[], ay: number[], az: number[]): number[] {
   const n = ax.length;
   const out = new Array(n);
   for (let i = 0; i < n; i += 1) out[i] = Math.hypot(ax[i], ay[i], az[i]);
   return out;
 }
 
-function argmax(a) { // numpy argmax: 최댓값의 첫 인덱스
+function argmax(a: number[]): number { // numpy argmax: 최댓값의 첫 인덱스
   let mi = 0;
   for (let i = 1; i < a.length; i += 1) if (a[i] > a[mi]) mi = i;
   return mi;
 }
 
-function argmin(a) {
+function argmin(a: number[]): number {
   let mi = 0;
   for (let i = 1; i < a.length; i += 1) if (a[i] < a[mi]) mi = i;
   return mi;
 }
 
-function sum(a) { let s = 0; for (let i = 0; i < a.length; i += 1) s += a[i]; return s; }
-function mean(a) { return a.length ? sum(a) / a.length : 0; }
-function maxOf(a) { let m = a[0]; for (let i = 1; i < a.length; i += 1) if (a[i] > m) m = a[i]; return m; }
-function minOf(a) { let m = a[0]; for (let i = 1; i < a.length; i += 1) if (a[i] < m) m = a[i]; return m; }
+function sum(a: number[]): number { let s = 0; for (let i = 0; i < a.length; i += 1) s += a[i]; return s; }
+function mean(a: number[]): number { return a.length ? sum(a) / a.length : 0; }
+function maxOf(a: number[]): number { let m = a[0]; for (let i = 1; i < a.length; i += 1) if (a[i] > m) m = a[i]; return m; }
+function minOf(a: number[]): number { let m = a[0]; for (let i = 1; i < a.length; i += 1) if (a[i] < m) m = a[i]; return m; }
 
-function stdPop(a) { // 모표준편차(ddof=0) = numpy std 기본
+function stdPop(a: number[]): number { // 모표준편차(ddof=0) = numpy std 기본
   if (!a.length) return 0;
   const m = mean(a);
   let s = 0;
@@ -54,7 +52,7 @@ function stdPop(a) { // 모표준편차(ddof=0) = numpy std 기본
   return Math.sqrt(s / a.length);
 }
 
-function median(a) {
+function median(a: number[]): number {
   const s = a.slice().sort((x, y) => x - y);
   const n = s.length;
   const mid = n >> 1;
@@ -62,7 +60,7 @@ function median(a) {
 }
 
 // numpy percentile 기본('linear' 보간). q는 0..100.
-function percentile(a, q) {
+function percentile(a: number[], q: number): number {
   const s = a.slice().sort((x, y) => x - y);
   const pos = (q / 100) * (s.length - 1);
   const lo = Math.floor(pos);
@@ -72,7 +70,7 @@ function percentile(a, q) {
 }
 
 // scipy.stats.skew(bias=True) = m3/m2^1.5. std<eps면 0(가드, Python과 동일).
-function skew(a) {
+function skew(a: number[]): number {
   const m = mean(a);
   let m2 = 0; let m3 = 0;
   for (let i = 0; i < a.length; i += 1) { const d = a[i] - m; m2 += d * d; m3 += d * d * d; }
@@ -82,7 +80,7 @@ function skew(a) {
 }
 
 // scipy.stats.kurtosis(Fisher=True, bias=True) = m4/m2^2 - 3. std<eps면 0.
-function kurtosis(a) {
+function kurtosis(a: number[]): number {
   const m = mean(a);
   let m2 = 0; let m4 = 0;
   for (let i = 0; i < a.length; i += 1) { const d = a[i] - m; const d2 = d * d; m2 += d2; m4 += d2 * d2; }
@@ -91,9 +89,9 @@ function kurtosis(a) {
   return m4 / (m2 * m2) - 3;
 }
 
-function sign(v) { return v > 0 ? 1 : (v < 0 ? -1 : 0); } // np.sign: 0→0
+function sign(v: number): number { return v > 0 ? 1 : (v < 0 ? -1 : 0); } // np.sign: 0→0
 
-function angleDeg(u, v) {
+function angleDeg(u: number[], v: number[]): number {
   const nu = Math.hypot(u[0], u[1], u[2]);
   const nv = Math.hypot(v[0], v[1], v[2]);
   if (nu < EPS || nv < EPS) return 0;
@@ -103,8 +101,8 @@ function angleDeg(u, v) {
 }
 
 // scipy.signal.find_peaks 지역최댓값(_local_maxima_1d): 평탄부 중점 처리.
-function localMaxima(x) {
-  const mids = [];
+function localMaxima(x: number[]): number[] {
+  const mids: number[] = [];
   const iMax = x.length - 1;
   let i = 1;
   while (i < iMax) {
@@ -122,7 +120,7 @@ function localMaxima(x) {
 }
 
 // scipy _peak_prominences(wlen=None): 좌/우로 더 높은 봉우리 만날 때까지의 최저점 기준.
-function prominence(x, peak) {
+function prominence(x: number[], peak: number): number {
   const xp = x[peak];
   let leftMin = xp;
   let i = peak;
@@ -134,7 +132,7 @@ function prominence(x, peak) {
   return xp - Math.max(leftMin, rightMin);
 }
 
-function peakCount(x, minProm) {
+function peakCount(x: number[], minProm: number): number {
   let c = 0;
   for (const p of localMaxima(x)) if (prominence(x, p) >= minProm) c += 1;
   return c;
@@ -142,8 +140,15 @@ function peakCount(x, minProm) {
 
 // ---------- 창 추출 ----------
 
+interface ExtractedWindow {
+  wax: number[];
+  way: number[];
+  waz: number[];
+  s: number[];
+}
+
 // 정점(argmax SMV) 정렬 150샘플 창. L>=150이면 경계 안으로 시프트(패딩X), L<150이면 가장자리 복제.
-function extractWindow(ax, ay, az) {
+export function extractWindow(ax: number[], ay: number[], az: number[]): ExtractedWindow {
   const smv = smvOf(ax, ay, az);
   const L = smv.length;
   const p = argmax(smv);
@@ -156,16 +161,38 @@ function extractWindow(ax, ay, az) {
     const start = p - HALF;
     for (let k = 0; k < WINDOW; k += 1) idx[k] = Math.max(0, Math.min(start + k, L - 1));
   }
-  const wax = idx.map((j) => ax[j]);
-  const way = idx.map((j) => ay[j]);
-  const waz = idx.map((j) => az[j]);
-  const s = idx.map((j) => smv[j]);
+  const wax = idx.map((j: number) => ax[j]);
+  const way = idx.map((j: number) => ay[j]);
+  const waz = idx.map((j: number) => az[j]);
+  const s = idx.map((j: number) => smv[j]);
   return { wax, way, waz, s };
 }
 
 // ---------- 특징 ----------
 
-function computeFeatures(ax, ay, az) {
+export interface FeatureMap {
+  smv_max: number;
+  smv_min: number;
+  smv_range: number;
+  freefall_dur: number;
+  impact_slope: number;
+  tilt_change: number;
+  post_activity: number;
+  post_still_ratio: number;
+  pre_post_ratio: number;
+  smv_mean: number;
+  smv_std: number;
+  smv_rms: number;
+  smv_mad: number;
+  smv_kurtosis: number;
+  smv_skew: number;
+  smv_iqr: number;
+  mean_cross_rate: number;
+  peak_count: number;
+  smv_energy: number;
+}
+
+export function computeFeatures(ax: number[], ay: number[], az: number[]): FeatureMap {
   const { wax, way, waz, s } = extractWindow(ax, ay, az);
   const n = s.length;
   const peak = argmax(s);
@@ -226,12 +253,7 @@ function computeFeatures(ax, ay, az) {
   };
 }
 
-function featureVector(ax, ay, az) {
+export function featureVector(ax: number[], ay: number[], az: number[]): number[] {
   const f = computeFeatures(ax, ay, az);
-  return FEATURE_NAMES.map((k) => f[k]);
+  return FEATURE_NAMES.map((k) => f[k as keyof FeatureMap]);
 }
-
-module.exports = {
-  WINDOW, FS, FEATURE_NAMES, PEAK_PROMINENCE,
-  smvOf, extractWindow, computeFeatures, featureVector,
-};

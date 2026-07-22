@@ -1,9 +1,8 @@
-'use strict';
-const test = require('node:test');
-const assert = require('node:assert');
-const { zoneAt } = require('./zone');
+import test from 'node:test';
+import * as assert from 'node:assert';
+import { zoneAt, type ZoneMap } from '../../demo/lib/zone.ts';
 
-const map = { zones: [
+const map: ZoneMap = { zones: [
   { id: 'z_hall', label: '복도', rect: [0.5, 4.5, 19.0, 1.8] },
   { id: 'z_stair', label: '계단 옆', rect: [0.5, 0.5, 4.0, 3.5] },
 ] };

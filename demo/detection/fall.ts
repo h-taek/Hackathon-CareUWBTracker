@@ -1,5 +1,3 @@
-'use strict';
-
 // 고전 낙상 감지 상태머신(순수·결정적). 04 §3 알고리즘.
 // IDLE -> (충격) fall_candidate -> MONITORING -> (무동작 유지) fall_confirmed / (움직임) fall_canceled -> COOLDOWN -> (움직임) IDLE
 // 시간은 payload.ts만 사용. Date.now() 비의존 -> 테스트 재현 가능.
@@ -17,12 +15,45 @@ const DEFAULTS = {
   movementG: 0.4,
 };
 
-function num(env, key, fallback) {
+export interface FallEvent {
+  type: string;
+  tagId: string;
+  peakAccel: number;
+  freefall: boolean;
+  aiScore?: number;
+  pos?: { x: number; y: number };
+  zone?: string | null;
+}
+
+export interface FallDetectorOptions {
+  gravity?: number;
+  impactG?: number;
+  freefallG?: number;
+  freefallWindowMs?: number;
+  settleMs?: number;
+  immobilityMs?: number;
+  immobilityBandG?: number;
+  movementG?: number;
+}
+
+interface FallState {
+  phase: 'IDLE' | 'MONITORING' | 'COOLDOWN';
+  lastTs: number | null;
+  impactTs: number;
+  peakG: number;
+  freefallAt: number | null;
+  freefallSeen: boolean;
+  lastPos: { x: number; y: number; z?: number } | null;
+  seq: number;
+  quietStartTs: number;
+}
+
+function num(env: Record<string, string | undefined>, key: string, fallback: number): number {
   const v = Number(env[key]);
   return Number.isFinite(v) ? v : fallback;
 }
 
-function optionsFromEnv(env = process.env) {
+export function optionsFromEnv(env: Record<string, string | undefined> = process.env) {
   return {
     gravity: DEFAULT_GRAVITY,
     impactG: num(env, 'FALL_IMPACT_G', DEFAULTS.impactG),
@@ -35,11 +66,11 @@ function optionsFromEnv(env = process.env) {
   };
 }
 
-function createFallDetector(options = {}) {
+export function createFallDetector(options: FallDetectorOptions = {}) {
   const cfg = { ...DEFAULTS, ...options };
-  const states = new Map();
+  const states = new Map<string, FallState>();
 
-  function stateFor(tagId) {
+  function stateFor(tagId: string): FallState {
     let st = states.get(tagId);
     if (!st) {
       st = { phase: 'IDLE', lastTs: null, impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, quietStartTs: 0 };
@@ -48,7 +79,12 @@ function createFallDetector(options = {}) {
     return st;
   }
 
-  function makeEvent(st, payload, type, confidence) {
+  function makeEvent(
+    st: FallState,
+    payload: { tagId: string; [key: string]: unknown },
+    type: string,
+    confidence: string,
+  ) {
     return {
       eventId: `evt-${payload.tagId}-${st.impactTs}-${++st.seq}`,
       tagId: payload.tagId,
@@ -59,22 +95,27 @@ function createFallDetector(options = {}) {
       freefall: st.freefallSeen,
       pos: st.lastPos ? { x: st.lastPos.x, y: st.lastPos.y, z: st.lastPos.z ?? 0 } : null,
       confidence,
-      zone: null, // server가 pos 기준으로 채움
+      zone: null as string | null, // server가 pos 기준으로 채움
     };
   }
 
-  function observe(payload, position) {
+  function observe(
+    payload: { tagId: string; [key: string]: unknown },
+    position: { x: number; y: number } | null,
+  ) {
     const st = stateFor(payload.tagId);
+    const payloadTs = payload.ts as number;
     // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 elapsed 계산 왜곡을 막는다.
-    if (st.lastTs !== null && payload.ts < st.lastTs) return [];
-    st.lastTs = payload.ts;
-    if (position && position.pos) st.lastPos = position.pos;
+    if (st.lastTs !== null && payloadTs < st.lastTs) return [];
+    st.lastTs = payloadTs;
+    const positionWithPos = position as unknown as { pos?: { x: number; y: number; z?: number } } | null;
+    if (positionWithPos && positionWithPos.pos) st.lastPos = positionWithPos.pos;
 
-    const a = payload.accel || {};
+    const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0) / cfg.gravity;
     const motion = Math.abs(g - 1);
-    const ts = payload.ts;
-    const events = [];
+    const ts = payloadTs;
+    const events: ReturnType<typeof makeEvent>[] = [];
 
     if (g <= cfg.freefallG) st.freefallAt = ts;
 
@@ -115,7 +156,7 @@ function createFallDetector(options = {}) {
   }
 
   // 태그 상태를 IDLE로 되돌린다(캐스케이드 AI가 candidate를 기각할 때 후속 confirmed 차단용).
-  function reset(tagId) {
+  function reset(tagId: string): void {
     const st = states.get(tagId);
     if (!st) return;
     st.phase = 'IDLE';
@@ -125,4 +166,4 @@ function createFallDetector(options = {}) {
   return { observe, reset };
 }
 
-module.exports = { createFallDetector, optionsFromEnv, DEFAULTS };
+export { DEFAULTS };

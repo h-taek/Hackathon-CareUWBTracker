@@ -1,21 +1,24 @@
-'use strict';
-const test = require('node:test');
-const assert = require('node:assert');
-const { createFallDetector } = require('./fall');
+import test from 'node:test';
+import * as assert from 'node:assert';
+import { createFallDetector } from '../../demo/detection/fall.ts';
 
 const G = 9.80665;
 // 축약: |a|=g배 크기의 z축 가속도 프레임 생성
-const frame = (ts, gMag, tagId = 'tag-watch') => ({ tagId, ts, accel: { x: 0, y: 0, z: gMag * G }, source: 'ni' });
+const frame = (ts: number, gMag: number, tagId = 'tag-watch') => ({ tagId, ts, accel: { x: 0, y: 0, z: gMag * G }, source: 'ni' });
 
 // 감지기에 프레임 배열을 순차 투입하고 방출된 모든 이벤트를 모은다.
-function run(det, frames, position = null) {
-  const out = [];
+function run(
+  det: { observe: (payload: { tagId: string; [key: string]: unknown }, position: { x: number; y: number } | null) => Array<{ type: string; [key: string]: unknown }> },
+  frames: ReturnType<typeof frame>[],
+  position: { x: number; y: number } | null = null,
+) {
+  const out: Array<{ type: string; [key: string]: unknown }> = [];
   for (const f of frames) out.push(...det.observe(f, position));
   return out;
 }
 
 // dt=100ms 간격으로 gMag 값들을 프레임 시퀀스로.
-function seq(startTs, dt, gs) {
+function seq(startTs: number, dt: number, gs: number[]) {
   return gs.map((g, i) => frame(startTs + i * dt, g));
 }
 
@@ -32,17 +35,17 @@ test('정상 낙상: 자유낙하->충격->5초 정지 => candidate 그리고 co
   assert.ok(types.includes('fall_candidate'), '후보 발행');
   assert.ok(types.includes('fall_confirmed'), '확진 발행');
   assert.strictEqual(types.filter((t) => t === 'fall_canceled').length, 0, '취소 없음');
-  const cand = events.find((e) => e.type === 'fall_candidate');
+  const cand = events.find((e) => e.type === 'fall_candidate')!;
   assert.strictEqual(cand.confidence, 'candidate');
   assert.strictEqual(cand.freefall, true, '직전 자유낙하 감지');
-  assert.ok(cand.peakAccel >= 4.0);
+  assert.ok((cand.peakAccel as number) >= 4.0);
 });
 
 test('자유낙하 없는 충격도 후보->확진, freefall=false', () => {
   const det = createFallDetector();
   const frames = [frame(0, 1), frame(100, 3.0), ...seq(200, 100, Array(54).fill(1))];
   const events = run(det, frames);
-  const cand = events.find((e) => e.type === 'fall_candidate');
+  const cand = events.find((e) => e.type === 'fall_candidate')!;
   assert.strictEqual(cand.freefall, false);
   assert.ok(events.some((e) => e.type === 'fall_confirmed'));
 });
@@ -63,8 +66,8 @@ test('정착 구간 내 튐은 취소하지 않는다(바운스 무시)', () => 
   const events = run(det, frames);
   assert.ok(!events.some((e) => e.type === 'fall_canceled'), '바운스로 취소 안 됨');
   assert.ok(events.some((e) => e.type === 'fall_confirmed'));
-  const conf = events.find((e) => e.type === 'fall_confirmed');
-  assert.ok(conf.peakAccel >= 6.0, 'peak은 관찰 구간 최대');
+  const conf = events.find((e) => e.type === 'fall_confirmed')!;
+  assert.ok((conf.peakAccel as number) >= 6.0, 'peak은 관찰 구간 최대');
 });
 
 test('무동작 창 미달 시 아직 확진 없음', () => {
@@ -97,7 +100,7 @@ test('정착 이후 밴드~움직임 사이 흔들림은 무동작 시계를 리
   assert.ok(!events.some((e) => e.type === 'fall_canceled'), '갭은 취소가 아니다');
   const conf = events.find((e) => e.type === 'fall_confirmed');
   assert.ok(conf, '확진은 발생한다');
-  assert.ok(conf.ts >= 8100, `확진이 갭 이후로 지연됨(ts=${conf.ts})`);
+  assert.ok((conf!.ts as number) >= 8100, `확진이 갭 이후로 지연됨(ts=${conf!.ts})`);
 });
 
 test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
@@ -114,7 +117,7 @@ test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
 
 test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', () => {
   const det = createFallDetector();
-  const pos = { pos: { x: 3, y: 4, z: 0 } };
+  const pos = { pos: { x: 3, y: 4, z: 0 } } as unknown as { x: number; y: number };
   const withPos = run(det, [frame(0, 3.0)], pos);
   assert.deepStrictEqual(withPos[0].pos, { x: 3, y: 4, z: 0 });
 

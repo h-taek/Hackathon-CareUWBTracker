@@ -1,12 +1,10 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { formatIngestLine } = require('./ingest-log');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { formatIngestLine, type IngestPayload } from '../../demo/lib/ingest-log.ts';
 
 const OPTS = { mainAnchorId: 'phoneMain', subAnchorId: 'phoneSub', gravity: 9.80665 };
 
-function payload(overrides = {}) {
+function payload(overrides: Partial<IngestPayload> = {}): IngestPayload {
   return {
     tagId: 'tag-watch',
     ts: 0, // 1970-01-01T00:00:00Z 근방(로컬 타임존 무관하게 time 필드가 렌더되는지만 확인)
