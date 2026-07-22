@@ -1,6 +1,6 @@
 // 충격 윈도우 + 코어 19특징 — ml/features.py의 Node 포팅(정본은 Python, 이건 이식본).
 // numpy/scipy 의미를 정확히 재현한다(percentile linear, scipy skew/kurtosis, find_peaks prominence).
-// 동치는 __fixtures__/golden.json으로 골든테스트(features.golden.test.js)에서 강제.
+// 동치는 test/fixtures/golden.json으로 골든테스트(test/detection/features.golden.test.ts)에서 강제.
 // 값은 g 단위(정지≈1g). 정본 상수 변경 시 Python과 함께 바꿔야 한다.
 
 export const WINDOW = 150;
