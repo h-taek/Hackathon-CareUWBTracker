@@ -32,6 +32,14 @@ Packages/
 
 # 낙상 공개 데이터셋(용량 커서 git 제외, iCloud 동기화는 유지)
 datasets/
+ml/datasets/
+
+# --- Python (AI 학습 오프라인 툴체인) ---
+.venv-ml/
+__pycache__/
+*.pyc
+# 학습 산출물(특징표·모델 덤프 등, 용량·재현가능)
+ml/_out/
 
 # Node / TypeScript
 node_modules/

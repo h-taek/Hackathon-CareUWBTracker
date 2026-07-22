@@ -15,7 +15,7 @@
   dataset,subject,placement,activity,trial,is_fall,src_hz,t_ms,ax_g,ay_g,az_g,smv_g
 
 의존성 0(순수 파이썬 stdlib). 데이터셋별 어댑터를 추가해 확장한다.
-사용: python3 tools/normalize_falls.py [--datasets SisFall,...] [--hz 50] [--out <master>] [--waist-out <waist>]
+사용: python3 ml/normalize_falls.py [--datasets SisFall,...] [--hz 50] [--out <master>] [--waist-out <waist>]
 
 --- 데이터셋별 규격(어댑터 근거) ------------------------------------------------
  SisFall      허리, 200Hz, ADXL345 ±16g/13bit → g=AD/256(중력포함). F*=낙상/D*=ADL.
@@ -31,11 +31,19 @@
  MMSys        가슴+허벅지 Shimmer 100Hz(g,중력포함). 연속녹음 → annotation_1(1=낙상,2=near-fall,0=ADL)
               동일 라벨 연속구간을 이벤트로 분할(near-fall 제외). 긴 구간은 창으로 자름.
  Sensor-Based 가슴 스트랩(Geriatric device) 100Hz. AccX/Y/Z(col0-2, g중력포함). 폴더 Falls=낙상.
-"""
-import os, sys, csv, math, glob, argparse, statistics as st
+ KFall        허리하부, 100Hz. S<subj>T<task>R<rep>.csv의 col2-4=accel(g,중력포함). 32명(SA06~SA38).
+              task 20~34=낙상(F01~F15) / 1~19·35~36=ADL(D01~D21). 낙상 onset/impact 프레임은 label
+              xlsx에 있으나 is_fall엔 task범위로 충분(프레임은 이후 충격윈도우 추출기용).
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(REPO, "datasets")
+subject 규칙: 출력 subject는 '<dataset>:<subj>'로 전역 유일화한다. SisFall과 KFall이 둘 다
+  SA06~SA38을 쓰는 등 데이터셋 간 라벨 충돌이 있어, 네임스페이스 없이는 LOSO에서 다른 사람이
+  한 피험자로 뭉쳐 누수된다. subject 미상(URFD/SensorBased)은 '<dataset>:<activity>-<trial>'로
+  trial 단위 가짜피험자화 — 원 피험자 매핑이 비공개라 각 trial을 단독 홀드아웃으로 둔다.
+"""
+import os, sys, csv, math, glob, re, argparse, statistics as st
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # ml/
+DATA = os.path.join(HERE, "datasets")               # ml/datasets/ (원시 8종 + _normalized)
 TARGET_HZ = 50
 G = 9.80665
 
@@ -79,7 +87,7 @@ def uniform_ts(xyz, src_hz):
     return [(i * dt, x, y, z) for i, (x, y, z) in enumerate(xyz)]
 
 # --- SisFall 어댑터 ----------------------------------------------------------
-# datasets/SisFall/<SUBJ>/<ACT>_<SUBJ>_<TRIAL>.txt  (200Hz). 각 줄 9값(끝 ';' 가능):
+# ml/datasets/SisFall/<SUBJ>/<ACT>_<SUBJ>_<TRIAL>.txt  (200Hz). 각 줄 9값(끝 ';' 가능):
 # ADXL345(x,y,z), ITG3200 자이로(x,y,z), MMA8451Q(x,y,z). ADXL345 ±16g/13bit → g=AD/256.
 SISFALL_HZ = 200
 def sisfall_iter(root):
@@ -110,7 +118,7 @@ def sisfall_iter(root):
             yield subj, "waist", act, trial, is_fall, SISFALL_HZ, uniform_ts(xyz, SISFALL_HZ)
 
 # --- URFD 어댑터 -------------------------------------------------------------
-# datasets/URFD/{fall,adl}-NN-acc.csv. col0=t_ms(불규칙), col1=SMV, col2-4=x,y,z(g,중력포함).
+# ml/datasets/URFD/{fall,adl}-NN-acc.csv. col0=t_ms(불규칙), col1=SMV, col2-4=x,y,z(g,중력포함).
 def urfd_iter(root):
     for p in sorted(glob.glob(os.path.join(root, "*-acc.csv"))):
         base = os.path.basename(p)[:-8]           # fall-01
@@ -132,7 +140,7 @@ def urfd_iter(root):
             yield "na", "waist", kind, num, is_fall, "irregular", samples
 
 # --- UMAFall 어댑터 ----------------------------------------------------------
-# datasets/UMAFall/UMAFall_Subject_NN_{ADL|Fall}_<movement>_<k>_<date>.csv
+# ml/datasets/UMAFall/UMAFall_Subject_NN_{ADL|Fall}_<movement>_<k>_<date>.csv
 # 헤더(%)들 뒤 데이터: TimeStamp;SampleNo;X;Y;Z;SensorType;SensorID  (';' 구분, X/Y/Z=g,중력포함)
 UMA_POS = {0: "pocket", 1: "chest", 2: "waist", 3: "wrist", 4: "ankle"}
 def umafall_iter(root):
@@ -172,7 +180,7 @@ def umafall_iter(root):
                 yield subj, UMA_POS[sid], "fall" if is_fall else "adl", trial, is_fall, "irregular", samples
 
 # --- UCI-455 (Erciyes) 어댑터 ------------------------------------------------
-# datasets/UCI-455/Tests/<subj>/Testler Export/<code-name>/Test_<n>/<serial>.txt
+# ml/datasets/UCI-455/Tests/<subj>/Testler Export/<code-name>/Test_<n>/<serial>.txt
 # 헤더 '//'행 + 'Counter\t...'행 뒤 탭구분 데이터. Acc_X/Y/Z=col9/10/11(m/s²,중력포함).
 # 활동코드 9xx=낙상/8xx=ADL. 시리얼→위치.
 UCI_POS = {"340506": "head", "340527": "chest", "340535": "waist",
@@ -218,7 +226,7 @@ def uci455_iter(root):
             yield subj, UCI_POS[serial], code, trial, is_fall, src_hz, uniform_ts(xyz, src_hz)
 
 # --- FallAllD 어댑터 ---------------------------------------------------------
-# datasets/FallAllD/S<subj>_D<dev>_A<act>_T<trial>_A.dat  (_A=accelerometer, 238Hz)
+# ml/datasets/FallAllD/S<subj>_D<dev>_A<act>_T<trial>_A.dat  (_A=accelerometer, 238Hz)
 # 각 줄 x,y,z (raw int, LSM9DS1 ±8g → g=raw×0.000244, 중력포함). 활동ID≥101=낙상.
 FALLALLD_HZ = 238
 FALLALLD_SCALE = 0.000244
@@ -256,7 +264,7 @@ def fallalld_iter(root):
             yield subj, FALLALLD_POS[d], act, trial, is_fall, FALLALLD_HZ, uniform_ts(xyz, FALLALLD_HZ)
 
 # --- MMSys (Ojetola) 어댑터 --------------------------------------------------
-# datasets/MMSys/falls/subject_N.csv  (헤더행 有, 100Hz 연속녹음)
+# ml/datasets/MMSys/falls/subject_N.csv  (헤더행 有, 100Hz 연속녹음)
 # cols: ch_accel_x,y,z(0-2), ch_gyro(3-5), th_accel_x,y,z(6-8), th_gyro(9-11), annotation_1(12), annotation_2(13)
 # annotation_1: 1=낙상, 2=near-fall, 0=ADL. 동일라벨 연속구간을 이벤트로 분할(near-fall 제외).
 # g·중력포함. 긴 구간은 창(win)으로 잘라 트라이얼 크기 균질화.
@@ -308,7 +316,7 @@ def mmsys_iter(root):
                 yield subj, place, "fall" if lab else "adl", f"seg{k:04d}", lab, MMSYS_HZ, uniform_ts(seg, MMSYS_HZ)
 
 # --- Sensor-Based-8953 어댑터 ------------------------------------------------
-# datasets/Sensor-Based-8953/Dataset V4/<Activity>/accelerometer_data_*.csv (헤더행 有)
+# ml/datasets/Sensor-Based-8953/Dataset V4/<Activity>/accelerometer_data_*.csv (헤더행 有)
 # cols: AccX,AccY,AccZ,Magnitude,GyroX,... (col0-2=accel g,중력포함). 폴더 Falls=낙상, 그 외=ADL.
 # 가슴 스트랩(Geriatric device) 100Hz. subject 미표기 → na, trial=파일 타임스탬프.
 SENSORBASED_HZ = 100
@@ -341,6 +349,40 @@ def sensorbased_iter(root):
             if xyz:
                 yield "na", "chest", act, trial, is_fall, SENSORBASED_HZ, uniform_ts(xyz, SENSORBASED_HZ)
 
+# --- KFall (Add-in) 어댑터 ---------------------------------------------------
+# ml/datasets/KFall-Addin/sensor_data_new/SA<NN>/S<NN>T<task>R<rep>.csv (헤더행 有, 100Hz)
+# cols: TimeStamp(s),FrameCounter,AccX,AccY,AccZ,Gyr...,Euler... → col2-4=accel(g,중력포함).
+# 착용 위치 허리하부. 라벨: task 20~34=낙상(F01~F15), 1~19·35~36=ADL(D01~D21).
+#   (낙상 task는 subject별 label xlsx에도 onset/impact 프레임과 함께 나열됨 — is_fall은 task범위로 충분.
+#    프레임 라벨은 이후 충격윈도우 추출기에서 사용 예정, 정규화 단계에선 미사용.)
+KFALL_HZ = 100
+def kfall_iter(root):
+    for p in sorted(glob.glob(os.path.join(root, "sensor_data_new", "SA*", "S*T*R*.csv"))):
+        subj = os.path.basename(os.path.dirname(p))          # SA06 (폴더가 진실)
+        base = os.path.basename(p)[:-4]                       # S06T20R01
+        m = re.match(r"S\d+T(\d+)R(\d+)$", base)
+        if not m:
+            continue
+        task = int(m.group(1)); rep = m.group(2)
+        is_fall = 1 if 20 <= task <= 34 else 0
+        xyz = []
+        with open(p) as fh:
+            first = True
+            for ln in fh:
+                if first:                                    # 헤더행
+                    first = False
+                    continue
+                c = ln.strip().split(",")
+                if len(c) < 5:
+                    continue
+                try:
+                    ax = float(c[2]); ay = float(c[3]); az = float(c[4])
+                except ValueError:
+                    continue
+                xyz.append((ax, ay, az))
+        if xyz:
+            yield subj, "waist", f"T{task:02d}", rep, is_fall, KFALL_HZ, uniform_ts(xyz, KFALL_HZ)
+
 ADAPTERS = {
     "SisFall":     lambda: sisfall_iter(os.path.join(DATA, "SisFall")),
     "URFD":        lambda: urfd_iter(os.path.join(DATA, "URFD")),
@@ -349,6 +391,7 @@ ADAPTERS = {
     "FallAllD":    lambda: fallalld_iter(os.path.join(DATA, "FallAllD")),
     "MMSys":       lambda: mmsys_iter(os.path.join(DATA, "MMSys")),
     "SensorBased": lambda: sensorbased_iter(os.path.join(DATA, "Sensor-Based-8953")),
+    "KFall":       lambda: kfall_iter(os.path.join(DATA, "KFall-Addin")),
 }
 ALL = ",".join(ADAPTERS)
 
@@ -378,6 +421,10 @@ def main():
                 xyz = resample_nn(samples, a.hz)
                 if not xyz:
                     continue
+                # subject 전역 유일화: 데이터셋으로 네임스페이스(SisFall SA06 ≠ KFall SA06).
+                # subject 미상('na', URFD·SensorBased)은 trial 단위 가짜피험자로 대체 —
+                # 원 피험자 매핑이 공개돼 있지 않으므로 각 trial을 단독 홀드아웃(LOSO 누수 0).
+                gsubj = f"{name}:{act}-{trial}" if subj == "na" else f"{name}:{subj}"
                 key = (name, place)
                 s = stats.setdefault(key, [0, 0, 0, []])
                 s[0] += 1; s[1] += is_fall
@@ -385,7 +432,7 @@ def main():
                 for i, (ax, ay, az) in enumerate(xyz):
                     smv = math.sqrt(ax * ax + ay * ay + az * az)
                     smvs.append(smv)
-                    row = [name, subj, place, act, trial, is_fall, src_hz,
+                    row = [name, gsubj, place, act, trial, is_fall, src_hz,
                            round(i * dt_ms, 1), round(ax, 5), round(ay, 5),
                            round(az, 5), round(smv, 5)]
                     wm.writerow(row)

@@ -114,7 +114,15 @@ function createFallDetector(options = {}) {
     return events;
   }
 
-  return { observe };
+  // 태그 상태를 IDLE로 되돌린다(캐스케이드 AI가 candidate를 기각할 때 후속 confirmed 차단용).
+  function reset(tagId) {
+    const st = states.get(tagId);
+    if (!st) return;
+    st.phase = 'IDLE';
+    st.freefallAt = null;
+  }
+
+  return { observe, reset };
 }
 
 module.exports = { createFallDetector, optionsFromEnv, DEFAULTS };

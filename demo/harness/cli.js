@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
 const { IngestGenerator } = require('./generator');
 const { ReplayPlayer, loadNdjson } = require('./replay');
 const { createHttpWriter } = require('./sender');
+const { streamTrialsFromFile } = require('./csv');
+const {
+  detectTrial, feedTyped, trialFeed, makeConfusion, sweepAll,
+} = require('./evaluate');
+const { formatEvaluation, formatSweep } = require('./report');
 
 const USAGE = `Usage:
-  node demo/ingest/cli.js generate [options]
-  node demo/ingest/cli.js replay <file.ndjson> [options]
+  node demo/harness/cli.js generate [options]
+  node demo/harness/cli.js replay <file.ndjson> [options]
+  node demo/harness/cli.js evaluate <normalized.csv> [options]
 
 Generate options:
   --hz <number>                Sample rate (default: 50)
@@ -20,8 +27,13 @@ Replay options:
   --speed <number>             Playback speed multiplier (default: 1)
   --url <http-url>             POST records instead of printing NDJSON
 
+Evaluate options (고전 감지기 베이스라인 성적 + 임계 스윕):
+  --sweep                      임계값 트레이드오프 곡선도 출력
+  --sweep-placement <name>     스윕 대상 위치(기본 waist, all=전체)
+  --json <path>                결과를 JSON으로도 저장
+
 Output:
-  One spec-03 ingest JSON object per line (NDJSON).`;
+  generate/replay: spec-03 ingest JSON NDJSON. evaluate: 혼동행렬/스윕 표.`;
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -52,19 +64,38 @@ function parseArgs(argv) {
     };
   }
 
+  if (command === 'evaluate') {
+    if (!rest[0] || rest[0].startsWith('--')) throw new Error('evaluate requires a normalized CSV file');
+    const options = parseOptions(rest.slice(1), new Set(['sweep', 'sweep-placement', 'json']), new Set(['sweep']));
+    return {
+      command,
+      file: rest[0],
+      sweep: options.sweep === true,
+      sweepPlacement: options['sweep-placement'] ?? 'waist',
+      json: options.json,
+    };
+  }
+
   throw new Error(`unknown command: ${command}`);
 }
 
-function parseOptions(args, allowed) {
+function parseOptions(args, allowed, booleans = new Set()) {
   const options = {};
-  for (let index = 0; index < args.length; index += 2) {
+  let index = 0;
+  while (index < args.length) {
     const flag = args[index];
-    const value = args[index + 1];
     if (!flag?.startsWith('--')) throw new Error(`unexpected argument: ${flag}`);
     const name = flag.slice(2);
     if (!allowed.has(name)) throw new Error(`unknown option: ${flag}`);
+    if (booleans.has(name)) {
+      options[name] = true;
+      index += 1;
+      continue;
+    }
+    const value = args[index + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
     options[name] = value;
+    index += 2;
   }
   return options;
 }
@@ -103,6 +134,65 @@ function writeNdjson(record) {
   process.stdout.write(`${JSON.stringify(record)}\n`);
 }
 
+// 정규화 CSV를 한 번 스트리밍하며 (1) 전 위치 baseline 혼동행렬을 쌓고,
+// (2) --sweep 대상 위치 trial을 타입배열로 압축 캐시(스윕 다회 패스용). 그 뒤 리포트를 낸다.
+async function runEvaluate(config, out = process.stdout) {
+  const overall = { candidate: makeConfusion(), confirmed: makeConfusion() };
+  const byGroup = new Map();
+  const cache = []; // 스윕용 압축 trial
+  const wantAll = config.sweepPlacement === 'all';
+
+  const onTrial = (t) => {
+    const { candidate, confirmed } = detectTrial(trialFeed(t));
+    overall.candidate.add(t.isFall, candidate);
+    overall.confirmed.add(t.isFall, confirmed);
+    const key = `${t.dataset}|${t.placement}`;
+    let g = byGroup.get(key);
+    if (!g) {
+      g = { dataset: t.dataset, placement: t.placement, candidate: makeConfusion(), confirmed: makeConfusion() };
+      byGroup.set(key, g);
+    }
+    g.candidate.add(t.isFall, candidate);
+    g.confirmed.add(t.isFall, confirmed);
+
+    if (config.sweep && (wantAll || t.placement === config.sweepPlacement)) {
+      const n = t.samples.length;
+      const ts = new Float64Array(n);
+      const ax = new Float32Array(n);
+      const ay = new Float32Array(n);
+      const az = new Float32Array(n);
+      for (let i = 0; i < n; i += 1) {
+        const s = t.samples[i]; ts[i] = s.tMs; ax[i] = s.ax; ay[i] = s.ay; az[i] = s.az;
+      }
+      cache.push({ dataset: t.dataset, placement: t.placement, isFall: t.isFall, feed: feedTyped(ts, ax, ay, az) });
+    }
+  };
+
+  const stats = await streamTrialsFromFile(config.file, onTrial);
+  const result = { overall, byGroup };
+  out.write(`${formatEvaluation(result, { title: `평가 ${config.file} (trial ${stats.trials}, row ${stats.rows})` })}\n`);
+
+  let sweep = null;
+  if (config.sweep) {
+    out.write(`\n스윕 대상: placement=${config.sweepPlacement} (${cache.length} trial)\n`);
+    sweep = sweepAll(cache);
+    out.write(`${formatSweep(sweep)}\n`);
+  }
+
+  if (config.json) {
+    const toObj = (r) => ({
+      overall: { candidate: r.overall.candidate.metrics(), confirmed: r.overall.confirmed.metrics() },
+      byGroup: [...r.byGroup.values()].map((g) => ({
+        dataset: g.dataset, placement: g.placement,
+        candidate: g.candidate.metrics(), confirmed: g.confirmed.metrics(),
+      })),
+    });
+    fs.writeFileSync(config.json, JSON.stringify({ file: config.file, stats, evaluation: toObj(result), sweep }, null, 2));
+    out.write(`\nJSON 저장: ${config.json}\n`);
+  }
+  return result;
+}
+
 function positiveNumber(value, name) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new Error(`--${name} must be a positive number`);
@@ -121,15 +211,17 @@ function positiveInteger(value, name) {
   return number;
 }
 
-function main(argv) {
+async function main(argv) {
   try {
     const config = parseArgs(argv);
     if (config.command === 'help') {
       process.stdout.write(`${USAGE}\n`);
     } else if (config.command === 'generate') {
       runGenerate(config, config.url ? createHttpWriter(config.url) : writeNdjson);
-    } else {
+    } else if (config.command === 'replay') {
       runReplay(config, config.url ? createHttpWriter(config.url) : writeNdjson);
+    } else if (config.command === 'evaluate') {
+      await runEvaluate(config);
     }
   } catch (error) {
     process.stderr.write(`Error: ${error.message}\n\n${USAGE}\n`);
@@ -139,4 +231,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { parseArgs, runGenerate, runReplay };
+module.exports = { parseArgs, runGenerate, runReplay, runEvaluate };

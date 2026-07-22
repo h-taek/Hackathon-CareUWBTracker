@@ -10,6 +10,7 @@ const { createPositioningHandler } = require('./positioning/handler.js');
 const { Simulator } = require('./sim.js');
 const { formatIngestLine, DEFAULT_GRAVITY } = require('./lib/ingest-log.js');
 const { createFallDetector, optionsFromEnv } = require('./detection/fall.js');
+const { createCascadeDetector } = require('./detection/cascade.js');
 const { zoneAt } = require('./lib/zone.js');
 
 type JsonObject = Record<string, unknown>;
@@ -28,6 +29,7 @@ interface FallEvent extends JsonObject {
   tagId: string;
   peakAccel: number;
   freefall: boolean;
+  aiScore?: number;
   pos?: Position;
   zone?: string | null;
 }
@@ -42,7 +44,22 @@ const map: JsonObject = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'),
 );
 const sim = new Simulator(map);
-const fallDetector = createFallDetector(optionsFromEnv());
+// 기본은 고전 감지 후 LightGBM 정밀 판정. 비활성화 또는 모델 로드 실패 시 고전 감지기로 폴백한다.
+const fallDetector = (() => {
+  if (process.env.FALL_AI === '0') {
+    console.log('[fall] 고전 단독 모드(FALL_AI=0)');
+    return createFallDetector(optionsFromEnv());
+  }
+  try {
+    const detector = createCascadeDetector(optionsFromEnv());
+    console.log('[fall] 2단계 캐스케이드(고전+LightGBM) 모드');
+    return detector;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[fall] AI 모델 로드 실패 → 고전 단독 폴백: ${message}`);
+    return createFallDetector(optionsFromEnv());
+  }
+})();
 const clients = new Set<ServerResponse>();
 
 function broadcast(event: 'position' | 'alert', data: unknown): void {
@@ -75,7 +92,8 @@ function logAndPosition(payload: IngestPayload): Position | null {
   }
   for (const event of fallEvents) {
     if (event.pos) event.zone = zoneAt(map, event.pos.x, event.pos.y);
-    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall} zone=${event.zone ?? '-'}`);
+    const ai = event.aiScore != null ? ` ai=${event.aiScore}` : '';
+    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${event.zone ?? '-'}`);
     broadcast('alert', event);
   }
   return position;
