@@ -1,6 +1,13 @@
 'use strict';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { AnchorConfig } from './config/anchor.ts';
+
+const {
+  ANCHOR_CONFIG_USAGE,
+  parseAnchorConfig,
+  wantsAnchorConfigHelp,
+} = require('./config/anchor.ts');
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -37,6 +44,22 @@ interface SimTag {
   name: string;
 }
 
+const args = process.argv.slice(2);
+if (wantsAnchorConfigHelp(args)) {
+  console.log(ANCHOR_CONFIG_USAGE);
+  process.exit(0);
+}
+
+let anchorConfig: AnchorConfig;
+try {
+  anchorConfig = parseAnchorConfig(args);
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`앵커 설정 오류: ${message}\n`);
+  console.error(ANCHOR_CONFIG_USAGE);
+  process.exit(1);
+}
+
 const port = Number(process.env.PORT ?? 8080);
 const map: JsonObject = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'),
@@ -50,20 +73,15 @@ function broadcast(event: 'position' | 'alert', data: unknown): void {
   for (const response of clients) response.write(frame);
 }
 
-const mainAnchorId = process.env.MAIN_ANCHOR_ID ?? 'phoneMain';
-const subAnchorId = process.env.SUB_ANCHOR_ID ?? 'phoneSub';
 const handlePositioning = createPositioningHandler({
-  mainAnchorId,
-  subAnchorId,
-  anchorDistance: Number(process.env.ANCHOR_DISTANCE ?? 4),
-  halfPlane: process.env.HALF_PLANE ?? 'positive',
+  ...anchorConfig,
 }, (position: Position) => broadcast('position', position));
 
 function logAndPosition(payload: IngestPayload): Position | null {
   const position: Position | null = handlePositioning(payload);
   console.log(formatIngestLine(payload, position, {
-    mainAnchorId,
-    subAnchorId,
+    mainAnchorId: anchorConfig.mainAnchorId,
+    subAnchorId: anchorConfig.subAnchorId,
     gravity: DEFAULT_GRAVITY,
   }));
 
@@ -149,4 +167,5 @@ server.listen(port, () => {
   console.log(`  대시보드   http://localhost:${port}/`);
   console.log(`  SSE 스트림 http://localhost:${port}/stream`);
   console.log(`  ingest     POST http://localhost:${port}/ingest`);
+  console.log(`  앵커       ${anchorConfig.mainAnchorId} (0,0) / ${anchorConfig.subAnchorId} (${anchorConfig.anchorDistance},0), ${anchorConfig.halfPlane}`);
 });

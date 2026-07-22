@@ -6,7 +6,7 @@
   },
   "scripts": {
     "start": "node demo/server.ts",
-    "test": "node --test \"demo/**/*.test.js\"",
+    "test": "node --test \"demo/**/*.test.js\" \"demo/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

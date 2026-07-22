@@ -10,10 +10,14 @@ Node 내장 HTTP와 TypeScript로 구현한 데모 서버다. 워치·폰이 보
 
 ```bash
 npm install
-npm start                    # http://localhost:8080 (대시보드 / SSE / ingest)
+npm start -- \
+  --main-anchor-id phoneMain \
+  --sub-anchor-id phoneSub \
+  --anchor-distance 4 \
+  --half-plane positive
 ```
 
-기존 명령인 `node demo/server.js`도 계속 지원한다.
+기존 진입점도 같은 인자를 붙여 `node demo/server.js --main-anchor-id phoneMain --sub-anchor-id phoneSub --anchor-distance 4 --half-plane positive`로 실행할 수 있다. 전체 옵션은 `npm start -- --help`로 확인한다.
 
 ## 테스트
 
@@ -26,6 +30,8 @@ npm run typecheck
 
 ```
 demo/
+  config/
+    anchor.ts          필수 앵커 실행 인자 파싱 · 시작 전 검증 · 도움말
   server.ts            TypeScript HTTP 서버 · 라우팅 · SSE 허브 · sim 배선(조립부)
   server.js            기존 Node 실행 호환 진입점
   sim.js               데모용 시뮬레이터(가짜 보행/낙상 주입) — 기기 없이 대시보드 확인
