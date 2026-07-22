@@ -10,8 +10,14 @@ Node 내장 HTTP와 TypeScript로 구현한 데모 서버다. 워치·폰이 보
 
 ```bash
 npm install
-npm start                    # http://localhost:8080 (대시보드 / SSE / ingest)
+npm start -- \
+  --main-anchor-id phoneMain \
+  --sub-anchor-id phoneSub \
+  --anchor-distance 4 \
+  --half-plane positive
 ```
+
+전체 옵션은 `npm start -- --help`로 확인한다.
 
 ## 테스트
 
@@ -24,6 +30,8 @@ npm run typecheck
 
 ```
 demo/
+  config/
+    anchor.ts          필수 앵커 실행 인자 파싱 · 시작 전 검증 · 도움말
   server.ts            TypeScript HTTP 서버 · 라우팅 · SSE 허브 · sim 배선(조립부)
   sim.js               데모용 시뮬레이터(가짜 보행/낙상 주입) — 기기 없이 대시보드 확인
   map.json             좌표계 범위·구역 메타
@@ -37,6 +45,7 @@ demo/
     handler.js         ingest → 위치 핸들러 팩토리
     from-ingest.js     main/sub 거리 추출 → 삼각측량 → 위치 레코드
     triangulate.js     2앵커 기하(순수 함수)
+    smoother.ts        태그별 최근 5개 좌표 이동평균(방출 전 적용)
   harness/             개발용 도구(서버 런타임과 무관, 기기 없이 ingest 생성/재생)
     cli.js             generate/replay CLI
     generator.js       합성 ingest 프레임 + 낙상 시나리오
