@@ -13,8 +13,6 @@ npm install
 npm start                    # http://localhost:8080 (대시보드 / SSE / ingest)
 ```
 
-기존 명령인 `node demo/server.js`도 계속 지원한다.
-
 ## 테스트
 
 ```bash
@@ -27,7 +25,6 @@ npm run typecheck
 ```
 demo/
   server.ts            TypeScript HTTP 서버 · 라우팅 · SSE 허브 · sim 배선(조립부)
-  server.js            기존 Node 실행 호환 진입점
   sim.js               데모용 시뮬레이터(가짜 보행/낙상 주입) — 기기 없이 대시보드 확인
   map.json             좌표계 범위·구역 메타
   lib/

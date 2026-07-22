@@ -13,7 +13,7 @@
 - **워치**: Apple Watch Series 6 이상(U1/U2), 아이폰과 페어링됨(토큰 교환에 WatchConnectivity 사용).
 - **앵커 폰**: iPhone 11 이상(U1/U2) 1~2대. 메인폰은 워치와 페어링된 기기. 서브폰(2대째)은 페어링 불필요(폰↔폰은 네트워크 채널).
 - Mac + Xcode. 무료 Apple ID면 됨(7일마다 재서명). **실기기 전용**(시뮬레이터 불가).
-- 서버: `node demo/server.js` 실행 후 대시보드 `http://localhost:8080`.
+- 서버: `npm start` 실행 후 대시보드 `http://localhost:8080`.
 
 ---
 
