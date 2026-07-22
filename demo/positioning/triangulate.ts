@@ -1,8 +1,20 @@
-'use strict';
+export interface Position {
+  x: number;
+  y: number;
+}
+
+type HalfPlane = 'positive' | 'negative';
+
+interface TriangulateTwoAnchorsOptions {
+  rA: number;
+  rB: number;
+  d: number;
+  halfPlane?: HalfPlane;
+}
 
 const HALF_PLANES = new Set(['positive', 'negative']);
 
-function triangulateTwoAnchors({ rA, rB, d, halfPlane = 'positive' }) {
+export function triangulateTwoAnchors({ rA, rB, d, halfPlane = 'positive' }: TriangulateTwoAnchorsOptions): Position {
   requireNonNegativeFinite(rA, 'rA');
   requireNonNegativeFinite(rB, 'rB');
   if (!Number.isFinite(d) || d <= 0) throw new RangeError('d must be a positive finite number');
@@ -17,10 +29,8 @@ function triangulateTwoAnchors({ rA, rB, d, halfPlane = 'positive' }) {
   return { x, y };
 }
 
-function requireNonNegativeFinite(value, name) {
+function requireNonNegativeFinite(value: number, name: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new RangeError(`${name} must be a non-negative finite number`);
   }
 }
-
-module.exports = { triangulateTwoAnchors };

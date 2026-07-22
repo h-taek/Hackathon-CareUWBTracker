@@ -1,55 +1,29 @@
-'use strict';
-
+import * as http from 'node:http';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { AnchorConfig } from './config/anchor.ts';
-import type { PositionRecord } from './positioning/smoother.ts';
 
-const {
+import {
   ANCHOR_CONFIG_USAGE,
   parseAnchorConfig,
   wantsAnchorConfigHelp,
-} = require('./config/anchor.ts');
-const {
+  type AnchorConfig,
+} from './config/anchor.ts';
+import {
   createPositionSmoother,
   DEFAULT_POSITION_WINDOW,
-} = require('./positioning/smoother.ts');
+  type PositionRecord,
+} from './positioning/smoother.ts';
+import { handleIngest } from './ingest/endpoint.ts';
+import { createPositioningHandler } from './positioning/handler.ts';
+import { Simulator, type SimTag, type SimMap } from './sim.ts';
+import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ingest-log.ts';
+import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
+import { createCascadeDetector } from './detection/cascade.ts';
+import { zoneAt } from './lib/zone.ts';
 
-const http = require('node:http');
-const fs = require('node:fs');
-const path = require('node:path');
-const { handleIngest } = require('./ingest/endpoint.js');
-const { createPositioningHandler } = require('./positioning/handler.js');
-const { Simulator } = require('./sim.js');
-const { formatIngestLine, DEFAULT_GRAVITY } = require('./lib/ingest-log.js');
-const { createFallDetector, optionsFromEnv } = require('./detection/fall.js');
-const { createCascadeDetector } = require('./detection/cascade.js');
-const { zoneAt } = require('./lib/zone.js');
-
-type JsonObject = Record<string, unknown>;
-
-interface Position extends JsonObject {
-  x: number;
-  y: number;
-}
-
-interface IngestPayload extends JsonObject {
-  tagId: string;
-}
-
-interface FallEvent extends JsonObject {
-  type: string;
-  tagId: string;
-  peakAccel: number;
-  freefall: boolean;
-  aiScore?: number;
-  pos?: Position;
-  zone?: string | null;
-}
-
-interface SimTag {
-  id: string;
-  name: string;
-}
+// 측위 소스: sim(시뮬 자동 생성) 또는 live(실측 ingest만). 기본 sim.
+type SourceMode = 'sim' | 'live';
 
 const args = process.argv.slice(2);
 if (wantsAnchorConfigHelp(args)) {
@@ -67,9 +41,14 @@ try {
   process.exit(1);
 }
 
+const sourceMode: SourceMode =
+  args.includes('--source') && args[args.indexOf('--source') + 1] === 'live'
+    ? 'live'
+    : 'sim';
+
 const port = Number(process.env.PORT ?? 8080);
-const map: JsonObject = JSON.parse(
-  fs.readFileSync(path.join(__dirname, 'map.json'), 'utf8'),
+const map: SimMap = JSON.parse(
+  fs.readFileSync(path.join(import.meta.dirname, 'map.json'), 'utf8'),
 );
 const sim = new Simulator(map);
 // 기본은 고전 감지 후 LightGBM 정밀 판정. 비활성화 또는 모델 로드 실패 시 고전 감지기로 폴백한다.
@@ -101,7 +80,7 @@ const handlePositioning = createPositioningHandler({
 });
 
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
-  const rawPosition: PositionRecord | null = handlePositioning(payload);
+  const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
   const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
   if (position) broadcast('position', position);
   console.log(formatIngestLine(payload, position, {
@@ -125,9 +104,12 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
   return position;
 }
 
-sim.on('position', (position: Position) => broadcast('position', position));
-sim.on('alert', (alert: FallEvent) => broadcast('alert', alert));
-sim.start(5);
+// sim 모드에서만 시뮬 스트림을 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
+if (sourceMode === 'sim') {
+  sim.on('position', (position: unknown) => broadcast('position', position));
+  sim.on('alert', (alert: unknown) => broadcast('alert', alert));
+  sim.start(5);
+}
 
 function sendJson(response: ServerResponse, value: unknown, status = 200): void {
   response.writeHead(status, {
@@ -154,7 +136,9 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   const { pathname } = url;
 
   if (pathname === '/ingest') {
-    handleIngest(request, response, { onIngest: logAndPosition });
+    handleIngest(request, response, {
+      onIngest: (payload) => logAndPosition(payload as unknown as IngestPayload),
+    });
     return;
   }
   if (pathname === '/stream') {
@@ -179,7 +163,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   if (pathname === '/' || pathname === '/index.html') {
     return sendFile(
       response,
-      path.join(__dirname, 'public', 'index.html'),
+      path.join(import.meta.dirname, 'public', 'index.html'),
       'text/html; charset=utf-8',
     );
   }
@@ -195,4 +179,5 @@ server.listen(port, () => {
   console.log(`  ingest     POST http://localhost:${port}/ingest`);
   console.log(`  앵커       ${anchorConfig.mainAnchorId} (0,0) / ${anchorConfig.subAnchorId} (${anchorConfig.anchorDistance},0), ${anchorConfig.halfPlane}`);
   console.log(`  스무딩     태그별 최근 ${DEFAULT_POSITION_WINDOW}개 좌표 이동평균`);
+  console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
 });

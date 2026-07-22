@@ -1,12 +1,10 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const {
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import {
   ANCHOR_CONFIG_USAGE,
   parseAnchorConfig,
   wantsAnchorConfigHelp,
-} = require('./anchor.ts');
+} from '../../demo/config/anchor.ts';
 
 const VALID_ARGS = [
   '--main-anchor-id', 'phoneMain',

@@ -1,18 +1,16 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { IngestGenerator } = require('../harness/generator');
-const { createPositioningHandler } = require('./handler');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { IngestGenerator } from '../../harness/generator.ts';
+import { createPositioningHandler } from '../../demo/positioning/handler.ts';
 
 const OPTIONS = Object.freeze({
   mainAnchorId: 'phoneMain',
   subAnchorId: 'phoneSub',
   anchorDistance: 4,
-  halfPlane: 'positive',
+  halfPlane: 'positive' as const,
 });
 
-function assertClose(actual, expected, tolerance = 1e-3) {
+function assertClose(actual: number, expected: number, tolerance = 1e-3): void {
   assert.ok(
     Math.abs(actual - expected) <= tolerance,
     `expected ${actual} to be within ${tolerance} of ${expected}`,
@@ -28,10 +26,10 @@ test('B0 생성 거리에서 가상 태그의 원래 위치를 복원한다', ()
     random: () => 0.5,
     now: () => 123,
   });
-  const positions = [];
+  const positions: unknown[] = [];
   const handlePositioning = createPositioningHandler(OPTIONS, (position) => positions.push(position));
 
-  const result = handlePositioning(generator.next(0.02));
+  const result = handlePositioning(generator.next(0.02))!;
 
   assertClose(result.pos.x, 1.008);
   assertClose(result.pos.y, 1.004);
@@ -39,7 +37,7 @@ test('B0 생성 거리에서 가상 태그의 원래 위치를 복원한다', ()
 });
 
 test('한 앵커 ingest는 position을 방출하지 않는다', () => {
-  const positions = [];
+  const positions: unknown[] = [];
   const handlePositioning = createPositioningHandler(OPTIONS, (position) => positions.push(position));
   const result = handlePositioning({
     tagId: 'tag-watch',
@@ -54,5 +52,5 @@ test('한 앵커 ingest는 position을 방출하지 않는다', () => {
 });
 
 test('onPosition은 함수여야 한다', () => {
-  assert.throws(() => createPositioningHandler(OPTIONS, null), /onPosition must be a function/);
+  assert.throws(() => createPositioningHandler(OPTIONS, null as never), /onPosition must be a function/);
 });

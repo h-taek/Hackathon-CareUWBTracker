@@ -1,12 +1,13 @@
 {
   "name": "care-uwb-tracker",
   "private": true,
+  "type": "module",
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
     "start": "node demo/server.ts",
-    "test": "node --test \"demo/**/*.test.js\" \"demo/**/*.test.ts\"",
+    "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

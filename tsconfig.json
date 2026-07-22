@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
-    "allowJs": true,
-    "checkJs": false,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
     "noEmit": true,
     "strict": true,
     "target": "ES2022"
   },
-  "include": ["demo/**/*.ts"]
+  "include": ["demo/**/*.ts", "harness/**/*.ts", "test/**/*.ts"]
 }

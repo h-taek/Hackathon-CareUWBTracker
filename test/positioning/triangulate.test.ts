@@ -1,10 +1,8 @@
-'use strict';
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { triangulateTwoAnchors } from '../../demo/positioning/triangulate.ts';
 
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { triangulateTwoAnchors } = require('./triangulate');
-
-function assertClose(actual, expected, tolerance = 1e-9) {
+function assertClose(actual: number, expected: number, tolerance = 1e-9): void {
   assert.ok(
     Math.abs(actual - expected) <= tolerance,
     `expected ${actual} to be within ${tolerance} of ${expected}`,
@@ -61,7 +59,7 @@ test('잘못된 거리·앵커 간격·반평면을 거부한다', () => {
     /d must be a positive finite number/,
   );
   assert.throws(
-    () => triangulateTwoAnchors({ rA: 1, rB: 1, d: 4, halfPlane: 'left' }),
+    () => triangulateTwoAnchors({ rA: 1, rB: 1, d: 4, halfPlane: 'left' as never }),
     /halfPlane must be positive or negative/,
   );
 });

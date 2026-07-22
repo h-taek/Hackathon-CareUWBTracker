@@ -21,6 +21,7 @@ export interface IngestPayload {
   source: string;
   ranges?: IngestRange[];
   accel?: IngestAccel;
+  [key: string]: unknown;
 }
 
 export interface IngestPosition {

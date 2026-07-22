@@ -1,8 +1,38 @@
-'use strict';
+import { triangulateTwoAnchors } from './triangulate.ts';
 
-const { triangulateTwoAnchors } = require('./triangulate');
+interface IngestRange {
+  anchorId: string;
+  distance: number;
+}
 
-function positionFromIngest(payload, options) {
+interface IngestPayload {
+  tagId: string;
+  ts: number;
+  ranges?: IngestRange[];
+  accel?: { x: number; y: number; z: number };
+  source?: string;
+}
+
+export interface PositionFromIngestOptions {
+  mainAnchorId: string;
+  subAnchorId: string;
+  anchorDistance: number;
+  halfPlane?: 'positive' | 'negative';
+  xyError?: number;
+  zError?: number;
+}
+
+export interface PositionResult {
+  tagId: string;
+  ts: number;
+  pos: { x: number; y: number; z: number };
+  err: { xy: number; z: number };
+  accel?: { x: number; y: number; z: number };
+  source: 'sim' | 'uwb+imu';
+  [key: string]: unknown;
+}
+
+export function positionFromIngest(payload: IngestPayload, options: PositionFromIngestOptions): PositionResult | null {
   validateOptions(options);
 
   // accel-only ingest면 ranges가 없거나 비어 있다 → 좌표 계산 보류(낙상은 가속도로 별도 판정).
@@ -29,7 +59,7 @@ function positionFromIngest(payload, options) {
   };
 }
 
-function validateOptions(options) {
+function validateOptions(options: PositionFromIngestOptions): void {
   if (!options || typeof options !== 'object') throw new TypeError('positioning options are required');
   requireNonEmptyString(options.mainAnchorId, 'mainAnchorId');
   requireNonEmptyString(options.subAnchorId, 'subAnchorId');
@@ -38,10 +68,8 @@ function validateOptions(options) {
   }
 }
 
-function requireNonEmptyString(value, name) {
+function requireNonEmptyString(value: unknown, name: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     throw new TypeError(`${name} must be a non-empty string`);
   }
 }
-
-module.exports = { positionFromIngest };

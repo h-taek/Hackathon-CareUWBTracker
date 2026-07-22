@@ -1,8 +1,6 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { createPositionSmoother } = require('./smoother.ts');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { createPositionSmoother } from '../../demo/positioning/smoother.ts';
 
 function position(tagId: string, x: number, y = 0, z = 0) {
   return {

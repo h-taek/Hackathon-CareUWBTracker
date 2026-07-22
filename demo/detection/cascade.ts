@@ -71,7 +71,7 @@ export function createCascadeDetector(options: CascadeOptions = {}) {
 
   function observe(
     payload: { tagId: string; [key: string]: unknown },
-    position: { x: number; y: number } | null,
+    position: { pos?: { x: number; y: number; z?: number } } | null,
   ): FallEvent[] {
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const b = push(payload.tagId, (a.x || 0) / gravity, (a.y || 0) / gravity, (a.z || 0) / gravity);

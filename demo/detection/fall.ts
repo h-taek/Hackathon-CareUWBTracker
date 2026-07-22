@@ -21,7 +21,7 @@ export interface FallEvent {
   peakAccel: number;
   freefall: boolean;
   aiScore?: number;
-  pos?: { x: number; y: number };
+  pos?: { x: number; y: number; z?: number } | null;
   zone?: string | null;
 }
 
@@ -101,15 +101,14 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
 
   function observe(
     payload: { tagId: string; [key: string]: unknown },
-    position: { x: number; y: number } | null,
+    position: { pos?: { x: number; y: number; z?: number } } | null,
   ) {
     const st = stateFor(payload.tagId);
     const payloadTs = payload.ts as number;
     // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 elapsed 계산 왜곡을 막는다.
     if (st.lastTs !== null && payloadTs < st.lastTs) return [];
     st.lastTs = payloadTs;
-    const positionWithPos = position as unknown as { pos?: { x: number; y: number; z?: number } } | null;
-    if (positionWithPos && positionWithPos.pos) st.lastPos = positionWithPos.pos;
+    if (position && position.pos) st.lastPos = position.pos;
 
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0) / cfg.gravity;

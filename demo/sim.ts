@@ -1,20 +1,57 @@
-'use strict';
-
 // 시뮬 측위 스트림 생성기.
 // spec 03 스키마(측위 좌표 1절 / 낙상 경보 2절)를 그대로 방출한다.
 // 측위 소스가 sim일 뿐, 서버/대시보드 입장에서는 실측 UWB와 구분되지 않는다(source 필드로만 구분).
 
-const { EventEmitter } = require('events');
-const { zoneAt } = require('./lib/zone');
+import { EventEmitter } from 'node:events';
+import { zoneAt, type ZoneMap } from './lib/zone.ts';
 
 const G = 9.81; // 1g, m/s^2
 
-function rand(min, max) {
+function rand(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-class Simulator extends EventEmitter {
-  constructor(map) {
+export interface SimTag {
+  id: string;
+  name: string;
+}
+
+interface SimTagState extends SimTag {
+  x: number;
+  y: number;
+  tx: number;
+  ty: number;
+  speed: number;
+  fallen: boolean;
+  fallTimer: number;
+}
+
+export interface SimMap extends ZoneMap {
+  bounds: { x: [number, number]; y: [number, number] };
+}
+
+export interface SimAlert {
+  eventId: string;
+  tagId: string;
+  name: string;
+  type: string;
+  ts: number;
+  trigger: string;
+  freefall: boolean;
+  peakAccel: number;
+  pos: { x: number; y: number; z: number };
+  confidence: string;
+  zone: string;
+}
+
+export class Simulator extends EventEmitter {
+  map: SimMap;
+  bounds: { x: [number, number]; y: [number, number] };
+  timer: ReturnType<typeof setInterval> | null;
+  seq: number;
+  tags: SimTagState[];
+
+  constructor(map: SimMap) {
     super();
     this.map = map;
     this.bounds = map.bounds;
@@ -42,17 +79,17 @@ class Simulator extends EventEmitter {
   }
 
   // (x,y) 미터 좌표가 속한 구역 라벨.
-  zoneAt(x, y) {
+  zoneAt(x: number, y: number): string {
     return zoneAt(this.map, x, y);
   }
 
-  step(dt) {
+  step(dt: number): void {
     const [x0, x1] = this.bounds.x;
     const [y0, y1] = this.bounds.y;
     const now = Date.now();
 
     for (const tag of this.tags) {
-      let accel = { x: 0, y: 0, z: G }; // 정지·보행 시 대략 중력 1g + 소량 노이즈
+      const accel = { x: 0, y: 0, z: G }; // 정지·보행 시 대략 중력 1g + 소량 노이즈
 
       if (tag.fallen) {
         // 낙상 후에는 그 자리에서 정지(움직임 없음).
@@ -96,12 +133,12 @@ class Simulator extends EventEmitter {
   }
 
   // 낙상 주입 -> spec 03 2절 경보 스키마 발행.
-  injectFall(tagId) {
-    const tag = this.tags.find((t) => t.id === tagId) || this.tags[0];
+  injectFall(tagId: string): SimAlert {
+    const tag = this.tags.find((t) => t.id === tagId) ?? this.tags[0];
     tag.fallen = true;
     tag.fallTimer = 8; // 8초간 정지(데모 후 자동 회복)
 
-    const alert = {
+    const alert: SimAlert = {
       eventId: `evt-${++this.seq}-${Date.now()}`,
       tagId: tag.id,
       name: tag.name,
@@ -118,20 +155,18 @@ class Simulator extends EventEmitter {
     return alert;
   }
 
-  start(hz = 5) {
+  start(hz = 5): void {
     if (this.timer) return;
     const dt = 1 / hz;
     this.timer = setInterval(() => this.step(dt), 1000 / hz);
   }
 
-  stop() {
+  stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
 }
 
-function round(n) {
+function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
-
-module.exports = { Simulator };
