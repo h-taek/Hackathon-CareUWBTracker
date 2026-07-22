@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-'use strict';
 
-const fs = require('fs');
-const { IngestGenerator } = require('./generator');
-const { ReplayPlayer, loadNdjson } = require('./replay');
-const { createHttpWriter } = require('./sender');
-const { streamTrialsFromFile } = require('./csv');
-const {
-  detectTrial, feedTyped, trialFeed, makeConfusion, sweepAll,
-} = require('./evaluate');
-const { formatEvaluation, formatSweep } = require('./report');
+import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { IngestGenerator } from './generator.ts';
+import { ReplayPlayer, loadNdjson, type ReplayRecord } from './replay.ts';
+import { createHttpWriter, type HttpWriter } from './sender.ts';
+import { streamTrialsFromFile } from './csv.ts';
+import {
+  detectTrial, feedTyped, trialFeed, makeConfusion, sweepAll, type TrialLike, type SweepResult,
+} from './evaluate.ts';
+import { formatEvaluation, formatSweep } from './report.ts';
 
 const USAGE = `Usage:
   node demo/harness/cli.js generate [options]
@@ -35,7 +35,39 @@ Evaluate options (고전 감지기 베이스라인 성적 + 임계 스윕):
 Output:
   generate/replay: spec-03 ingest JSON NDJSON. evaluate: 혼동행렬/스윕 표.`;
 
-function parseArgs(argv) {
+export interface HelpConfig {
+  command: 'help';
+}
+
+export interface GenerateConfig {
+  command: 'generate';
+  hz: number;
+  anchorDistance: number;
+  count: number;
+  fallAfter: number | null;
+  url?: string;
+}
+
+export interface ReplayConfig {
+  command: 'replay';
+  file: string;
+  speed: number;
+  url?: string;
+}
+
+export interface EvaluateConfig {
+  command: 'evaluate';
+  file: string;
+  sweep: boolean;
+  sweepPlacement: string;
+  json?: string;
+}
+
+export type Config = HelpConfig | GenerateConfig | ReplayConfig | EvaluateConfig;
+
+type OptionMap = Record<string, string | boolean | undefined>;
+
+export function parseArgs(argv: string[]): Config {
   const [command, ...rest] = argv;
   if (!command || command === '--help' || command === '-h') return { command: 'help' };
 
@@ -49,7 +81,7 @@ function parseArgs(argv) {
       fallAfter: options['fall-after'] === undefined
         ? null
         : nonNegativeNumber(options['fall-after'], 'fall-after'),
-      url: options.url,
+      url: options.url as string | undefined,
     };
   }
 
@@ -60,7 +92,7 @@ function parseArgs(argv) {
       command,
       file: rest[0],
       speed: positiveNumber(options.speed ?? 1, 'speed'),
-      url: options.url,
+      url: options.url as string | undefined,
     };
   }
 
@@ -71,16 +103,16 @@ function parseArgs(argv) {
       command,
       file: rest[0],
       sweep: options.sweep === true,
-      sweepPlacement: options['sweep-placement'] ?? 'waist',
-      json: options.json,
+      sweepPlacement: (options['sweep-placement'] as string | undefined) ?? 'waist',
+      json: options.json as string | undefined,
     };
   }
 
   throw new Error(`unknown command: ${command}`);
 }
 
-function parseOptions(args, allowed, booleans = new Set()) {
-  const options = {};
+function parseOptions(args: string[], allowed: Set<string>, booleans: Set<string> = new Set()): OptionMap {
+  const options: OptionMap = {};
   let index = 0;
   while (index < args.length) {
     const flag = args[index];
@@ -100,7 +132,9 @@ function parseOptions(args, allowed, booleans = new Set()) {
   return options;
 }
 
-function runGenerate(config, write = writeNdjson) {
+export type WriteFn = (record: ReplayRecord) => unknown;
+
+export function runGenerate(config: GenerateConfig, write: WriteFn = writeNdjson): () => void {
   const generator = new IngestGenerator({
     anchorDistance: config.anchorDistance,
     sampleHz: config.hz,
@@ -109,9 +143,9 @@ function runGenerate(config, write = writeNdjson) {
     ? null
     : Math.round(config.fallAfter * config.hz);
   let emitted = 0;
-  let timer = null;
+  let timer: NodeJS.Timeout | null = null;
 
-  const emitOne = () => {
+  const emitOne = (): void => {
     if (fallAtSample !== null && emitted === fallAtSample) generator.injectFall();
     write(generator.next(1 / config.hz));
     emitted += 1;
@@ -123,26 +157,29 @@ function runGenerate(config, write = writeNdjson) {
   return () => { if (timer !== null) clearInterval(timer); };
 }
 
-function runReplay(config, write = writeNdjson) {
+export function runReplay(config: ReplayConfig, write: WriteFn = writeNdjson): () => void {
   const records = loadNdjson(config.file);
   const player = new ReplayPlayer(records, { speed: config.speed });
   player.play(write);
   return () => player.stop();
 }
 
-function writeNdjson(record) {
+function writeNdjson(record: ReplayRecord): void {
   process.stdout.write(`${JSON.stringify(record)}\n`);
 }
 
 // 정규화 CSV를 한 번 스트리밍하며 (1) 전 위치 baseline 혼동행렬을 쌓고,
 // (2) --sweep 대상 위치 trial을 타입배열로 압축 캐시(스윕 다회 패스용). 그 뒤 리포트를 낸다.
-async function runEvaluate(config, out = process.stdout) {
+export async function runEvaluate(
+  config: EvaluateConfig,
+  out: { write: (chunk: string) => unknown } = process.stdout,
+): Promise<import('./evaluate.ts').EvaluationResult> {
   const overall = { candidate: makeConfusion(), confirmed: makeConfusion() };
-  const byGroup = new Map();
-  const cache = []; // 스윕용 압축 trial
+  const byGroup = new Map<string, { dataset: string; placement: string; candidate: ReturnType<typeof makeConfusion>; confirmed: ReturnType<typeof makeConfusion> }>();
+  const cache: TrialLike[] = []; // 스윕용 압축 trial
   const wantAll = config.sweepPlacement === 'all';
 
-  const onTrial = (t) => {
+  const onTrial = (t: import('./csv.ts').Trial): void => {
     const { candidate, confirmed } = detectTrial(trialFeed(t));
     overall.candidate.add(t.isFall, candidate);
     overall.confirmed.add(t.isFall, confirmed);
@@ -172,7 +209,7 @@ async function runEvaluate(config, out = process.stdout) {
   const result = { overall, byGroup };
   out.write(`${formatEvaluation(result, { title: `평가 ${config.file} (trial ${stats.trials}, row ${stats.rows})` })}\n`);
 
-  let sweep = null;
+  let sweep: SweepResult | null = null;
   if (config.sweep) {
     out.write(`\n스윕 대상: placement=${config.sweepPlacement} (${cache.length} trial)\n`);
     sweep = sweepAll(cache);
@@ -180,7 +217,7 @@ async function runEvaluate(config, out = process.stdout) {
   }
 
   if (config.json) {
-    const toObj = (r) => ({
+    const toObj = (r: typeof result) => ({
       overall: { candidate: r.overall.candidate.metrics(), confirmed: r.overall.confirmed.metrics() },
       byGroup: [...r.byGroup.values()].map((g) => ({
         dataset: g.dataset, placement: g.placement,
@@ -193,42 +230,42 @@ async function runEvaluate(config, out = process.stdout) {
   return result;
 }
 
-function positiveNumber(value, name) {
+function positiveNumber(value: string | boolean | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new Error(`--${name} must be a positive number`);
   return number;
 }
 
-function nonNegativeNumber(value, name) {
+function nonNegativeNumber(value: string | boolean | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) throw new Error(`--${name} must be zero or greater`);
   return number;
 }
 
-function positiveInteger(value, name) {
+function positiveInteger(value: string | boolean | undefined, name: string): number {
   const number = positiveNumber(value, name);
   if (!Number.isInteger(number)) throw new Error(`--${name} must be an integer`);
   return number;
 }
 
-async function main(argv) {
+async function main(argv: string[]): Promise<void> {
   try {
     const config = parseArgs(argv);
     if (config.command === 'help') {
       process.stdout.write(`${USAGE}\n`);
     } else if (config.command === 'generate') {
-      runGenerate(config, config.url ? createHttpWriter(config.url) : writeNdjson);
+      runGenerate(config, config.url ? (createHttpWriter(config.url) as unknown as WriteFn) : writeNdjson);
     } else if (config.command === 'replay') {
-      runReplay(config, config.url ? createHttpWriter(config.url) : writeNdjson);
+      runReplay(config, config.url ? (createHttpWriter(config.url) as unknown as WriteFn) : writeNdjson);
     } else if (config.command === 'evaluate') {
       await runEvaluate(config);
     }
   } catch (error) {
-    process.stderr.write(`Error: ${error.message}\n\n${USAGE}\n`);
+    process.stderr.write(`Error: ${(error as Error).message}\n\n${USAGE}\n`);
     process.exitCode = 1;
   }
 }
 
-if (require.main === module) main(process.argv.slice(2));
+if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2));
 
-module.exports = { parseArgs, runGenerate, runReplay, runEvaluate };
+export { main };

@@ -1,8 +1,6 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { parseHeader, parseRow, trialKey, groupTrials, EXPECTED } = require('./csv');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { parseHeader, parseRow, trialKey, groupTrials, EXPECTED } from '../../harness/csv.ts';
 
 const HEADER = EXPECTED.join(',');
 
@@ -18,7 +16,7 @@ test('기대 컬럼이 없으면 던진다', () => {
 
 test('데이터 행을 숫자로 파싱하고 is_fall을 불린으로 만든다', () => {
   const idx = parseHeader(HEADER);
-  const r = parseRow('SisFall,SA01,waist,F01,R01,1,200,20.0,0.1,-0.98,0.05,0.986', idx);
+  const r = parseRow('SisFall,SA01,waist,F01,R01,1,200,20.0,0.1,-0.98,0.05,0.986', idx)!;
   assert.equal(r.dataset, 'SisFall');
   assert.equal(r.placement, 'waist');
   assert.equal(r.isFall, true);
@@ -48,6 +46,6 @@ test('연속 같은 키 행을 하나의 trial로 묶는다', () => {
 
 test('trialKey는 5개 식별자를 결합한다', () => {
   const idx = parseHeader(HEADER);
-  const r = parseRow('UCI-455,104,waist,901,Test_1,1,25,0.0,0,0,1,1', idx);
+  const r = parseRow('UCI-455,104,waist,901,Test_1,1,25,0.0,0,0,1,1', idx)!;
   assert.equal(trialKey(r), 'UCI-455|104|waist|901|Test_1');
 });

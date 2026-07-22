@@ -1,6 +1,6 @@
-'use strict';
+type FetchImpl = typeof fetch;
 
-async function sendIngest(url, payload, fetchImpl = fetch) {
+export async function sendIngest(url: string, payload: unknown, fetchImpl: FetchImpl = fetch): Promise<void> {
   const endpoint = validateHttpUrl(url);
   const response = await fetchImpl(endpoint, {
     method: 'POST',
@@ -14,24 +14,34 @@ async function sendIngest(url, payload, fetchImpl = fetch) {
   }
 }
 
-function createHttpWriter(url, options = {}) {
+export interface HttpWriterOptions {
+  fetchImpl?: FetchImpl;
+  onError?: (error: Error) => void;
+}
+
+export interface HttpWriter {
+  (payload: unknown): Promise<void>;
+  done: () => Promise<void>;
+}
+
+export function createHttpWriter(url: string, options: HttpWriterOptions = {}): HttpWriter {
   const fetchImpl = options.fetchImpl || fetch;
-  const onError = options.onError || ((error) => {
+  const onError = options.onError || ((error: Error) => {
     process.stderr.write(`Ingest send failed: ${error.message}\n`);
     process.exitCode = 1;
   });
-  let pending = Promise.resolve();
+  let pending: Promise<void> = Promise.resolve();
 
-  const write = (payload) => {
+  const write = ((payload: unknown): Promise<void> => {
     pending = pending.then(() => sendIngest(url, payload, fetchImpl)).catch(onError);
     return pending;
-  };
+  }) as HttpWriter;
   write.done = () => pending;
   return write;
 }
 
-function validateHttpUrl(value) {
-  let url;
+function validateHttpUrl(value: string): URL {
+  let url: URL;
   try {
     url = new URL(value);
   } catch {
@@ -42,5 +52,3 @@ function validateHttpUrl(value) {
   }
   return url;
 }
-
-module.exports = { createHttpWriter, sendIngest };

@@ -1,8 +1,7 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { parseArgs, runGenerate } = require('./cli');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { parseArgs, runGenerate } from '../../harness/cli.ts';
+import type { ReplayRecord } from '../../harness/replay.ts';
 
 test('generate CLI 옵션을 파싱한다', () => {
   assert.deepEqual(
@@ -25,8 +24,8 @@ test('알 수 없는 옵션과 잘못된 숫자를 거부한다', () => {
 });
 
 test('유한 generate 실행이 지정된 개수만큼 즉시 종료된다', () => {
-  const records = [];
-  runGenerate({ hz: 50, anchorDistance: 4, count: 1, fallAfter: 0 }, (record) => records.push(record));
+  const records: ReplayRecord[] = [];
+  runGenerate({ command: 'generate', hz: 50, anchorDistance: 4, count: 1, fallAfter: 0 }, (record) => records.push(record));
 
   assert.equal(records.length, 1);
   assert.equal(records[0].source, 'sim');

@@ -1,8 +1,6 @@
-'use strict';
-
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { IngestGenerator } = require('./generator');
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { IngestGenerator } from '../../harness/generator.ts';
 
 test('spec 03 ingest payload를 생성한다', () => {
   const generator = new IngestGenerator({

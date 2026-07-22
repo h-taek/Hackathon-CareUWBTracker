@@ -1,13 +1,23 @@
-'use strict';
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  detectTrial, feedSamples, makeConfusion, evaluateTrials, sweepParam, type Sample, type TrialLike,
+} from '../../harness/evaluate.ts';
 
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { detectTrial, feedSamples, makeConfusion, evaluateTrials, sweepParam } = require('./evaluate');
+interface TrialOptions {
+  impactG?: number;
+  impactAtMs?: number;
+  quietMs?: number;
+  hz?: number;
+  isFall?: boolean;
+  dataset?: string;
+  placement?: string;
+}
 
 // 정지(1g) N개 + 충격 1개 + 정지 M개(초/ms). ax,ay는 0, az에 g 실어 magnitude=g.
 function trial({ impactG = 0, impactAtMs = 1000, quietMs = 6000, hz = 50, isFall = false,
-  dataset = 'X', placement = 'waist' }) {
-  const samples = [];
+  dataset = 'X', placement = 'waist' }: TrialOptions): TrialLike {
+  const samples: Sample[] = [];
   const dt = 1000 / hz;
   const total = quietMs;
   for (let t = 0; t <= total; t += dt) {
@@ -19,23 +29,23 @@ function trial({ impactG = 0, impactAtMs = 1000, quietMs = 6000, hz = 50, isFall
 }
 
 test('충격 2.5g 이상이면 candidate 감지', () => {
-  const r = detectTrial(feedSamples(trial({ impactG: 3.0 }).samples));
+  const r = detectTrial(feedSamples(trial({ impactG: 3.0 }).samples!));
   assert.equal(r.candidate, true);
 });
 
 test('충격 없으면 candidate 미감지', () => {
-  const r = detectTrial(feedSamples(trial({ impactG: 0 }).samples));
+  const r = detectTrial(feedSamples(trial({ impactG: 0 }).samples!));
   assert.equal(r.candidate, false);
 });
 
 test('충격 후 무동작 5초 지속되면 confirmed', () => {
-  const r = detectTrial(feedSamples(trial({ impactG: 3.0, impactAtMs: 500, quietMs: 7000 }).samples));
+  const r = detectTrial(feedSamples(trial({ impactG: 3.0, impactAtMs: 500, quietMs: 7000 }).samples!));
   assert.equal(r.candidate, true);
   assert.equal(r.confirmed, true);
 });
 
 test('충격이 impactG 미만이면 안 잡힌다(임계 스윕 효과)', () => {
-  const s = trial({ impactG: 2.0 }).samples;
+  const s = trial({ impactG: 2.0 }).samples!;
   assert.equal(detectTrial(feedSamples(s), { impactG: 2.5 }).candidate, false);
   assert.equal(detectTrial(feedSamples(s), { impactG: 1.5 }).candidate, true);
 });

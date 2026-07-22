@@ -1,6 +1,59 @@
-'use strict';
+interface Point {
+  x: number;
+  y: number;
+}
 
-const DEFAULTS = Object.freeze({
+interface Bounds {
+  x: [number, number];
+  y: [number, number];
+}
+
+interface Accel {
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface IngestGeneratorOptions {
+  tagId?: string;
+  mainAnchorId?: string;
+  subAnchorId?: string;
+  anchorDistance?: number;
+  start?: Partial<Point>;
+  velocity?: Partial<Point>;
+  bounds?: { x?: [number, number]; y?: [number, number] };
+  rangeNoise?: number;
+  sampleHz?: number;
+  random?: () => number;
+  now?: () => number;
+}
+
+interface ResolvedOptions {
+  tagId: string;
+  mainAnchorId: string;
+  subAnchorId: string;
+  anchorDistance: number;
+  start: Point;
+  velocity: Point;
+  bounds: Bounds;
+  rangeNoise: number;
+  sampleHz: number;
+}
+
+interface IngestRange {
+  anchorId: string;
+  distance: number;
+}
+
+interface IngestPayload {
+  tagId: string;
+  ts: number;
+  ranges: IngestRange[];
+  accel: Accel;
+  source: string;
+}
+
+const DEFAULTS: ResolvedOptions = Object.freeze({
   tagId: 'tag-watch',
   mainAnchorId: 'phoneMain',
   subAnchorId: 'phoneSub',
@@ -18,8 +71,15 @@ const FALL_PHASES = Object.freeze({
   still: { durationSeconds: 2.4, accel: { x: 0.03, y: 0.02, z: 9.81 } },
 });
 
-class IngestGenerator {
-  constructor(options = {}) {
+export class IngestGenerator {
+  options: ResolvedOptions;
+  position: Point;
+  velocity: Point;
+  random: () => number;
+  now: () => number;
+  fallSamples: Accel[];
+
+  constructor(options: IngestGeneratorOptions = {}) {
     this.options = {
       ...DEFAULTS,
       ...options,
@@ -40,11 +100,11 @@ class IngestGenerator {
     this.fallSamples = [];
   }
 
-  injectFall() {
+  injectFall(): void {
     this.fallSamples = buildFallSamples(this.options.sampleHz);
   }
 
-  next(dt = 0.2) {
+  next(dt = 0.2): IngestPayload {
     if (!Number.isFinite(dt) || dt <= 0) {
       throw new RangeError('dt must be a positive number');
     }
@@ -71,7 +131,7 @@ class IngestGenerator {
   }
 }
 
-function validateOptions(options) {
+function validateOptions(options: ResolvedOptions): void {
   if (!Number.isFinite(options.anchorDistance) || options.anchorDistance <= 0) {
     throw new RangeError('anchorDistance must be a positive number');
   }
@@ -79,7 +139,7 @@ function validateOptions(options) {
     throw new RangeError('sampleHz must be a positive number');
   }
 
-  for (const axis of ['x', 'y']) {
+  for (const axis of ['x', 'y'] as const) {
     const bounds = options.bounds[axis];
     if (!Array.isArray(bounds) || bounds.length !== 2 || bounds[0] >= bounds[1]) {
       throw new RangeError(`bounds.${axis} must be [min, max]`);
@@ -90,8 +150,8 @@ function validateOptions(options) {
   }
 }
 
-function buildFallSamples(sampleHz) {
-  const samples = [];
+function buildFallSamples(sampleHz: number): Accel[] {
+  const samples: Accel[] = [];
   for (const phase of Object.values(FALL_PHASES)) {
     const count = Math.max(1, Math.round(phase.durationSeconds * sampleHz));
     for (let index = 0; index < count; index += 1) {
@@ -101,8 +161,8 @@ function buildFallSamples(sampleHz) {
   return samples;
 }
 
-function reflectAtBounds(position, velocity, bounds) {
-  for (const axis of ['x', 'y']) {
+function reflectAtBounds(position: Point, velocity: Point, bounds: Bounds): void {
+  for (const axis of ['x', 'y'] as const) {
     const [min, max] = bounds[axis];
     if (position[axis] < min) {
       position[axis] = min + (min - position[axis]);
@@ -114,12 +174,12 @@ function reflectAtBounds(position, velocity, bounds) {
   }
 }
 
-function withNoise(value, amplitude, random) {
+function withNoise(value: number, amplitude: number, random: () => number): number {
   if (!amplitude) return value;
   return Math.max(0, value + (random() * 2 - 1) * amplitude);
 }
 
-function normalWalkingAccel(random) {
+function normalWalkingAccel(random: () => number): Accel {
   return {
     x: round((random() * 2 - 1) * 0.8),
     y: round((random() * 2 - 1) * 0.8),
@@ -127,8 +187,6 @@ function normalWalkingAccel(random) {
   };
 }
 
-function round(value) {
+function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
-
-module.exports = { IngestGenerator };

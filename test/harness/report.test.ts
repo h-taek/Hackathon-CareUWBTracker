@@ -1,12 +1,17 @@
-'use strict';
+import * as assert from 'node:assert/strict';
+import test from 'node:test';
+import { pct, formatEvaluation, formatSweep } from '../../harness/report.ts';
+import { evaluateTrials, sweepAll, type Sample, type TrialLike } from '../../harness/evaluate.ts';
 
-const assert = require('node:assert/strict');
-const test = require('node:test');
-const { pct, formatEvaluation, formatSweep } = require('./report');
-const { evaluateTrials, sweepAll } = require('./evaluate');
+interface TrialOptions {
+  impactG?: number;
+  isFall?: boolean;
+  dataset?: string;
+  placement?: string;
+}
 
-function trial({ impactG = 0, isFall = false, dataset = 'X', placement = 'waist' }) {
-  const samples = [];
+function trial({ impactG = 0, isFall = false, dataset = 'X', placement = 'waist' }: TrialOptions): TrialLike {
+  const samples: Sample[] = [];
   for (let t = 0; t <= 6000; t += 20) {
     let g = 1;
     if (impactG && Math.abs(t - 1000) < 10) g = impactG;
