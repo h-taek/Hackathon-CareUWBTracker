@@ -4,7 +4,7 @@ import {
   ANCHOR_CONFIG_USAGE,
   parseAnchorConfig,
   wantsAnchorConfigHelp,
-} from '../../demo/config/anchor.ts';
+} from '../../server/config/anchor.ts';
 
 const VALID_ARGS = [
   '--main-anchor-id', 'phoneMain',

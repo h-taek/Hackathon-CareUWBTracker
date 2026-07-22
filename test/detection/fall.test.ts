@@ -1,6 +1,6 @@
 import test from 'node:test';
 import * as assert from 'node:assert';
-import { createFallDetector } from '../../demo/detection/fall.ts';
+import { createFallDetector } from '../../server/detection/fall.ts';
 
 const G = 9.80665;
 // 축약: |a|=g배 크기의 z축 가속도 프레임 생성

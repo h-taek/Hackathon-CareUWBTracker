@@ -1,6 +1,6 @@
-# demo — 실내 측위 + 낙상 감지 데모 서버
+# server — 실내 측위 + 낙상 감지 서버
 
-Node 내장 HTTP와 TypeScript로 구현한 데모 서버다. 워치·폰이 보낸 ingest를 받아 2앵커 삼각측량 좌표와 가속도를 SSE로 흘리고 2D 대시보드에 그린다. 런타임 전체가 TypeScript ESM이며, 외부 의존성 없이 Node 22.18+의 네이티브 TS 실행으로 구동된다.
+Node 내장 HTTP와 TypeScript로 구현한 서버다. 워치·폰이 보낸 ingest를 받아 2앵커 삼각측량 좌표와 가속도를 SSE로 흘리고 2D 대시보드에 그린다. 런타임 전체가 TypeScript ESM이며, 외부 의존성 없이 Node 22.18+의 네이티브 TS 실행으로 구동된다.
 
 ## 요구 사항
 
@@ -30,10 +30,10 @@ npm run typecheck
 
 ## 디스크 구조 (책임별)
 
-런타임(`demo/`)·개발도구(`harness/`)·테스트(`test/`)를 루트에서 분리했다. 전부 TypeScript ESM이다.
+런타임(`server/`)·개발도구(`tools/`)·테스트(`test/`)를 루트에서 분리했다. 전부 TypeScript ESM이다.
 
 ```
-demo/                  재사용 런타임
+server/                재사용 런타임
   server.ts            HTTP 서버 · 라우팅 · SSE 허브 · 소스 선택(조립부)
   config/anchor.ts     필수 앵커 실행 인자 파싱 · 검증 · 도움말
   sim.ts               데모용 시뮬레이터(가짜 보행/낙상 주입)
@@ -58,12 +58,12 @@ demo/                  재사용 런타임
     model-lgbm.json    학습된 모델(dump_lgbm.py 산출)
   public/index.html    2D 대시보드
 
-harness/               개발 전용 도구(서버 런타임과 무관) — 루트로 분리
+tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
-  detection/ ingest/ positioning/ lib/ config/ harness/  fixtures/
+  detection/ ingest/ positioning/ lib/ config/ tools/  fixtures/
 ```
 
-런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `sim.ts`(데모) + `lib/`(포맷). `harness/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
+런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `sim.ts`(데모) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.

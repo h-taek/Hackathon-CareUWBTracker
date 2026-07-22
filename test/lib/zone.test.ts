@@ -1,6 +1,6 @@
 import test from 'node:test';
 import * as assert from 'node:assert';
-import { zoneAt, type ZoneMap } from '../../demo/lib/zone.ts';
+import { zoneAt, type ZoneMap } from '../../server/lib/zone.ts';
 
 const map: ZoneMap = { zones: [
   { id: 'z_hall', label: '복도', rect: [0.5, 4.5, 19.0, 1.8] },

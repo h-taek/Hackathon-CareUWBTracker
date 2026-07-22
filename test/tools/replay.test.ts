@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { ReplayPlayer, parseNdjson } from '../../harness/replay.ts';
+import { ReplayPlayer, parseNdjson } from '../../tools/replay.ts';
 
 test('빈 줄과 주석을 제외하고 NDJSON을 파싱한다', () => {
   const records = parseNdjson([

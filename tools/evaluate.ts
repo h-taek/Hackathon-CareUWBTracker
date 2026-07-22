@@ -6,7 +6,7 @@
 //   candidate = 충격(impactG) 감지 순간   -> 순수 신호 분별력(impactG에만 의존)
 //   confirmed = 충격 + 무동작 5초 확인      -> 라이브 게이트 효과(짧은 클립/즉시회복 trial은 미확진 가능)
 
-import { createFallDetector, DEFAULTS, type FallDetectorOptions } from '../demo/detection/fall.ts';
+import { createFallDetector, DEFAULTS, type FallDetectorOptions } from '../server/detection/fall.ts';
 
 export const GRAVITY = 9.80665;
 

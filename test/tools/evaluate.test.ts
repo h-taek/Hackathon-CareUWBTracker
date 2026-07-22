@@ -2,7 +2,7 @@ import * as assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   detectTrial, feedSamples, makeConfusion, evaluateTrials, sweepParam, type Sample, type TrialLike,
-} from '../../harness/evaluate.ts';
+} from '../../tools/evaluate.ts';
 
 interface TrialOptions {
   impactG?: number;

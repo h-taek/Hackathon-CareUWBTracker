@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHttpWriter, sendIngest } from '../../harness/sender.ts';
+import { createHttpWriter, sendIngest } from '../../tools/sender.ts';
 
 test('ingest를 JSON POST로 전송하고 202를 허용한다', async () => {
   const calls: { url: string; options: RequestInit }[] = [];

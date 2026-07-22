@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
-import { pct, formatEvaluation, formatSweep } from '../../harness/report.ts';
-import { evaluateTrials, sweepAll, type Sample, type TrialLike } from '../../harness/evaluate.ts';
+import { pct, formatEvaluation, formatSweep } from '../../tools/report.ts';
+import { evaluateTrials, sweepAll, type Sample, type TrialLike } from '../../tools/evaluate.ts';
 
 interface TrialOptions {
   impactG?: number;
