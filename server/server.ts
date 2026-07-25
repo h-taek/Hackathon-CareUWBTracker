@@ -21,6 +21,7 @@ import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ing
 import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
 import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
+import { createStaticHandler } from './static/handler.ts';
 
 // 측위 소스: sim(시뮬 자동 생성) 또는 live(실측 ingest만). 기본 sim.
 type SourceMode = 'sim' | 'live';
@@ -119,17 +120,8 @@ function sendJson(response: ServerResponse, value: unknown, status = 200): void 
   response.end(JSON.stringify(value));
 }
 
-function sendFile(response: ServerResponse, file: string, type: string): void {
-  fs.readFile(file, (error: NodeJS.ErrnoException | null, buffer: Buffer) => {
-    if (error) {
-      response.writeHead(404);
-      response.end('not found');
-      return;
-    }
-    response.writeHead(200, { 'Content-Type': type });
-    response.end(buffer);
-  });
-}
+// public/ 아래 파일이 곧 URL. 페이지·에셋 추가에 서버 코드 수정이 필요 없다.
+const serveStatic = createStaticHandler(path.join(import.meta.dirname, 'public'));
 
 const server = http.createServer((request: IncomingMessage, response: ServerResponse) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
@@ -160,13 +152,8 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   if (pathname === '/tags') {
     return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));
   }
-  if (pathname === '/' || pathname === '/index.html') {
-    return sendFile(
-      response,
-      path.join(import.meta.dirname, 'public', 'index.html'),
-      'text/html; charset=utf-8',
-    );
-  }
+  // API 라우트를 다 흘려보낸 뒤 정적 파일. 못 찾으면 404로 떨어진다.
+  if (serveStatic(request, response, pathname)) return;
 
   response.writeHead(404);
   response.end('not found');

@@ -56,7 +56,13 @@ server/                재사용 런타임
     features.ts        충격 윈도우 코어 19특징
     lgbm.ts            LightGBM 앙상블 추론(무의존)
     model-lgbm.json    학습된 모델(dump_lgbm.py 산출)
-  public/index.html    2D 대시보드
+  static/              정적 파일 서빙
+    resolve.ts         요청 경로 → public/ 파일 해석 + MIME(순수 함수)
+    handler.ts         스트리밍 응답 · 304 재검증 · HEAD
+  public/              브라우저가 받는 것 전부 (디스크 배치 = URL)
+    index.html         대시보드 마크업
+    assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
+    assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
 
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
@@ -67,3 +73,21 @@ test/                  모든 테스트 — 루트로 분리, 소스 구조 미�
 ```
 
 런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `sim.ts`(데모) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
+
+## 페이지·에셋 추가
+
+API 라우트(`/ingest` `/stream` `/map` `/inject-fall` `/tags`)를 먼저 처리하고, 나머지는 전부 `public/` 정적 서빙으로 떨어진다. **디스크 배치가 곧 URL이므로 페이지를 늘려도 서버 코드는 손대지 않는다.**
+
+| 파일 | URL |
+|---|---|
+| `public/index.html` | `/` , `/index.html` |
+| `public/login.html` | `/login` , `/login.html` |
+| `public/report/index.html` | `/report` , `/report/` |
+| `public/assets/js/dashboard.js` | `/assets/js/dashboard.js` |
+| `public/vendor/…` `public/assets/scene.ply` | 같은 경로 그대로 |
+
+- 확장자가 없으면 `<경로>.html` → `<경로>/index.html` 순으로 찾는다.
+- 새 페이지는 `assets/css/base.css`만 링크하면 공통 토큰·버튼·카드가 붙는다.
+- 디렉터리 목록은 내주지 않고, `public/` 밖으로 나가는 경로는 거부한다.
+- 응답은 스트리밍이고 `Last-Modified` 기반 304 재검증을 한다(대용량 스플랫 대비).
+- 새 확장자를 쓰려면 `static/resolve.ts`의 MIME 표에만 한 줄 추가한다.
