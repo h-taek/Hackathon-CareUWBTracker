@@ -3,267 +3,610 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>돌봄시설 실시간 위치 관제 (시뮬)</title>
+<title>돌봄시설 실시간 위치 관제</title>
 <style>
+  /* 최소 디자인(F1). 디자인 시안 적용은 F5(8/02)에서 폴리시한다. */
   :root {
-    --bg: #0d1117; --panel: #161b22; --line: #30363d; --ink: #e6edf3;
-    --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --alarm: #f85149;
+    --bg: #0b0e14; --panel: #161b22; --panel-2: #1c222b; --line: #2a2f37;
+    --ink: #e6edf3; --muted: #8b949e; --faint: #5b636e;
+    --accent: #58a6ff;
+    --ok: #3fb950; --offline: #8b949e; --alarm: #f85149; --sel: #58a6ff;
+    --map-bg: #f5f6f8; --map-line: #c4cad2; --map-ink: #3a414b;
     --hazard: #d29922;
+    --r: 9px;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.5 -apple-system, "SF Pro", "Pretendard", "Apple SD Gothic Neo", sans-serif;
+    font: 14px/1.5 -apple-system, "SF Pro Text", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    font-variant-numeric: tabular-nums;
+    display: flex; flex-direction: column; min-height: 100vh;
   }
-  header {
-    display: flex; align-items: baseline; gap: 12px;
-    padding: 14px 20px; border-bottom: 1px solid var(--line);
+
+  /* ── 상단바 ── */
+  .topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px; background: #05070b; border-bottom: 1px solid var(--line);
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  .status { margin-left: auto; font-size: 12px; color: var(--muted); }
-  .dot-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    background: var(--ok); margin-right: 6px; vertical-align: middle; }
-  main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px 20px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-  .card h2 { font-size: 13px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line);
-    color: var(--muted); font-weight: 600; letter-spacing: .02em; }
-  .card .body { padding: 14px; }
-  #mapWrap { padding: 12px; }
-  canvas { width: 100%; height: auto; display: block; border-radius: 6px; background: #0a0e14; }
-  .legend { display: flex; gap: 16px; padding: 8px 14px 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .swatch { width: 10px; height: 10px; border-radius: 50%; }
-  .controls button {
-    display: block; width: 100%; margin: 6px 0; padding: 9px 12px; text-align: left;
-    background: #21262d; color: var(--ink); border: 1px solid var(--line);
-    border-radius: 7px; cursor: pointer; font-size: 13px;
-  }
-  .controls button:hover { border-color: var(--accent); }
-  /* 3D 전환 스텁 패널 */
-  #view3d { display: none; }
-  #view3d.on { display: block; }
-  #view3d .body { text-align: center; padding: 22px 14px; }
-  #view3d .badge { display: inline-block; padding: 3px 10px; border-radius: 999px;
-    background: rgba(248,81,73,.15); color: var(--alarm); font-size: 11px; font-weight: 700;
-    letter-spacing: .04em; margin-bottom: 12px; }
-  #view3d .who { font-size: 20px; font-weight: 700; }
-  #view3d .where { color: var(--muted); margin-top: 4px; }
-  #view3d .stub {
-    margin: 16px 0; padding: 28px 14px; border: 1px dashed var(--line); border-radius: 8px;
-    color: var(--muted); font-size: 12px; background: #0a0e14;
-  }
-  #view3d .resolve { margin-top: 6px; background: var(--alarm); border-color: var(--alarm);
-    color: #fff; font-weight: 650; text-align: center; }
-  .alertlog { font-size: 12px; }
-  .alertlog .row { padding: 8px 0; border-bottom: 1px solid var(--line); }
-  .alertlog .row:last-child { border: 0; }
-  .alertlog .t { color: var(--muted); }
-  .empty { color: var(--muted); font-size: 12px; }
-  .state-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .navtoggle { background: none; border: 1px solid var(--line); border-radius: 7px; color: var(--muted);
+    width: 32px; height: 30px; cursor: pointer; font-size: 15px; line-height: 1; }
+  .navtoggle:hover { border-color: var(--accent); color: var(--ink); }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+  .brand .av { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg,#2b3444,#39435a); }
+  .brand .sep { color: var(--faint); }
+  .title { font-weight: 650; font-size: 15px; }
+  .title small { color: var(--muted); font-weight: 400; }
+  .legend { display: flex; gap: 16px; margin-left: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+  .sw { width: 10px; height: 10px; border-radius: 50%; }
+  .topbar .spacer { margin-left: auto; }
+  .conn { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; }
+  .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .conn.live .dot { background: var(--ok); }
+  .state-pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .state-pill.alerting { color: var(--alarm); border-color: var(--alarm); }
+  .btn {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 13px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.exit { color: var(--accent); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── 본문 3열 ── */
+  .shell { flex: 1; display: grid; grid-template-columns: 264px 1fr 320px; gap: 12px; padding: 12px; min-height: 0; }
+  .shell.nav-collapsed { grid-template-columns: 58px 1fr 320px; }
+  @media (max-width: 1100px) { .shell { grid-template-columns: 220px 1fr; } .col-right { display: none; } }
+  .col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+  .card > h2 {
+    margin: 0; padding: 11px 13px; font-size: 12px; font-weight: 600; color: var(--muted);
+    letter-spacing: .03em; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 12px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  /* 층 목록 */
+  .floors { padding: 6px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+  .floor { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); overflow: hidden; }
+  .floor > .fhead {
+    display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 8px;
+    padding: 9px 11px; cursor: pointer; width: 100%; text-align: left; border: 0; background: none; color: inherit;
+  }
+  .floor .fnum { font-weight: 700; font-size: 15px; color: var(--ink); }
+  .floor .fmeta .t { font-weight: 600; }
+  .floor .fmeta .s { font-size: 11.5px; color: var(--muted); }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(63,185,80,.14); color: var(--ok); white-space: nowrap; }
+  .floor .rooms { padding: 2px 11px 10px 41px; display: none; flex-direction: column; gap: 4px; }
+  .floor[open] .rooms { display: flex; }
+  .room { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; background: none; border: 0; padding: 2px 0; text-align: left; }
+  .room:hover { color: var(--ink); }
+  .room .rdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .floor.pending { opacity: .5; }
+  .pending-tag { font-size: 10.5px; color: var(--faint); border: 1px dashed var(--line); border-radius: 5px; padding: 1px 6px; }
+
+  .nav-collapsed .col-left .chips,
+  .nav-collapsed .col-left h2,
+  .nav-collapsed .col-left .fmeta,
+  .nav-collapsed .col-left .badge,
+  .nav-collapsed .col-left .pending-tag,
+  .nav-collapsed .col-left .rooms { display: none; }
+  .nav-collapsed .col-left .fhead { grid-template-columns: 1fr; justify-items: center; padding: 12px 0; }
+
+  /* ── 중앙 뷰포트 (2D ↔ 3D) ── */
+  .mapcard { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .viewport { position: relative; flex: 1; margin: 12px; border-radius: 6px; overflow: hidden; background: var(--map-bg); min-height: 0; }
+  .v2d { position: absolute; inset: 0; }
+  .v2d canvas { width: 100%; height: 100%; display: block; background: var(--map-bg); }
+  .v2d .pip-label { display: none; }
+
+  /* 3D 실사(스플랫) 패널 — F3에서 gaussian-splats-3d 실장, 지금은 스텁 */
+  .v3d { position: absolute; inset: 0; display: none;
+    background:
+      radial-gradient(60% 50% at 50% 45%, rgba(255,255,255,.06), transparent 70%),
+      linear-gradient(135deg, #6f5a48 0%, #574a41 30%, #3a3531 60%, #241f1d 100%);
+  }
+  .v3d .scene-tag { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .badge3d { background: rgba(88,166,255,.18); color: #bcdcff; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+  .v3d .stub-note { position: absolute; top: 12px; right: 12px; color: rgba(255,255,255,.5); font-size: 11px; text-align: right; line-height: 1.45; }
+  .v3d .marker3d { position: absolute; left: 42%; top: 52%; transform: translate(-50%,-50%); }
+  .v3d .marker3d .dot { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--alarm); box-shadow: 0 0 0 3px rgba(248,81,73,.35); }
+  .v3d .marker3d .ring { position: absolute; left: 50%; top: 50%; width: 90px; height: 90px; transform: translate(-50%,-50%);
+    border: 2px solid rgba(248,81,73,.6); border-radius: 50%; animation: pulse 2s ease-out infinite; }
+  @keyframes pulse { 0% { transform: translate(-50%,-50%) scale(.6); opacity: 1; } 100% { transform: translate(-50%,-50%) scale(1.3); opacity: 0; } }
+
+  /* 낙상 경보 배너 (3D 켜짐 시 좌하단) */
+  .banner { position: absolute; left: 0; bottom: 0; display: none; align-items: center; gap: 16px;
+    background: rgba(8,10,14,.92); border-top-right-radius: 12px; padding: 16px 44px 16px 18px; max-width: 62%; z-index: 4; }
+  .banner .bell { width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; font-size: 22px; flex: none; }
+  .banner .k { font-size: 15px; font-weight: 700; }
+  .banner .k small { display: block; color: var(--muted); font-size: 12.5px; font-weight: 400; margin-top: 2px; }
+  .banner .bx { position: absolute; top: 8px; right: 12px; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; }
+
+  /* 3D 켜짐: 2D는 우하단 미니맵으로 */
+  .viewport.three-on { background: #241f1d; }
+  .viewport.three-on .v3d { display: block; }
+  .viewport.three-on .banner { display: flex; }
+  .viewport.three-on .v2d {
+    inset: auto; right: 14px; bottom: 14px; width: 40%; height: 44%;
+    border: 1px solid rgba(255,255,255,.25); border-radius: 8px; overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5); z-index: 3;
+  }
+  .viewport.three-on .v2d .pip-label { display: block; position: absolute; top: 6px; left: 8px; z-index: 1;
+    font-size: 11px; font-weight: 700; color: var(--map-ink); background: rgba(245,246,248,.8); padding: 1px 7px; border-radius: 5px; }
+
+  .maplegend { display: flex; gap: 16px; padding: 4px 14px 12px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .maplegend span { display: inline-flex; align-items: center; gap: 6px; }
+  .demobar { display: flex; gap: 8px; padding: 0 14px 12px; flex-wrap: wrap; align-items: center; }
+  .demobar .btn { font-size: 12px; padding: 6px 11px; }
+  .demobar .hint { color: var(--faint); font-size: 11.5px; }
+
+  /* 알림 로그 */
+  .col-right { min-height: 0; }
+  .log { padding: 6px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+  .logrow {
+    display: grid; grid-template-columns: 34px 1fr 20px; align-items: center; gap: 9px;
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); cursor: pointer;
+    text-align: left; color: inherit; font: inherit;
+  }
+  .logrow:hover { border-color: var(--accent); }
+  .logrow.active { border-color: var(--alarm); background: rgba(248,81,73,.08); }
+  .logrow .fl { font-weight: 700; color: var(--muted); text-align: center; }
+  .logrow .who { font-weight: 600; font-size: 13px; }
+  .logrow .desc { font-size: 11.5px; color: var(--muted); }
+  .logrow.fall .desc { color: var(--alarm); }
+  .logrow.cleared { opacity: .55; }
+  .logrow .x { color: var(--faint); cursor: pointer; text-align: center; background: none; border: 0; font: inherit; }
+  .empty { color: var(--faint); font-size: 12px; padding: 14px; text-align: center; }
+
+  /* 경보 팝업 — 아래에서 올라오고 배경은 붉은 레이어만(흐림 없음) */
+  .overlay { position: fixed; inset: 0; background: rgba(248,81,73,.22); display: none;
+    align-items: flex-end; justify-content: center; z-index: 30; padding-bottom: 40px; }
+  .overlay.on { display: flex; }
+  .popup { width: min(460px, 92vw); background: #0e1319; border: 1px solid var(--alarm); border-radius: 14px;
+    box-shadow: 0 -10px 50px rgba(0,0,0,.55); padding: 20px 22px; position: relative;
+    transform: translateY(140px); opacity: 0; animation: rise .28s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes rise { to { transform: translateY(0); opacity: 1; } }
+  .popup .close { position: absolute; top: 12px; right: 14px; color: var(--muted); cursor: pointer; font-size: 18px; background: none; border: 0; }
+  .popup .top { display: flex; align-items: center; gap: 14px; }
+  .popup .bell { width: 46px; height: 46px; border-radius: 50%; background: rgba(248,81,73,.15); display: flex; align-items: center; justify-content: center; font-size: 22px; flex: none; }
+  .popup .k { font-size: 12px; color: var(--alarm); font-weight: 700; letter-spacing: .04em; }
+  .popup .h { font-size: 17px; font-weight: 700; margin-top: 2px; }
+  .popup .w { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .popup .acts { display: flex; gap: 8px; margin-top: 16px; }
+  .popup .acts .btn { flex: 1; text-align: center; }
+  .popup .acts .primary { background: var(--alarm); border-color: var(--alarm); color: #fff; font-weight: 650; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .popup { animation: none; transform: none; opacity: 1; }
+    .v3d .marker3d .ring { animation: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>돌봄시설 실시간 위치 관제</h1>
-  <span class="sub">3DGS x UWB · 시뮬 스트림 (source: sim)</span>
-  <span class="status"><span class="dot-live" id="live"></span><span id="statusText">연결 중…</span>
-    &nbsp;·&nbsp; 상태 <span class="state-pill" id="statePill">idle (2D)</span></span>
-</header>
 
-<main>
-  <section class="card" id="mapCard">
-    <h2>2D 개요 뷰</h2>
-    <div id="mapWrap"><canvas id="map" width="1000" height="600"></canvas></div>
-    <div class="legend">
-      <span><i class="swatch" style="background:#58a6ff"></i>정상</span>
-      <span><i class="swatch" style="background:#f85149"></i>낙상 후보</span>
-      <span><i class="swatch" style="background:#d29922;border-radius:2px"></i>위험구역</span>
-      <span>원: UWB 오차 반경(xy)</span>
-    </div>
-  </section>
+<div class="topbar">
+  <button class="navtoggle" id="navToggle" aria-label="사이드바 접기/펼치기">▐</button>
+  <div class="brand"><span class="av"></span> @관리자 <span class="sep">|</span></div>
+  <div class="title">f1 <small id="floorRange">· 실시간 관제</small></div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ok)"></i>정상</span>
+    <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
+    <span><i class="sw" style="background:var(--alarm)"></i>이상 감지</span>
+    <span><i class="sw" style="background:var(--sel)"></i>선택한 환자</span>
+  </div>
+  <span class="spacer"></span>
+  <span class="conn" id="conn"><span class="dot"></span><span id="connText">연결 중…</span></span>
+  <span class="state-pill" id="statePill">idle (2D)</span>
+  <button class="btn exit">나가기</button>
+</div>
 
-  <aside>
-    <div class="card" id="view3d">
-      <h2>3D 실사 뷰 (자동 전환)</h2>
-      <div class="body">
-        <span class="badge">낙상 후보 감지</span>
-        <div class="who" id="v3dWho">—</div>
-        <div class="where" id="v3dWhere">—</div>
-        <div class="stub">언리얼 3D 실사 씬이 이 대상의 구역으로 전환되는 지점(스텁).<br>W2에서 전환 신호 연동, W3에서 학교 실사 3DGS로 교체.</div>
-        <button class="resolve" id="resolveBtn">확인 완료 · 2D 복귀</button>
+<div class="shell" id="shell">
+  <!-- 좌: 필터 + 층 목록 -->
+  <div class="col col-left">
+    <div class="card">
+      <div class="chips">
+        <span class="chip"><i class="sw" style="background:var(--ok)"></i>연결 <b id="cntOk">0</b></span>
+        <span class="chip"><i class="sw" style="background:var(--offline)"></i>끊김 <b id="cntOff">0</b></span>
+        <span class="chip"><i class="sw" style="background:var(--alarm)"></i>이벤트 <b id="cntEvt">0</b></span>
       </div>
     </div>
-
-    <div class="card" style="margin-top:16px">
-      <h2>낙상 주입 (데모 트리거)</h2>
-      <div class="body controls" id="tagButtons"><span class="empty">태그 로딩 중…</span></div>
+    <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+      <h2>층별 목록</h2>
+      <div class="floors" id="floors">
+        <div class="floor" open id="floor1">
+          <button class="fhead" type="button">
+            <span class="fnum">f1</span>
+            <span class="fmeta"><span class="t" id="f1Range">—</span><span class="s" id="f1Count">환자 0명</span></span>
+            <span class="badge" id="f1Badge">연결 0명</span>
+          </button>
+          <div class="rooms" id="f1Rooms"><span class="empty">태그 대기 중…</span></div>
+        </div>
+        <div class="floor pending">
+          <button class="fhead" type="button"><span class="fnum">f2</span>
+            <span class="fmeta"><span class="t">2층</span><span class="s">단층 맵</span></span>
+            <span class="pending-tag">데이터 대기</span></button>
+        </div>
+        <div class="floor pending">
+          <button class="fhead" type="button"><span class="fnum">f3</span>
+            <span class="fmeta"><span class="t">3층</span><span class="s">단층 맵</span></span>
+            <span class="pending-tag">데이터 대기</span></button>
+        </div>
+        <div class="floor pending">
+          <button class="fhead" type="button"><span class="fnum">f4</span>
+            <span class="fmeta"><span class="t">4층</span><span class="s">단층 맵</span></span>
+            <span class="pending-tag">데이터 대기</span></button>
+        </div>
+      </div>
     </div>
+  </div>
 
-    <div class="card" style="margin-top:16px">
-      <h2>경보 로그</h2>
-      <div class="body alertlog" id="alertLog"><span class="empty">아직 경보 없음</span></div>
+  <!-- 중앙: 뷰포트 -->
+  <div class="col col-center">
+    <div class="card mapcard">
+      <h2>실시간 뷰 <span id="viewMode" style="color:var(--faint);font-weight:400">2D 개요</span></h2>
+      <div class="viewport" id="viewport">
+        <div class="v3d">
+          <div class="scene-tag">
+            <span class="badge3d">3D 실사 뷰</span>
+            <span class="badge3d" id="scene3dWho" style="background:rgba(248,81,73,.18);color:#ffc7c3">—</span>
+          </div>
+          <div class="stub-note">가우시안 스플랫 씬 자리 (스텁)<br>Three.js + gaussian-splats-3d · plan/07<br>F3에서 실장 · 성능 스파이크 후</div>
+          <div class="marker3d"><span class="ring"></span><span class="dot"></span></div>
+        </div>
+        <div class="v2d" id="v2d">
+          <span class="pip-label">2D 개요</span>
+          <canvas id="map"></canvas>
+        </div>
+        <div class="banner">
+          <div class="bell">🔔</div>
+          <div class="k" id="bannerTitle">—<small id="bannerSub">—</small></div>
+          <button class="bx" id="bannerClose" aria-label="닫기">✕</button>
+        </div>
+      </div>
+      <div class="maplegend">
+        <span><i class="sw" style="background:var(--ok)"></i>정상</span>
+        <span><i class="sw" style="background:var(--alarm)"></i>낙상</span>
+        <span><i class="sw" style="background:var(--sel)"></i>선택</span>
+        <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
+        <span><i class="sw" style="background:var(--hazard);border-radius:2px"></i>위험구역</span>
+        <span>원 = 오차 반경(err.xy)</span>
+      </div>
+      <div class="demobar" id="demobar">
+        <span class="hint">낙상 주입:</span>
+      </div>
     </div>
-  </aside>
-</main>
+  </div>
+
+  <!-- 우: 알림 로그 -->
+  <div class="col col-right">
+    <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:0;">
+      <h2>알림 로그 <span id="logCount" style="color:var(--faint);font-weight:400"></span></h2>
+      <div class="log" id="log"><span class="empty">아직 경보 없음</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 경보 팝업 -->
+<div class="overlay" id="overlay">
+  <div class="popup">
+    <button class="close" id="popClose" aria-label="닫기">✕</button>
+    <div class="top">
+      <div class="bell">🔔</div>
+      <div>
+        <div class="k" id="popKind">낙상 후보 감지</div>
+        <div class="h" id="popWho">—</div>
+        <div class="w" id="popWhere">—</div>
+      </div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" id="popView3d">3D 실사 뷰 열기</button>
+      <button class="btn" id="popDismiss">나중에</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function () {
-  const cv = document.getElementById('map');
+  'use strict';
+
+  // ── 상태 ──
+  let map = null;                    // /map 응답
+  const tags = new Map();            // tagId -> 최신 position payload
+  const lastSeen = new Map();        // tagId -> 마지막 수신 시각(ms). 오프라인 판정용
+  const names = new Map();           // tagId -> 표시명. live position에는 name이 없어 /tags로 보강
+  let selectedTag = null;            // 사용자가 목록에서 고른 태그
+  let alertingTag = null;            // 현재 경보 중인 태그
+  let alertCount = 0;
+  const OFFLINE_MS = 4000;           // 이 시간 넘게 미수신이면 오프라인 표시
+
+  const $ = (id) => document.getElementById(id);
+  const round1 = (n) => Math.round(n * 10) / 10;
+
+  // CSS 변수는 시작 시 1회만 읽는다. draw()가 초당 15회 돌기 때문에
+  // 프레임마다 getComputedStyle을 부르면 구역 수만큼 레이아웃 비용이 붙는다.
+  const CSS_VAR = (() => {
+    const s = getComputedStyle(document.documentElement);
+    const read = (n) => s.getPropertyValue(n).trim();
+    return {
+      ok: read('--ok'), sel: read('--sel'), offline: read('--offline'), fall: read('--alarm'),
+      mapLine: read('--map-line'), mapInk: read('--map-ink'),
+    };
+  })();
+  const COLOR = () => CSS_VAR;
+
+  // sim/live 페이로드 차이 흡수:
+  //   position — sim은 name 포함, live(uwb+imu)는 tagId만
+  //   alert    — sim은 ts·name·confidence 포함, live(FallEvent)는 type·tagId·peakAccel·freefall·pos·zone만
+  const nameOf = (tagId) => names.get(tagId) || tagId;
+  const tsOf = (a) => (typeof a.ts === 'number' ? a.ts : Date.now());
+  const errOf = (p) => (p && p.err && typeof p.err.xy === 'number' ? p.err.xy : 0.2);
+
+  function stateOf(tagId) {
+    if (tagId === alertingTag) return 'fall';
+    const seen = lastSeen.get(tagId);
+    if (!seen || Date.now() - seen > OFFLINE_MS) return 'offline';
+    if (tagId === selectedTag) return 'sel';
+    return 'ok';
+  }
+
+  // ── 2D 캔버스 ──
+  const cv = $('map');
   const ctx = cv.getContext('2d');
-  const W = cv.width, H = cv.height, PAD = 24;
-  let map = null, scale = 1;
-  const tags = new Map();     // tagId -> 최신 payload
-  let alerting = null;        // 현재 경보 중인 tagId
+  let scale = 1, W = 0, H = 0, PAD = 24;
 
-  // 미터 -> 픽셀 (원점 좌하단, y 뒤집기).
-  function mx(x) { return PAD + x * scale; }
-  function my(y) { return H - PAD - y * scale; }
-
-  fetch('/map').then(r => r.json()).then(m => {
-    map = m;
-    const [bx0, bx1] = m.bounds.x, [by0, by1] = m.bounds.y;
-    const sx = (W - PAD * 2) / (bx1 - bx0);
-    const sy = (H - PAD * 2) / (by1 - by0);
-    scale = Math.min(sx, sy);
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = cv.parentElement.getBoundingClientRect();
+    W = r.width; H = r.height;
+    if (W < 2 || H < 2 || !map) return;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    PAD = Math.max(10, Math.min(24, W * 0.03));
+    const [bx0, bx1] = map.bounds.x, [by0, by1] = map.bounds.y;
+    scale = Math.min((W - PAD * 2) / (bx1 - bx0), (H - PAD * 2) / (by1 - by0));
     draw();
-  });
+  }
+  const mx = (x) => PAD + x * scale;
+  const my = (y) => H - PAD - y * scale;
+  const isSmall = () => W < 380;
 
   function draw() {
-    ctx.clearRect(0, 0, W, H);
     if (!map) return;
-
-    // 구역.
+    const C = CSS_VAR;
+    ctx.clearRect(0, 0, W, H);
     ctx.lineWidth = 1;
-    for (const z of map.zones) {
+    const fs = isSmall() ? 9 : 12;
+
+    for (const z of map.zones || []) {
       const [rx, ry, rw, rh] = z.rect;
-      ctx.strokeStyle = '#30363d';
-      ctx.fillStyle = 'rgba(88,166,255,0.04)';
+      ctx.strokeStyle = C.mapLine;
+      ctx.fillStyle = 'rgba(88,120,170,0.05)';
       ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
       ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
-      ctx.fillStyle = '#6e7681';
-      ctx.font = '12px sans-serif';
-      ctx.fillText(z.label, mx(rx) + 6, my(ry + rh) + 16);
+      ctx.fillStyle = C.mapInk; ctx.font = fs + 'px sans-serif';
+      ctx.fillText(z.label, mx(rx) + 5, my(ry + rh) + fs + 3);
     }
-    // 위험구역.
-    for (const h of (map.hazards || [])) {
+    for (const h of map.hazards || []) {
       const [rx, ry, rw, rh] = h.rect;
-      ctx.strokeStyle = 'rgba(210,153,34,0.7)';
-      ctx.fillStyle = 'rgba(210,153,34,0.08)';
+      ctx.strokeStyle = 'rgba(210,153,34,0.75)';
+      ctx.fillStyle = 'rgba(210,153,34,0.10)';
       ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
       ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
     }
-
-    // 태그.
     for (const [id, t] of tags) {
+      if (!t.pos) continue;
       const px = mx(t.pos.x), py = my(t.pos.y);
-      const isAlert = id === alerting;
-      // 오차 반경(xy).
-      ctx.beginPath();
-      ctx.arc(px, py, (t.err?.xy || 0.2) * scale, 0, Math.PI * 2);
-      ctx.fillStyle = isAlert ? 'rgba(248,81,73,0.18)' : 'rgba(88,166,255,0.15)';
-      ctx.fill();
-      // 점.
-      ctx.beginPath();
-      ctx.arc(px, py, 7, 0, Math.PI * 2);
-      ctx.fillStyle = isAlert ? '#f85149' : '#58a6ff';
-      ctx.fill();
-      if (isAlert) {
-        ctx.strokeStyle = '#f85149'; ctx.lineWidth = 2; ctx.stroke();
+      const c = C[stateOf(id)], rd = isSmall() ? 5 : 7;
+      ctx.beginPath(); ctx.arc(px, py, errOf(t) * scale, 0, Math.PI * 2);
+      ctx.fillStyle = rgba(c, id === alertingTag ? 0.20 : 0.16); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, rd, 0, Math.PI * 2);
+      ctx.fillStyle = c; ctx.fill();
+      if (id === alertingTag) { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.stroke(); }
+      if (!isSmall()) {
+        ctx.fillStyle = C.mapInk; ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(nameOf(id), px + 11, py + 4);
       }
-      // 이름.
-      ctx.fillStyle = '#e6edf3';
-      ctx.font = '12px sans-serif';
-      ctx.fillText(t.name || id, px + 11, py + 4);
     }
   }
+  function rgba(hex, a) {
+    const n = parseInt(String(hex).replace('#', ''), 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
 
-  // SSE 연결.
-  const es = new EventSource('/stream');
-  const live = document.getElementById('live');
-  const statusText = document.getElementById('statusText');
-  es.onopen = () => { statusText.textContent = '스트림 연결됨'; live.style.background = 'var(--ok)'; };
-  es.onerror = () => { statusText.textContent = '재연결 중…'; live.style.background = 'var(--muted)'; };
+  // ── 좌측 태그 목록 ──
+  function renderRooms() {
+    const box = $('f1Rooms');
+    if (tags.size === 0) { box.innerHTML = '<span class="empty">태그 대기 중…</span>'; return; }
+    box.textContent = '';
+    let online = 0;
+    for (const [id, t] of tags) {
+      const st = stateOf(id);
+      if (st !== 'offline') online++;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'room';
+      const dot = document.createElement('i');
+      dot.className = 'rdot'; dot.style.background = COLOR()[st];
+      b.appendChild(dot);
+      const zone = t.pos && map ? zoneAt(t.pos.x, t.pos.y) : '—';
+      b.appendChild(document.createTextNode(nameOf(id) + ' · ' + zone));
+      b.onclick = () => { selectedTag = (selectedTag === id ? null : id); renderRooms(); draw(); };
+      box.appendChild(b);
+    }
+    $('f1Count').textContent = '환자 ' + tags.size + '명';
+    $('f1Badge').textContent = '연결 ' + online + '명';
+    $('cntOk').textContent = String(online);
+    $('cntOff').textContent = String(tags.size - online);
+  }
 
-  es.addEventListener('position', (e) => {
-    const p = JSON.parse(e.data);
-    tags.set(p.tagId, p);
-    draw();
-  });
+  function zoneAt(x, y) {
+    for (const z of (map.zones || [])) {
+      const [rx, ry, rw, rh] = z.rect;
+      if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return z.label;
+    }
+    return '미지정';
+  }
 
-  es.addEventListener('alert', (e) => {
-    const a = JSON.parse(e.data);
+  // ── 경보 처리 (spec 03 §2·§3) ──
+  const overlay = $('overlay');
+  const viewport = $('viewport');
+
+  function labelOf(type) {
+    if (type === 'fall_confirmed') return '낙상 확진';
+    if (type === 'fall_canceled') return '낙상 해제';
+    return '낙상 후보';
+  }
+
+  function onAlert(a) {
+    if (a.name) names.set(a.tagId, a.name);          // sim은 name을 실어 보냄
     if (a.type === 'fall_canceled') { clearAlert(a); return; }
-    triggerAlert(a); // fall_candidate | fall_confirmed
-  });
 
-  // 후보=주황 주목, 확진=빨강 승격. pos 없으면(accel-only) 위치 미상 표기.
-  function triggerAlert(a) {
-    const confirmed = a.type === 'fall_confirmed';
-    alerting = a.tagId;
+    alertingTag = a.tagId;
+    alertCount++;
     setState('alerting');
-    const where = a.pos ? `(${round1(a.pos.x)}, ${round1(a.pos.y)})m` : '위치 미상';
-    const label = confirmed ? '낙상 확진' : '낙상 후보';
-    document.getElementById('v3dWho').textContent = `${a.name || a.tagId} · ${label}`;
-    document.getElementById('v3dWhere').textContent = `${a.zone || '미지정'} · ${where} · 피크 ${a.peakAccel}g`;
-    document.getElementById('view3d').classList.add('on');
-    logAlert(a, label, where);
+
+    const who = nameOf(a.tagId);
+    const where = a.pos ? '(' + round1(a.pos.x) + ', ' + round1(a.pos.y) + ')m' : '위치 미상';
+    const zone = a.zone || (a.pos && map ? zoneAt(a.pos.x, a.pos.y) : '미지정');
+    const kind = labelOf(a.type);
+    const ai = (typeof a.aiScore === 'number') ? ' · AI ' + a.aiScore : '';
+
+    $('popKind').textContent = kind + ' 감지';
+    $('popWho').textContent = 'f1 · ' + zone + ' · ' + who;
+    $('popWhere').textContent = where + ' · 피크 ' + a.peakAccel + 'g' + ai;
+    $('bannerTitle').firstChild.textContent = 'f1 · ' + zone + ' · ' + who;
+    $('bannerSub').textContent = kind + ' · 피크 ' + a.peakAccel + 'g · ' + where;
+    $('scene3dWho').textContent = who + ' · ' + kind;
+
+    logAlert(a, kind, zone, where);
+    overlay.classList.add('on');
     draw();
   }
 
-  // 취소(움직임 재개): 현재 경보 태그와 같으면 idle 복귀.
   function clearAlert(a) {
-    if (alerting !== a.tagId) return;
-    alerting = null;
+    if (alertingTag !== a.tagId) return;
+    alertingTag = null;
     setState('idle');
-    document.getElementById('view3d').classList.remove('on');
+    close3d();
+    overlay.classList.remove('on');
+    markLogCleared(a.tagId);
     draw();
+    renderRooms();
   }
-
-  function round1(n) { return Math.round(n * 10) / 10; }
-
-  document.getElementById('resolveBtn').onclick = () => {
-    alerting = null;
-    setState('idle');
-    document.getElementById('view3d').classList.remove('on');
-    draw();
-  };
 
   function setState(s) {
-    const pill = document.getElementById('statePill');
-    if (s === 'alerting') { pill.textContent = 'alerting (3D auto)'; pill.classList.add('alerting'); }
+    const pill = $('statePill');
+    if (s === 'alerting') { pill.textContent = 'alerting (3D)'; pill.classList.add('alerting'); }
     else { pill.textContent = 'idle (2D)'; pill.classList.remove('alerting'); }
   }
 
-  function logAlert(a, label, where) {
-    const box = document.getElementById('alertLog');
-    if (box.querySelector('.empty')) box.innerHTML = '';
-    const time = new Date(a.ts).toLocaleTimeString('ko-KR');
+  function logAlert(a, kind, zone, where) {
+    const box = $('log');
+    const first = box.querySelector('.empty');
+    if (first) box.textContent = '';
     const row = document.createElement('div');
-    row.className = 'row';
-    const strong = document.createElement('b');
-    strong.textContent = a.name || a.tagId;
-    row.appendChild(strong);
-    row.appendChild(document.createTextNode(` ${label} · ${a.zone || '미지정'}`));
-    const t = document.createElement('div');
-    t.className = 't';
-    t.textContent = `${time} · 피크 ${a.peakAccel}g · ${where}`;
-    row.appendChild(t);
+    row.className = 'logrow fall active';
+    row.dataset.tag = a.tagId;
+    box.querySelectorAll('.logrow.active').forEach((r) => r.classList.remove('active'));
+
+    const fl = document.createElement('span'); fl.className = 'fl'; fl.textContent = 'f1';
+    const mid = document.createElement('span');
+    const who = document.createElement('div'); who.className = 'who'; who.textContent = nameOf(a.tagId);
+    const desc = document.createElement('div'); desc.className = 'desc';
+    desc.textContent = zone + ' · ' + kind + ' · ' + new Date(tsOf(a)).toLocaleTimeString('ko-KR');
+    mid.appendChild(who); mid.appendChild(desc);
+    const x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.textContent = '✕';
+    x.onclick = (e) => { e.stopPropagation(); row.remove(); if (!box.querySelector('.logrow')) box.innerHTML = '<span class="empty">아직 경보 없음</span>'; updateLogCount(); };
+
+    row.appendChild(fl); row.appendChild(mid); row.appendChild(x);
+    row.onclick = () => { selectedTag = a.tagId; open3d(); renderRooms(); draw(); };
     box.prepend(row);
+    updateLogCount();
+  }
+  function markLogCleared(tagId) {
+    document.querySelectorAll('.logrow[data-tag="' + CSS.escape(tagId) + '"]').forEach((r) => {
+      r.classList.remove('active'); r.classList.add('cleared');
+    });
+  }
+  function updateLogCount() {
+    const n = document.querySelectorAll('#log .logrow').length;
+    $('logCount').textContent = n ? n + '건' : '';
+    $('cntEvt').textContent = String(n);
   }
 
-  // 태그별 낙상 주입 버튼.
-  fetch('/tags').then(r => r.json()).then(list => {
-    const box = document.getElementById('tagButtons');
-    box.innerHTML = '';
+  // ── 3D 패널 전환 ──
+  function open3d() {
+    overlay.classList.remove('on');
+    viewport.classList.add('three-on');
+    $('viewMode').textContent = '3D 실사 뷰 · 2D 미니맵';
+    requestAnimationFrame(resize);
+  }
+  function close3d() {
+    viewport.classList.remove('three-on');
+    $('viewMode').textContent = '2D 개요';
+    requestAnimationFrame(resize);
+  }
+
+  $('popView3d').onclick = open3d;
+  $('popDismiss').onclick = () => overlay.classList.remove('on');
+  $('popClose').onclick = () => overlay.classList.remove('on');
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('on'); };
+  $('bannerClose').onclick = () => { close3d(); alertingTag = null; setState('idle'); draw(); renderRooms(); };
+  $('navToggle').onclick = () => { $('shell').classList.toggle('nav-collapsed'); requestAnimationFrame(resize); };
+  document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
+    const f = h.closest('.floor');
+    if (!f.classList.contains('pending')) f.toggleAttribute('open');
+  }));
+
+  // ── 서버 연결 ──
+  fetch('/map').then((r) => r.json()).then((m) => {
+    map = m;
+    const labels = (m.zones || []).map((z) => z.label);
+    $('f1Range').textContent = labels.length ? labels[0] + '~' + labels[labels.length - 1] : (m.name || '맵');
+    $('floorRange').textContent = '· ' + (m.name || '실시간 관제');
+    resize();
+  });
+
+  // 표시명 보강: live position에는 name이 없다.
+  fetch('/tags').then((r) => r.json()).then((list) => {
+    for (const t of list) names.set(t.id, t.name);
+    // 낙상 주입 버튼(데모 트리거)
+    const bar = $('demobar');
     for (const t of list) {
       const b = document.createElement('button');
-      b.textContent = `${t.name} (${t.id}) 낙상 주입`;
+      b.className = 'btn'; b.type = 'button'; b.textContent = t.name;
       b.onclick = () => fetch('/inject-fall?tagId=' + encodeURIComponent(t.id));
-      box.appendChild(b);
+      bar.appendChild(b);
     }
+    renderRooms();
+  }).catch(() => {});
+
+  const es = new EventSource('/stream');
+  es.onopen = () => { $('conn').classList.add('live'); $('connText').textContent = '스트림 연결됨'; };
+  es.onerror = () => { $('conn').classList.remove('live'); $('connText').textContent = '재연결 중…'; };
+
+  es.addEventListener('position', (e) => {
+    const p = JSON.parse(e.data);
+    if (p.name) names.set(p.tagId, p.name);
+    tags.set(p.tagId, p);
+    lastSeen.set(p.tagId, Date.now());
+    draw();
   });
+
+  es.addEventListener('alert', (e) => onAlert(JSON.parse(e.data)));
+
+  // 오프라인 판정·목록 갱신 주기
+  setInterval(() => { renderRooms(); draw(); }, 1000);
+  window.addEventListener('resize', resize);
+  resize();
 })();
 </script>
 </body>
