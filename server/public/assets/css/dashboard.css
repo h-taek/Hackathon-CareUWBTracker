@@ -23,6 +23,7 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .conn.live .dot { background: var(--ok); }
 .state-pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .state-pill.alerting { color: var(--alarm); border-color: var(--alarm); }
+.state-pill.resolved { color: var(--ok); border-color: var(--ok); }
 
 /* ── 본문 3열 ── */
 .shell { flex: 1; display: grid; grid-template-columns: 264px 1fr 320px; gap: 12px; padding: 12px; min-height: 0; }
@@ -126,6 +127,9 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .logrow:hover { border-color: var(--accent); }
 .logrow.active { border-color: var(--alarm); background: rgba(248,81,73,.08); }
 .logrow.fall .desc { color: var(--alarm); }
+.logrow.candidate.active { border-color: var(--warning); background: rgba(210,153,34,.09); }
+.logrow.candidate .desc { color: var(--warning); }
+.logrow.canceled .desc { color: var(--ok); }
 .logrow.cleared { opacity: .55; }
 .logrow .fl { font-weight: 700; color: var(--muted); text-align: center; }
 .logrow .who { font-weight: 600; font-size: 13px; }
@@ -136,6 +140,8 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .overlay { position: fixed; inset: 0; background: rgba(248,81,73,.22); display: none;
   align-items: flex-end; justify-content: center; z-index: 30; padding-bottom: 40px; }
 .overlay.on { display: flex; }
+.overlay[data-phase="candidate"] { background: rgba(210,153,34,.20); }
+.overlay[data-phase="canceled"] { background: rgba(63,185,80,.16); }
 .popup { width: min(460px, 92vw); background: #0e1319; border: 1px solid var(--alarm); border-radius: 14px;
   box-shadow: 0 -10px 50px rgba(0,0,0,.55); padding: 20px 22px; position: relative;
   transform: translateY(140px); opacity: 0; animation: rise .28s cubic-bezier(.2,.7,.3,1) forwards; }
@@ -146,9 +152,18 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .popup .k { font-size: 12px; color: var(--alarm); font-weight: 700; letter-spacing: .04em; }
 .popup .h { font-size: 17px; font-weight: 700; margin-top: 2px; }
 .popup .w { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.popup .time { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
 .popup .acts { display: flex; gap: 8px; margin-top: 16px; }
 .popup .acts .btn { flex: 1; text-align: center; }
 .popup .acts .primary { background: var(--alarm); border-color: var(--alarm); color: #fff; font-weight: 650; }
+.popup[data-phase="candidate"] { border-color: var(--warning); }
+.popup[data-phase="candidate"] .k { color: var(--warning); }
+.popup[data-phase="candidate"] .bell { background: rgba(210,153,34,.15); }
+.popup[data-phase="candidate"] .primary { background: var(--warning); border-color: var(--warning); color: #111; }
+.popup[data-phase="canceled"] { border-color: var(--ok); }
+.popup[data-phase="canceled"] .k { color: var(--ok); }
+.popup[data-phase="canceled"] .bell { background: rgba(63,185,80,.15); }
+.popup .btn:disabled { cursor: default; opacity: .55; }
 
 @media (prefers-reduced-motion: reduce) {
   .popup { animation: none; transform: none; opacity: 1; }

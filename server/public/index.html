@@ -6,7 +6,8 @@
 <title>돌봄시설 실시간 위치 관제</title>
 <link rel="stylesheet" href="/assets/css/base.css" />
 <link rel="stylesheet" href="/assets/css/dashboard.css" />
-<!-- 3D 패널이 쓰는 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다(plan/07). -->
+<!-- 3D 패널이 쓰는 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다(plan/07).
+     임포트 맵은 첫 모듈 스크립트보다 반드시 앞서야 한다. -->
 <script type="importmap">
 {
   "imports": {
@@ -15,7 +16,7 @@
   }
 }
 </script>
-<script src="/assets/js/dashboard.js" defer></script>
+<script src="/assets/js/dashboard.js" type="module"></script>
 </head>
 <body>
 
@@ -87,6 +88,7 @@
             <span class="badge3d">3D 실사 뷰</span>
             <span class="badge3d" id="scene3dWho" style="background:rgba(248,81,73,.18);color:#ffc7c3">—</span>
           </div>
+          <!-- 스텁 안내문·DOM 마커는 폐기: F3에서 실제 뷰어가 들어와 마커도 씬 안에서 그린다 -->
           <div class="scene-note" id="scene3dStatus"></div>
         </div>
         <div class="v2d" id="v2d">
@@ -124,19 +126,21 @@
 
 <!-- 경보 팝업 -->
 <div class="overlay" id="overlay">
-  <div class="popup">
+  <div class="popup" id="popup" role="alert" aria-live="assertive" data-phase="candidate">
     <button class="close" id="popClose" aria-label="닫기">✕</button>
     <div class="top">
-      <div class="bell">🔔</div>
+      <div class="bell" id="popIcon" aria-hidden="true">⚠️</div>
       <div>
         <div class="k" id="popKind">낙상 후보 감지</div>
         <div class="h" id="popWho">—</div>
         <div class="w" id="popWhere">—</div>
+        <div class="time" id="popTime">—</div>
       </div>
     </div>
     <div class="acts">
       <button class="btn primary" id="popView3d">3D 실사 뷰 열기</button>
-      <button class="btn" id="popDismiss">나중에</button>
+      <button class="btn" id="popAck">확인함</button>
+      <button class="btn" id="popDismiss">화면에서 닫기</button>
     </div>
   </div>
 </div>

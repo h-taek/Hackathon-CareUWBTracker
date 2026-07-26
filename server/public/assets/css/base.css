@@ -5,7 +5,7 @@
   --bg: #0b0e14; --panel: #161b22; --panel-2: #1c222b; --line: #2a2f37;
   --ink: #e6edf3; --muted: #8b949e; --faint: #5b636e;
   --accent: #58a6ff;
-  --ok: #3fb950; --offline: #8b949e; --alarm: #f85149; --sel: #58a6ff;
+  --ok: #3fb950; --offline: #8b949e; --warning: #d29922; --alarm: #f85149; --sel: #58a6ff;
   --map-bg: #f5f6f8; --map-line: #c4cad2; --map-ink: #3a414b;
   --hazard: #d29922;
   --r: 9px;
