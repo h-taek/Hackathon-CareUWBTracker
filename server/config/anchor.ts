@@ -1,5 +1,8 @@
 'use strict';
 
+// 앵커 배치 설정만 담당한다. argv 전체를 보지 않는다 —
+// 자기 플래그만 골라 넘겨주는 일은 cli.ts가 한다.
+
 export type HalfPlane = 'positive' | 'negative';
 
 export interface AnchorConfig {
@@ -18,26 +21,22 @@ const FLAG_TO_KEY = {
 
 type ConfigKey = (typeof FLAG_TO_KEY)[keyof typeof FLAG_TO_KEY];
 
-export const ANCHOR_CONFIG_USAGE = `
-사용법:
-  npm start -- \\
-    --main-anchor-id <ID> \\
-    --sub-anchor-id <ID> \\
-    --anchor-distance <미터> \\
-    --half-plane <positive|negative>
+/** 이 모듈이 소유하는 실행 인자. cli.ts가 argv를 나눌 때 쓴다(목록을 두 곳에 두지 않는다). */
+export const ANCHOR_FLAGS: readonly string[] = Object.keys(FLAG_TO_KEY);
 
-옵션:
+// 사용법의 앵커 항목. 전체 사용법은 cli.ts가 이 조각을 끼워 조립한다.
+// 앞뒤 줄바꿈만 걷어낸다 — trim()을 쓰면 첫 줄의 들여쓰기까지 깎여 정렬이 어긋난다.
+export const ANCHOR_OPTION_LINES = `
   --main-anchor-id   원점 (0,0)에 놓인 메인 앵커 ID
   --sub-anchor-id    (d,0)에 놓인 서브 앵커 ID
   --anchor-distance  두 앵커 사이 거리 d (0보다 큰 미터 값)
-  --half-plane       태그가 놓이는 기준선의 반평면
-  --help             이 도움말 출력
-`.trim();
+  --half-plane       태그가 놓이는 기준선의 반평면 (positive|negative)
+`.replace(/^\n+|\n+$/g, '');
 
-export function wantsAnchorConfigHelp(args: readonly string[]): boolean {
-  return args.includes('--help') || args.includes('-h');
-}
-
+/**
+ * 앵커 인자를 해석한다. ANCHOR_FLAGS에 없는 인자가 들어오면 던진다 —
+ * 여기까지 왔다는 건 cli.ts의 분배가 틀렸다는 뜻이라 조용히 넘기면 안 된다.
+ */
 export function parseAnchorConfig(args: readonly string[]): AnchorConfig {
   const values: Partial<Record<ConfigKey, string>> = {};
 

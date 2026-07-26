@@ -1,9 +1,9 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  ANCHOR_CONFIG_USAGE,
+  ANCHOR_FLAGS,
+  ANCHOR_OPTION_LINES,
   parseAnchorConfig,
-  wantsAnchorConfigHelp,
 } from '../../server/config/anchor.ts';
 
 const VALID_ARGS = [
@@ -71,9 +71,11 @@ test('반평면은 positive 또는 negative만 허용한다', () => {
   assert.throws(() => parseAnchorConfig(args), /positive 또는 negative/);
 });
 
-test('도움말 요청과 사용법을 제공한다', () => {
-  assert.equal(wantsAnchorConfigHelp(['--help']), true);
-  assert.equal(wantsAnchorConfigHelp(['-h']), true);
-  assert.equal(wantsAnchorConfigHelp(VALID_ARGS), false);
-  assert.match(ANCHOR_CONFIG_USAGE, /--anchor-distance/);
+test('사용법 조각과 소유 플래그 목록을 노출한다', () => {
+  assert.match(ANCHOR_OPTION_LINES, /--anchor-distance/);
+  // 목록이 두 곳으로 갈라지면 cli.ts의 argv 분배가 조용히 어긋난다.
+  assert.deepEqual([...ANCHOR_FLAGS].sort(), [
+    '--anchor-distance', '--half-plane', '--main-anchor-id', '--sub-anchor-id',
+  ]);
+  for (const flag of ANCHOR_FLAGS) assert.match(ANCHOR_OPTION_LINES, new RegExp(flag));
 });

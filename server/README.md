@@ -19,7 +19,9 @@ npm start -- \
 
 전체 옵션은 `npm start -- --help`로 확인한다.
 
-측위 소스는 `--source sim|live`로 고른다(기본 `sim`). `sim`은 시뮬레이터가 자동으로 태그를 움직이며 스트림을 방출하고, `live`는 실측 ingest(`POST /ingest`)만 `/stream`으로 내보낸다.
+측위 소스는 `--source sim|live`로 고른다(기본 `sim`). `sim`은 시뮬레이터가 자동으로 태그를 움직이며 스트림을 방출하고, `live`는 실측 ingest(`POST /ingest`)만 `/stream`으로 내보낸다. 실기기 검증은 `live`로 띄워야 시뮬 태그가 섞이지 않는다.
+
+실행 인자는 `config/cli.ts`가 소유자별로 나눠 각 설정 모듈에 넘기고, 아무도 안 가져간 인자는 거기서 한 번만 거절한다. 서버 옵션을 추가할 때 손대는 자리도 `config/cli.ts` 한 곳이다.
 
 ## 테스트
 
@@ -35,7 +37,9 @@ npm run typecheck
 ```
 server/                재사용 런타임
   server.ts            HTTP 서버 · 라우팅 · SSE 허브 · 소스 선택(조립부)
-  config/anchor.ts     필수 앵커 실행 인자 파싱 · 검증 · 도움말
+  config/cli.ts        실행 인자 전체의 소유자 · argv 분배 · 사용법 · 미지 인자 거절
+  config/argv.ts       argv를 소유자별로 나누는 도구(takeFlags)
+  config/anchor.ts     앵커 인자 파싱·검증(자기 플래그만 받는다)
   sim.ts               데모용 시뮬레이터(가짜 보행/낙상 주입)
   map.json             좌표계 범위·구역 메타
   lib/

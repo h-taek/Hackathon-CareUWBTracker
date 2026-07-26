@@ -4,11 +4,11 @@ import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import {
-  ANCHOR_CONFIG_USAGE,
-  parseAnchorConfig,
-  wantsAnchorConfigHelp,
-  type AnchorConfig,
-} from './config/anchor.ts';
+  SERVER_CONFIG_USAGE,
+  parseServerConfig,
+  wantsHelp,
+  type ServerConfig,
+} from './config/cli.ts';
 import {
   createPositionSmoother,
   DEFAULT_POSITION_WINDOW,
@@ -23,29 +23,24 @@ import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
 import { createStaticHandler } from './static/handler.ts';
 
-// 측위 소스: sim(시뮬 자동 생성) 또는 live(실측 ingest만). 기본 sim.
-type SourceMode = 'sim' | 'live';
-
 const args = process.argv.slice(2);
-if (wantsAnchorConfigHelp(args)) {
-  console.log(ANCHOR_CONFIG_USAGE);
+if (wantsHelp(args)) {
+  console.log(SERVER_CONFIG_USAGE);
   process.exit(0);
 }
 
-let anchorConfig: AnchorConfig;
+let config: ServerConfig;
 try {
-  anchorConfig = parseAnchorConfig(args);
+  config = parseServerConfig(args);
 } catch (error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`앵커 설정 오류: ${message}\n`);
-  console.error(ANCHOR_CONFIG_USAGE);
+  console.error(`실행 인자 오류: ${message}\n`);
+  console.error(SERVER_CONFIG_USAGE);
   process.exit(1);
 }
 
-const sourceMode: SourceMode =
-  args.includes('--source') && args[args.indexOf('--source') + 1] === 'live'
-    ? 'live'
-    : 'sim';
+const anchorConfig = config.anchor;
+const sourceMode = config.source;
 
 const port = Number(process.env.PORT ?? 8080);
 const map: SimMap = JSON.parse(
