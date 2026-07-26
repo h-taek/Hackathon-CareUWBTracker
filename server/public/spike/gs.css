@@ -1,0 +1,48 @@
+/* 성능 스파이크 전용 스타일. F3 본작업이 끝나면 /spike/ 폴더째 지운다. */
+
+#stage { position: fixed; inset: 0; background: #000; }
+#stage canvas { display: block; }
+
+.panel {
+  position: fixed; top: 14px; left: 14px; width: 330px; z-index: 10;
+  background: rgba(22, 27, 34, .93); backdrop-filter: blur(6px);
+  max-height: calc(100vh - 28px); overflow: auto;
+}
+.panel .body { padding: 12px 13px 14px; display: grid; gap: 9px; }
+.hint { color: var(--faint); font-size: 11px; font-weight: 400; letter-spacing: 0; }
+
+.row { display: grid; grid-template-columns: 82px 1fr; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); }
+.row select, .row input {
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 12px; width: 100%;
+}
+.row abbr { text-decoration: underline dotted; cursor: help; }
+.row.btns { grid-template-columns: 1fr 1fr; margin-top: 3px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.btn[disabled]:hover { border-color: var(--line); }
+
+.status { font-size: 12px; color: var(--muted); line-height: 1.45; min-height: 34px; }
+.status b { color: var(--ink); }
+.status.err { color: var(--alarm); }
+
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: 12px; }
+.stats dt { color: var(--faint); }
+.stats dd { margin: 0; color: var(--ink); text-align: right; }
+
+.result { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+.result th, .result td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.result th:first-child, .result td:first-child { text-align: left; color: var(--muted); }
+.result th { color: var(--faint); font-weight: 500; }
+
+.verdict { margin: 10px 0; padding: 9px 11px; border-radius: 7px; font-size: 12px; line-height: 1.5; border: 1px solid; }
+.verdict.pass { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 11%, transparent); }
+.verdict.warn { color: var(--hazard); border-color: color-mix(in srgb, var(--hazard) 45%, transparent); background: color-mix(in srgb, var(--hazard) 11%, transparent); }
+.verdict.fail { color: var(--alarm); border-color: color-mix(in srgb, var(--alarm) 45%, transparent); background: color-mix(in srgb, var(--alarm) 11%, transparent); }
+
+#hud {
+  position: fixed; right: 14px; top: 14px; z-index: 10;
+  display: flex; align-items: baseline; gap: 10px;
+  background: rgba(22, 27, 34, .93); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 8px 12px;
+}
+#hudFps { font-size: 19px; font-weight: 600; }

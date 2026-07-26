@@ -63,6 +63,9 @@ server/                재사용 런타임
     index.html         대시보드 마크업
     assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
     assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
+    assets/splat/      가우시안 스플랫 씬(git 제외 — README의 curl로 조달)
+    vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
+    spike/             웹 GS 성능 스파이크 페이지(F3 게이트용 일회성, 끝나면 폴더째 삭제)
 
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
@@ -91,3 +94,6 @@ API 라우트(`/ingest` `/stream` `/map` `/inject-fall` `/tags`)를 먼저 처�
 - 디렉터리 목록은 내주지 않고, `public/` 밖으로 나가는 경로는 거부한다.
 - 응답은 스트리밍이고 `Last-Modified` 기반 304 재검증을 한다(대용량 스플랫 대비).
 - 새 확장자를 쓰려면 `static/resolve.ts`의 MIME 표에만 한 줄 추가한다.
+- 정적 응답에는 교차출처 격리 헤더(`COOP: same-origin` / `COEP: require-corp`)가 실린다.
+  스플랫 뷰어가 `SharedArrayBuffer`로 정렬 워커에 데이터를 복사 없이 넘기기 위한 조건이다.
+  **외부 CDN 리소스를 쓰려면 이 헤더부터 재검토해야 한다** — 우리는 전부 vendor 동봉이라 무해하다.

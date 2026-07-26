@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>웹 GS 성능 스파이크 — F3 게이트</title>
+<link rel="stylesheet" href="/assets/css/base.css">
+<link rel="stylesheet" href="/spike/gs.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/three.module.min.js",
+    "@mkkellogg/gaussian-splats-3d": "/vendor/gaussian-splats-3d/gaussian-splats-3d.module.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<section class="card panel" id="controls">
+  <h2>웹 GS 성능 스파이크 <span class="hint" id="isolation">격리 확인 중</span></h2>
+  <div class="body">
+
+    <label class="row">
+      <span>씬</span>
+      <select id="scene"></select>
+    </label>
+    <label class="row" id="customRow" hidden>
+      <span>URL</span>
+      <input id="customUrl" type="text" placeholder="/assets/splat/....splat">
+    </label>
+
+    <label class="row">
+      <span>구면조화 <abbr title="Spherical Harmonics. 높을수록 보는 각도에 따른 색 변화가 살아나지만 메모리·연산이 늘어난다.">SH</abbr></span>
+      <select id="sh">
+        <option value="0" selected>0 — 색 고정(가장 가벼움)</option>
+        <option value="1">1</option>
+        <option value="2">2 — 최고 화질</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <span>정렬 워커</span>
+      <select id="shared">
+        <option value="1" selected>공유메모리(SharedArrayBuffer)</option>
+        <option value="0">복사 전달(폴백)</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <span>렌더 해상도</span>
+      <select id="dpr">
+        <option value="1" selected>기기 배율 그대로(레티나)</option>
+        <option value="0">1배(가벼움)</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <span>측정 시간</span>
+      <select id="duration">
+        <option value="10">10초</option>
+        <option value="15" selected>15초</option>
+        <option value="30">30초</option>
+      </select>
+    </label>
+
+    <div class="row btns">
+      <button class="btn" id="load">씬 로드</button>
+      <button class="btn" id="bench" disabled>측정 시작</button>
+    </div>
+
+    <div id="status" class="status">씬을 고르고 <b>씬 로드</b>를 누르세요.</div>
+
+    <dl class="stats">
+      <dt>현재 FPS</dt><dd id="mFps">—</dd>
+      <dt>스플랫 수</dt><dd id="mCount">—</dd>
+      <dt>로드 시간</dt><dd id="mLoad">—</dd>
+    </dl>
+
+    <div id="result" hidden>
+      <table class="result">
+        <thead><tr><th>구간</th><th>평균</th><th>1% 저점</th><th>최저</th></tr></thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+      <div id="verdict" class="verdict"></div>
+      <button class="btn" id="copy">결과 복사</button>
+    </div>
+
+  </div>
+</section>
+
+<div id="hud">
+  <span id="hudFps">—</span>
+  <span class="hint">드래그 회전 · 휠 줌 · 우클릭 이동</span>
+</div>
+
+<script type="module" src="/spike/gs.js"></script>
+</body>
+</html>

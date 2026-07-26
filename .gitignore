@@ -34,6 +34,11 @@ Packages/
 datasets/
 ml/datasets/
 
+# 가우시안 스플랫 에셋(수십~수백 MB, git 제외·iCloud 유지). 재조달은 server/public/assets/splat/README.md
+server/public/assets/splat/*.splat
+server/public/assets/splat/*.ply
+server/public/assets/splat/*.ksplat
+
 # --- Python (AI 학습 오프라인 툴체인) ---
 .venv-ml/
 __pycache__/

@@ -12,6 +12,14 @@ export type StaticHandler = (
   pathname: string,
 ) => boolean;
 
+// 교차출처 격리 헤더. SharedArrayBuffer를 켜야 가우시안 스플랫 뷰어가 워커 공유메모리
+// 정렬 경로를 쓴다(F3). 우리는 vendor 동봉이라 외부 출처 리소스를 하나도 안 받으므로
+// require-corp가 아무것도 깨뜨리지 않는다 — 외부 CDN을 쓰려면 이 헤더부터 재검토해야 한다.
+const ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+} as const;
+
 // 처리했으면 true, 해당 파일이 없으면 false(호출부가 404를 낸다).
 export function createStaticHandler(root: string): StaticHandler {
   const statFile = (file: string): fs.Stats | null => {
@@ -34,12 +42,17 @@ export function createStaticHandler(root: string): StaticHandler {
     // 매 요청 재검증하되 안 바뀌었으면 304. 수백 MB 스플랫 재다운로드를 막는다.
     const lastModified = stat.mtime.toUTCString();
     if (request.headers['if-modified-since'] === lastModified) {
-      response.writeHead(304, { 'Last-Modified': lastModified, 'Cache-Control': 'no-cache' });
+      response.writeHead(304, {
+        ...ISOLATION_HEADERS,
+        'Last-Modified': lastModified,
+        'Cache-Control': 'no-cache',
+      });
       response.end();
       return true;
     }
 
     response.writeHead(200, {
+      ...ISOLATION_HEADERS,
       'Content-Type': contentTypeOf(file),
       'Content-Length': String(stat.size),
       'Last-Modified': lastModified,
