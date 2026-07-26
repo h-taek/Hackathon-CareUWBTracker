@@ -20,11 +20,19 @@
 
 | 구간 | 카메라 | 왜 |
 |---|---|---|
-| 궤도 | 씬 밖에서 한 바퀴 | 화면에 스플랫이 가장 많이 들어오는 부하 |
-| 실내 | 씬 한가운데서 제자리 회전 | 스플랫이 겹쳐 그려지는 부하. **관제 화면이 이쪽에 가깝다** |
+| 부감 | 씬 위에서 45°로 내려다보며 한 바퀴 | 화면에 스플랫이 가장 많이 들어오는 부하. **관제 화면이 쓸 시점** |
+| 실내 | 씬 한가운데서 제자리 회전 | 스플랫이 겹쳐 그려지는(오버드로) 부하 |
 
-판정 기준은 평균이 아니라 **1% 저점**(가장 느린 1% 프레임의 평균 fps)이다. 데모 중 한 번
-끊기면 평균이 좋아도 소용없기 때문이다.
+수평으로 물러나는 궤도가 아니라 **부감**인 이유: 실내 씬은 벽이 중심을 둘러싸고 있어 수평으로
+물러나면 카메라가 벽 안에 갇힌다. 위에서 비스듬히 봐야 방이 보이고, 그게 관제 시점이기도 하다.
+
+카메라 거리는 배수를 감으로 곱하지 않고 **시야각에서 계산**한다(`fitDistance`). 멀면 스플랫이
+작게 그려져 측정이 후해지고, 가까우면 벽에 박힌다. 씬 크기도 전체 바운딩박스가 아니라 스플랫
+중심 표본의 **10~90 백분위**로 잡는다 — 야외 씬은 배경이 사방으로 퍼져 있어 전체 박스를 쓰면
+카메라가 터무니없이 멀어진다.
+
+판정 기준은 평균이 아니라 **1% 저점**(가장 느린 1% 프레임의 평균 fps)이다. 평균은 어차피
+모니터 주사율(보통 60)에 막혀 변별력이 없고, 데모 중 한 번 끊기면 평균이 좋아도 소용없다.
 
 - **45fps 이상** — 합격, 웹 GS로 진행
 - **30~45fps** — 조건부. SH 0 · 1배 해상도로 낮춰 여유 확보
@@ -38,6 +46,35 @@
   쓰면 워커에 데이터를 복사하지 않아 빠르다. 쓰려면 서버가 교차출처 격리 헤더(COOP/COEP)를
   보내야 하고, 이는 `server/static/handler.ts`에서 켜져 있다. 패널 제목 옆에 활성 여부가 뜬다.
 - **렌더 해상도** — 레티나는 픽셀이 4배라 그만큼 무겁다. 1배로 낮추는 게 가장 확실한 여유다.
+
+## 함정 — `gpuAcceleratedSort`는 켜지 마라
+
+라이브러리 README 예제에는 `gpuAcceleratedSort: true`가 있지만 **0.4.7에서 켜면 화면이
+검게 나온다.** 이 모드에서는 스플랫 좌표를 정렬 워커에 올리는 경로(`preSortMessages`)가 통째로
+생략돼, 워커가 "그릴 스플랫 0개"를 돌려주고 `geometry.instanceCount`가 0이 된다. 오류도 경고도
+안 나고 FPS 카운터는 60을 찍으므로 원인 찾기가 고약하다. 라이브러리 기본값(`false`)을 쓴다.
+
+증상 구분법: 로드 지표(스플랫 수·로드 시간)는 정상인데 화면만 까맣다면 이걸 의심한다.
+`spike.viewer.splatMesh.geometry.instanceCount`가 0이면 확정이다.
+
+## 자동 점검
+
+Playwright가 devDependency로 깔려 있다(브라우저는 기본 경로 `~/Library/Caches/ms-playwright`).
+페이지는 `globalThis.spike`로 내부 상태(`viewer`·`loaded`·`benching`·`result`)를 노출하므로
+스크립트에서 로드·측정·판정을 통째로 자동화할 수 있다.
+
+```js
+await page.goto('http://localhost:8080/spike/gs');
+await page.selectOption('#scene', '/assets/splat/room.splat');
+await page.click('#load');
+await page.waitForFunction(() => globalThis.spike?.loaded !== null);
+await page.click('#bench');
+await page.waitForFunction(() => globalThis.spike?.result !== null && !globalThis.spike.benching);
+console.log(await page.evaluate(() => globalThis.spike.result));
+```
+
+단, **자동 점검 숫자는 게이트 근거가 아니다.** 헤드리스/자동화 브라우저는 창 크기·픽셀 배율·
+GPU 경로가 실제 사용 환경과 다르다. 배선이 살아 있는지 확인하는 용도로만 쓴다.
 
 ## 게이트 결과
 

@@ -89,7 +89,10 @@ async function loadScene() {
     cameraUp: CAMERA_UP,
     ignoreDevicePixelRatio: !options.dpr,
     sharedMemoryForWorkers: options.shared,
-    gpuAcceleratedSort: true,
+    // gpuAcceleratedSort는 켜면 안 된다(0.4.7 기준). 이 모드에서는 스플랫 좌표를 정렬 워커에
+    // 올리는 경로가 통째로 생략돼(`preSortMessages`), 워커가 "그릴 스플랫 0개"를 돌려주고
+    // 화면이 검게 남는다. 오류도 안 난다 — 라이브러리 기본값(false)을 그대로 쓴다.
+    gpuAcceleratedSort: false,
     dynamicScene: false,
     sphericalHarmonicsDegree: options.sh,
     renderMode: GS.RenderMode.Always,   // OnChange면 정지 화면에서 프레임을 안 그려 측정이 왜곡된다
@@ -123,8 +126,7 @@ async function loadScene() {
     splatCount: mesh.getSplatCount(),
     center,
     height: size.y,
-    // 씬 전체가 화면에 들어오는 거리. 너무 붙으면 스플랫 수가 적게 잡혀 측정이 후해진다.
-    orbitRadius: Math.max(0.5 * Math.max(size.x, size.z) * 1.8, 1),
+    orbitRadius: fitDistance(size, viewer.camera.fov),
   };
 
   ui.count.textContent = fmtInt(loaded.splatCount);
@@ -132,7 +134,7 @@ async function loadScene() {
   setStatus('로드 완료. 마우스로 둘러보거나 <b>측정 시작</b>을 누르세요.');
   ui.load.disabled = ui.bench.disabled = false;
 
-  placeCamera(0, 'orbit');
+  placeCamera(0, 'overview');
   frameHandle = requestAnimationFrame(frame);
 }
 
@@ -150,9 +152,11 @@ function measureExtent(mesh) {
     axes[2].push(point.z);
   }
 
+  // 10~90 백분위. 야외 씬은 배경이 사방으로 퍼져 있어 컷이 얕으면 카메라가 멀찍이 물러나고,
+  // 그러면 씬이 화면에서 작아져 프레임이 실제보다 후하게 나온다.
   const bounds = axes.map((values) => {
     values.sort((a, b) => a - b);
-    const cut = Math.floor(values.length * 0.025);
+    const cut = Math.floor(values.length * 0.1);
     return [values[cut], values[values.length - 1 - cut]];
   });
   return {
@@ -161,9 +165,21 @@ function measureExtent(mesh) {
   };
 }
 
+// 씬이 화면에 꽉 차는 거리. 감으로 배수를 곱하면 씬마다 너무 멀거나(스플랫이 작게 그려져
+// 측정이 후해짐) 벽 안에 박힌다 — 시야각에서 직접 구한다.
+function fitDistance(size, fovDegrees) {
+  const halfExtent = 0.5 * Math.max(size.x, size.y, size.z);
+  const distance = halfExtent / Math.tan((fovDegrees * Math.PI) / 360);
+  return Math.max(distance * 1.15, 1);
+}
+
 // ── 카메라 주행 ──────────────────────────────────────────────────────────────
-// 두 구간을 잰다. 궤도=씬 전체가 프레임에 들어오는 최대 스플랫 부하,
-// 실내=씬 안에서 둘러보는 최대 겹침(오버드로) 부하. 관제 화면은 실내 쪽에 가깝다.
+// 두 구간을 잰다. 부감=씬 전체가 프레임에 들어오는 최대 스플랫 부하,
+// 실내=씬 안에서 둘러보는 최대 겹침(오버드로) 부하. 데모는 이 둘 사이에 있다.
+
+// 부감 시점의 올려다본 각도. 실내 씬은 벽이 중심을 둘러싸고 있어 수평으로 물러나면 벽 안에
+// 갇힌다 — 위에서 비스듬히 내려다봐야 방이 보이고, 관제 화면이 쓸 시점도 이쪽이다.
+const OVERVIEW_ELEVATION = Math.PI / 4;
 
 function placeCamera(progress, mode) {
   const angle = progress * Math.PI * 2;
@@ -171,12 +187,13 @@ function placeCamera(progress, mode) {
   const camera = viewer.camera;
   const target = new THREE.Vector3();
 
-  if (mode === 'orbit') {
+  if (mode === 'overview') {
     // cameraUp이 -y라 "위"는 y를 빼는 방향이다.
+    const radius = orbitRadius * 1.5;
     camera.position.set(
-      center.x + orbitRadius * Math.cos(angle),
-      center.y - height * 0.25,
-      center.z + orbitRadius * Math.sin(angle),
+      center.x + radius * Math.cos(OVERVIEW_ELEVATION) * Math.cos(angle),
+      center.y - radius * Math.sin(OVERVIEW_ELEVATION),
+      center.z + radius * Math.cos(OVERVIEW_ELEVATION) * Math.sin(angle),
     );
     target.copy(center);
   } else {
@@ -249,7 +266,7 @@ function stepBench(now) {
 function startBench() {
   const durationMs = Number(ui.duration.value) * 1000;
   const segments = [
-    { mode: 'orbit', label: '궤도(씬 전체)', deltas: [] },
+    { mode: 'overview', label: '부감(씬 전체)', deltas: [] },
     { mode: 'inside', label: '실내(둘러보기)', deltas: [] },
   ];
   bench = {
@@ -369,3 +386,11 @@ if (self.crossOriginIsolated) {
 }
 
 addEventListener('beforeunload', () => void disposeViewer());
+
+// 자동 점검(Playwright)이 내부 상태를 들여다보기 위한 창구. 스파이크 페이지 전용.
+globalThis.spike = {
+  get viewer() { return viewer; },
+  get loaded() { return loaded; },
+  get benching() { return bench !== null; },
+  get result() { return lastResult; },
+};
