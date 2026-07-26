@@ -44,12 +44,34 @@ export interface SimAlert {
   zone: string;
 }
 
+// 데모 각본. 실제 감지기는 후보를 낸 뒤 무동작이 이어지면 확진, 도중 움직이면 해제한다
+// (04 §3). 주입 버튼은 감지기를 거치지 않으므로 그 흐름을 여기서 대신 재생한다.
+export type FallScenario = 'confirm' | 'cancel';
+
+// 확진까지 5초는 감지기 기본값 immobilityMs와 같은 값이다(detection/fall.ts).
+// 화면에서 보는 타이밍이 실제 동작과 어긋나면 데모가 거짓말을 하는 셈이라 맞춰 둔다.
+const SCENARIO_DELAY_MS: Record<FallScenario, number> = {
+  confirm: 5000,
+  cancel: 3000,
+};
+
+const FOLLOW_UP: Record<FallScenario, { type: string; confidence: string }> = {
+  confirm: { type: 'fall_confirmed', confidence: 'confirmed' },
+  cancel: { type: 'fall_canceled', confidence: 'cleared' },
+};
+
+export function isFallScenario(value: unknown): value is FallScenario {
+  return value === 'confirm' || value === 'cancel';
+}
+
 export class Simulator extends EventEmitter {
   map: SimMap;
   bounds: { x: [number, number]; y: [number, number] };
   timer: ReturnType<typeof setInterval> | null;
   seq: number;
   tags: SimTagState[];
+  /** 태그별 후속 이벤트 예약. 같은 태그에 다시 주입하면 이전 각본은 버린다 */
+  followUps: Map<string, ReturnType<typeof setTimeout>>;
 
   constructor(map: SimMap) {
     super();
@@ -57,6 +79,7 @@ export class Simulator extends EventEmitter {
     this.bounds = map.bounds;
     this.timer = null;
     this.seq = 0;
+    this.followUps = new Map();
 
     // 가짜 입주자 태그. 각자 맵 안을 완만히 배회한다.
     const [x0, x1] = this.bounds.x;
@@ -133,26 +156,62 @@ export class Simulator extends EventEmitter {
   }
 
   // 낙상 주입 -> spec 03 2절 경보 스키마 발행.
-  injectFall(tagId: string): SimAlert {
+  // 후보를 즉시 내고, 각본에 따라 확진(5초) 또는 해제(3초)를 뒤이어 낸다.
+  injectFall(tagId: string, scenario: FallScenario = 'confirm'): SimAlert {
     const tag = this.tags.find((t) => t.id === tagId) ?? this.tags[0];
+    // 확진 각본은 오래 쓰러져 있고, 해제 각본은 곧 일어나 다시 걷는다.
+    // 2D 마커의 움직임이 경보 문구와 어긋나면 화면이 거짓말을 한다.
     tag.fallen = true;
-    tag.fallTimer = 8; // 8초간 정지(데모 후 자동 회복)
+    tag.fallTimer = scenario === 'confirm' ? 12 : SCENARIO_DELAY_MS.cancel / 1000;
 
-    const alert: SimAlert = {
+    const peakAccel = round(rand(2.8, 4.2)); // 충격 피크(g)
+    const alert = this.makeAlert(tag, 'fall_candidate', 'candidate', peakAccel);
+    this.emit('alert', alert);
+    this.scheduleFollowUp(tag, scenario, peakAccel);
+    return alert;
+  }
+
+  // 같은 태그에 각본이 겹치면 나중 것만 남긴다. 안 그러면 해제 뒤에 옛 확진이 날아와
+  // 대시보드가 해제된 경보를 되살린다.
+  private scheduleFollowUp(tag: SimTagState, scenario: FallScenario, peakAccel: number): void {
+    this.cancelFollowUp(tag.id);
+    const { type, confidence } = FOLLOW_UP[scenario];
+    const timer = setTimeout(() => {
+      this.followUps.delete(tag.id);
+      if (scenario === 'cancel') tag.fallen = false; // 움직임 재개 = 해제 사유
+      this.emit('alert', this.makeAlert(tag, type, confidence, peakAccel));
+    }, SCENARIO_DELAY_MS[scenario]);
+    timer.unref?.(); // 예약이 남아 프로세스가 안 끝나는 일이 없게
+    this.followUps.set(tag.id, timer);
+  }
+
+  private cancelFollowUp(tagId: string): void {
+    const pending = this.followUps.get(tagId);
+    if (pending) clearTimeout(pending);
+    this.followUps.delete(tagId);
+  }
+
+  // eventId는 매번 새로 뽑는다. 대시보드가 eventId로 중복을 거르므로(alert-state.js)
+  // 후속 이벤트가 같은 ID를 쓰면 통째로 무시된다.
+  private makeAlert(
+    tag: SimTagState,
+    type: string,
+    confidence: string,
+    peakAccel: number,
+  ): SimAlert {
+    return {
       eventId: `evt-${++this.seq}-${Date.now()}`,
       tagId: tag.id,
       name: tag.name,
-      type: 'fall_candidate',
+      type,
       ts: Date.now(),
       trigger: 'imu_accel',
       freefall: false,
-      peakAccel: round(rand(2.8, 4.2)), // 충격 피크(g)
+      peakAccel,
       pos: { x: round(tag.x), y: round(tag.y), z: 1.0 },
-      confidence: 'candidate',
+      confidence,
       zone: this.zoneAt(tag.x, tag.y),
     };
-    this.emit('alert', alert);
-    return alert;
   }
 
   start(hz = 5): void {
@@ -164,6 +223,8 @@ export class Simulator extends EventEmitter {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const timer of this.followUps.values()) clearTimeout(timer);
+    this.followUps.clear();
   }
 }
 

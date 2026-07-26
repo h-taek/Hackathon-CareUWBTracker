@@ -111,6 +111,12 @@
       </div>
       <div class="demobar" id="demobar">
         <span class="hint">낙상 주입:</span>
+        <!-- 각본 선택. 클릭 한 번으로 후보 다음 단계까지 재생된다(server/sim.ts) -->
+        <select id="fallScenario" aria-label="낙상 주입 각본">
+          <option value="confirm">확진 시나리오 · 후보 → 5초 후 확진</option>
+          <option value="cancel">자동 해제 시나리오 · 후보 → 3초 후 해제</option>
+        </select>
+        <!-- 태그 버튼은 /tags 응답으로 dashboard.js가 채운다 -->
       </div>
     </div>
   </div>

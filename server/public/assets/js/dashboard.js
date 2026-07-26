@@ -384,12 +384,14 @@ import {
   // 표시명 보강: live position에는 name이 없다.
   fetch('/tags').then((r) => r.json()).then((list) => {
     for (const t of list) names.set(t.id, t.name);
-    // 낙상 주입 버튼(데모 트리거)
+    // 낙상 주입 버튼(데모 트리거). 각본은 옆 드롭다운이 정한다 — 클릭 한 번에
+    // 후보부터 확진(또는 해제)까지 서버가 순서대로 흘려준다.
     const bar = $('demobar');
     for (const t of list) {
       const b = document.createElement('button');
       b.className = 'btn'; b.type = 'button'; b.textContent = t.name;
-      b.onclick = () => fetch('/inject-fall?tagId=' + encodeURIComponent(t.id));
+      b.onclick = () => fetch('/inject-fall?tagId=' + encodeURIComponent(t.id)
+        + '&scenario=' + encodeURIComponent($('fallScenario').value));
       bar.appendChild(b);
     }
     renderRooms();

@@ -16,7 +16,7 @@ import {
 } from './positioning/smoother.ts';
 import { handleIngest } from './ingest/endpoint.ts';
 import { createPositioningHandler } from './positioning/handler.ts';
-import { Simulator, type SimTag, type SimMap } from './sim.ts';
+import { Simulator, isFallScenario, type SimTag, type SimMap } from './sim.ts';
 import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ingest-log.ts';
 import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
 import { createCascadeDetector } from './detection/cascade.ts';
@@ -100,12 +100,16 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
   return position;
 }
 
-// sim 모드에서만 시뮬 스트림을 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
+// 측위 스트림은 sim 모드에서만 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
 if (sourceMode === 'sim') {
   sim.on('position', (position: unknown) => broadcast('position', position));
-  sim.on('alert', (alert: unknown) => broadcast('alert', alert));
   sim.start(5);
 }
+
+// 낙상 주입은 소스와 무관하게 살려둔다. 손으로 누르는 데모 트리거라 실측 위치를 보면서
+// 경보 UI만 확인하고 싶은 상황이 실제로 생긴다. 예전에는 이 구독이 sim 모드 안에 있어
+// live로 띄우면 버튼이 성공 응답을 주면서 아무 일도 안 했다 — 가장 나쁜 조합이다.
+sim.on('alert', (alert: unknown) => broadcast('alert', alert));
 
 function sendJson(response: ServerResponse, value: unknown, status = 200): void {
   response.writeHead(status, {
@@ -141,8 +145,12 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   }
   if (pathname === '/map') return sendJson(response, map);
   if (pathname === '/inject-fall') {
-    const alert = sim.injectFall(url.searchParams.get('tagId') ?? '');
-    return sendJson(response, { ok: true, alert });
+    const requested = url.searchParams.get('scenario') ?? 'confirm';
+    if (!isFallScenario(requested)) {
+      return sendJson(response, { ok: false, error: 'scenario는 confirm 또는 cancel이어야 합니다.' }, 400);
+    }
+    const alert = sim.injectFall(url.searchParams.get('tagId') ?? '', requested);
+    return sendJson(response, { ok: true, scenario: requested, alert });
   }
   if (pathname === '/tags') {
     return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));

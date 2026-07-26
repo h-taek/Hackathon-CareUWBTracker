@@ -115,6 +115,13 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .demobar { display: flex; gap: 8px; padding: 0 14px 12px; flex-wrap: wrap; align-items: center; }
 .demobar .btn { font-size: 12px; padding: 6px 11px; }
 .demobar .hint { color: var(--faint); font-size: 11.5px; }
+/* 각본 선택. .btn과 높이·톤을 맞춘다 — 데모바에서 나란히 서는 유일한 폼 요소다 */
+.demobar select {
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.demobar select:hover { border-color: var(--accent); }
+.demobar select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 알림 로그 */
 .col-right { min-height: 0; }
@@ -163,6 +170,8 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .popup[data-phase="canceled"] { border-color: var(--ok); }
 .popup[data-phase="canceled"] .k { color: var(--ok); }
 .popup[data-phase="canceled"] .bell { background: rgba(63,185,80,.15); }
+/* 해제 상태에서 주 버튼만 붉게 남으면 "아직 위급하다"로 읽힌다. 단계마다 .primary까지 맞춘다. */
+.popup[data-phase="canceled"] .primary { background: var(--ok); border-color: var(--ok); color: #08210d; }
 .popup .btn:disabled { cursor: default; opacity: .55; }
 
 @media (prefers-reduced-motion: reduce) {

@@ -23,6 +23,8 @@ npm start -- \
 
 실행 인자는 `config/cli.ts`가 소유자별로 나눠 각 설정 모듈에 넘기고, 아무도 안 가져간 인자는 거기서 한 번만 거절한다. 서버 옵션을 추가할 때 손대는 자리도 `config/cli.ts` 한 곳이다.
 
+낙상 주입은 `GET /inject-fall?tagId=<ID>&scenario=confirm|cancel`이다. `confirm`은 후보 다음 5초 뒤 확진을, `cancel`은 3초 뒤 해제를 이어서 낸다(기본 `confirm`). 감지기를 거치지 않는 화면 검증용 트리거라 측위 소스와 무관하게 동작한다.
+
 ## 테스트
 
 ```bash
