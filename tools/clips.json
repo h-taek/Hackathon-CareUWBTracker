@@ -1,0 +1,33 @@
+{
+  "note": "server/inject/clips/*.json 생성 레시피. 어떤 trial을 왜 골랐는지가 여기 남는다. 재생성: node tools/cli.ts clip <ml/datasets/_normalized/falls_all_50hz.csv>",
+  "outDir": "server/inject/clips",
+  "recipes": [
+    {
+      "file": "01-fall-confirmed.json",
+      "id": "fall-confirmed",
+      "label": "낙상 확진 · 걷다 미끄러져 옆으로 넘어짐",
+      "summary": "실제 낙상 신호. 고전 상태머신이 후보를 내고 AI가 통과시킨 뒤, 무동작 5초가 이어져 확진까지 간다.",
+      "activityLabel": "Lateral fall while walking caused by a slip",
+      "select": { "dataset": "SisFall", "subject": "SisFall:SA14", "activity": "F03", "trial": "R01", "placement": "waist" },
+      "why": "후보→확진이 한 번에 깔끔하게 나는 몇 안 되는 trial. 넘어진 뒤 5초 이상 움직이지 않아 확진 조건을 실제로 만족한다."
+    },
+    {
+      "file": "02-fall-canceled.json",
+      "id": "fall-canceled",
+      "label": "자동 해제 · 넘어졌다가 다시 일어남",
+      "summary": "충격은 낙상이 맞지만 곧 다시 움직여 감지기가 스스로 경보를 거둔다. 각본이 아니라 감지기의 해제 판정이다.",
+      "activityLabel": "Fall backward while walking caused by a slip",
+      "select": { "dataset": "SisFall", "subject": "SisFall:SA04", "activity": "F02", "trial": "R04", "placement": "waist" },
+      "why": "후보와 해제 사이가 4.9초로, 공개 데이터셋 통틀어 해제 판정을 화면에서 알아볼 수 있는 드문 간격이다(대부분 0.5초 안에 끝나 깜빡이고 만다)."
+    },
+    {
+      "file": "03-false-alarm.json",
+      "id": "false-alarm",
+      "label": "헛경보 기각 · 일어서려다 의자에 털썩",
+      "summary": "고전 감지기만 있으면 낙상 확진까지 가는 일상 동작. AI 2단계가 후보 단계에서 기각해 경보가 아예 안 나간다.",
+      "activityLabel": "Sitting a moment, trying to get up, and collapse into a chair",
+      "select": { "dataset": "SisFall", "subject": "SisFall:SA01", "activity": "D11", "trial": "R01", "placement": "waist" },
+      "why": "낙상이 아닌데도 고전 단독으로는 fall_confirmed까지 가는 trial. 캐스케이드를 넣은 이유를 한 클립으로 보여준다."
+    }
+  ]
+}

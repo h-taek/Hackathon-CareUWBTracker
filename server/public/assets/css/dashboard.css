@@ -115,13 +115,21 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .demobar { display: flex; gap: 8px; padding: 0 14px 12px; flex-wrap: wrap; align-items: center; }
 .demobar .btn { font-size: 12px; padding: 6px 11px; }
 .demobar .hint { color: var(--faint); font-size: 11.5px; }
-/* 각본 선택. .btn과 높이·톤을 맞춘다 — 데모바에서 나란히 서는 유일한 폼 요소다 */
+/* 클립 선택. .btn과 높이·톤을 맞춘다 — 데모바에서 나란히 서는 유일한 폼 요소다 */
 .demobar select {
   background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12px; cursor: pointer;
+  max-width: 100%;
 }
 .demobar select:hover { border-color: var(--accent); }
 .demobar select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 주입 상태. 클립 재생은 10초쯤 걸리고 그동안 화면이 조용하다 — 여기가 없으면
+   버튼이 고장 난 것처럼 보인다. 재생 중에는 무엇이 흐르는지, 끝나면 무엇이 나왔는지 적는다. */
+.demostatus { padding: 0 14px 12px; font-size: 11.5px; color: var(--faint); line-height: 1.5; min-height: 17px; }
+.demostatus.on { color: var(--muted); }
+.demostatus b { color: var(--ink); font-weight: 600; }
+.demostatus .src { color: var(--faint); }
 
 /* 알림 로그 */
 .col-right { min-height: 0; }

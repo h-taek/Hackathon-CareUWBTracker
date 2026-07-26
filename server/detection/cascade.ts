@@ -19,11 +19,20 @@ interface ModelInstance {
   predict?: (vec: number[]) => number;
 }
 
+export interface RejectionInfo {
+  tagId: string;
+  aiScore: number;
+  threshold: number;
+  peakAccel: number;
+}
+
 export interface CascadeOptions extends FallDetectorOptions {
   model?: ModelInstance | string | Record<string, unknown> | null;
   aiThreshold?: number;
   aiEnabled?: boolean;
   gravity?: number;
+  /** AI가 후보를 기각할 때 부른다. 기각은 밖에서 안 보이므로 이게 유일한 흔적이다 */
+  onReject?: (info: RejectionInfo) => void;
 }
 
 interface AccelBuffer {
@@ -86,6 +95,14 @@ export function createCascadeDetector(options: CascadeOptions = {}) {
         e.aiScore = Math.round(score * 1000) / 1000;
         if (score < threshold) {
           // AI 기각: candidate 미전파 + 고전 상태 리셋(후속 confirmed 차단).
+          // 기각은 아무 흔적을 안 남기면 "감지기가 죽었다"와 구분이 안 된다.
+          // 워치를 떨어뜨렸는데 화면이 조용할 때, 이 콜백이 유일한 단서다.
+          options.onReject?.({
+            tagId: payload.tagId,
+            aiScore: e.aiScore as number,
+            threshold,
+            peakAccel: e.peakAccel,
+          });
           classical.reset(payload.tagId);
           continue;
         }

@@ -15,8 +15,12 @@ import {
   type PositionRecord,
 } from './positioning/smoother.ts';
 import { handleIngest } from './ingest/endpoint.ts';
+import { validateIngest, IngestValidationError } from './ingest/validate.ts';
 import { createPositioningHandler } from './positioning/handler.ts';
-import { Simulator, isFallScenario, type SimTag, type SimMap } from './sim.ts';
+import { rangesForPoint } from './positioning/to-ranges.ts';
+import { loadClips, clipSummary } from './inject/clip.ts';
+import { createInjector, ClipNotFoundError, TagNotFoundError } from './inject/injector.ts';
+import { Simulator, type SimTag, type SimMap } from './sim.ts';
 import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ingest-log.ts';
 import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
 import { createCascadeDetector } from './detection/cascade.ts';
@@ -54,7 +58,13 @@ const fallDetector = (() => {
     return createFallDetector(optionsFromEnv());
   }
   try {
-    const detector = createCascadeDetector(optionsFromEnv());
+    const detector = createCascadeDetector({
+      ...optionsFromEnv(),
+      // 기각은 스트림에 아무것도 안 내보내므로 로그가 유일한 흔적이다.
+      onReject: ({ tagId, aiScore, threshold, peakAccel }) => {
+        console.log(`[fall] 기각 ${tagId} peak=${peakAccel}g ai=${aiScore} (임계 ${threshold}) — 낙상 아님으로 판정`);
+      },
+    });
     console.log('[fall] 2단계 캐스케이드(고전+LightGBM) 모드');
     return detector;
   } catch (error: unknown) {
@@ -106,10 +116,40 @@ if (sourceMode === 'sim') {
   sim.start(5);
 }
 
-// 낙상 주입은 소스와 무관하게 살려둔다. 손으로 누르는 데모 트리거라 실측 위치를 보면서
-// 경보 UI만 확인하고 싶은 상황이 실제로 생긴다. 예전에는 이 구독이 sim 모드 안에 있어
-// live로 띄우면 버튼이 성공 응답을 주면서 아무 일도 안 했다 — 가장 나쁜 조합이다.
-sim.on('alert', (alert: unknown) => broadcast('alert', alert));
+// 데모 주입기 — 데이터셋 클립을 ingest 프레임으로 되돌려 /ingest와 같은 길로 흘린다.
+// 소스 모드와 무관하게 동작한다. 주입된 프레임은 그 자체가 ingest라, live 모드에서도
+// 실측 프레임과 나란히 흐르는 게 맞다.
+const clips = loadClips(path.join(import.meta.dirname, 'inject', 'clips'));
+const injector = createInjector({
+  clips,
+  gravity: DEFAULT_GRAVITY,
+  rangesFor: (tagId) => {
+    const point = sim.positionOf(tagId);
+    return point ? rangesForPoint(point, anchorConfig) : null;
+  },
+  // 실측 워치가 보내는 것과 같은 검증을 통과시킨다. 여기서 걸리면 클립이나 거리 합성이
+  // spec 03 스키마를 벗어난 것이다. 타이머 안이라 그냥 던지면 서버가 죽으므로,
+  // 크게 남기고 그 재생만 끊는다.
+  onFrame: (frame) => {
+    try {
+      logAndPosition(validateIngest(frame) as unknown as IngestPayload);
+    } catch (error: unknown) {
+      if (!(error instanceof IngestValidationError)) throw error;
+      console.error(`[inject] ingest 스키마 위반으로 재생 중단: ${error.issues.join('; ')}`);
+      injector.stop(frame.tagId);
+    }
+  },
+  onStart: (tagId, clip) => {
+    sim.freeze(tagId);
+    // 앞선 재생이 남긴 감지기 상태(COOLDOWN 등)를 지운다. 새 클립은 새 상황이다.
+    fallDetector.reset(tagId);
+    console.log(`[inject] ${tagId} <- ${clip.id} (${clip.source.dataset} ${clip.source.activity}/${clip.source.trial}, ${clip.samples.ax.length}샘플)`);
+  },
+  onEnd: (tagId, clip, completed) => {
+    sim.unfreeze(tagId);
+    console.log(`[inject] ${tagId} ${completed ? '재생 끝' : '중단'} ${clip.id}`);
+  },
+});
 
 function sendJson(response: ServerResponse, value: unknown, status = 200): void {
   response.writeHead(status, {
@@ -144,13 +184,21 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     return;
   }
   if (pathname === '/map') return sendJson(response, map);
+  if (pathname === '/clips') return sendJson(response, clips.map(clipSummary));
   if (pathname === '/inject-fall') {
-    const requested = url.searchParams.get('scenario') ?? 'confirm';
-    if (!isFallScenario(requested)) {
-      return sendJson(response, { ok: false, error: 'scenario는 confirm 또는 cancel이어야 합니다.' }, 400);
+    // 경보는 응답에 담지 않는다. 담을 수가 없다 — 클립을 다 흘리고 나서야 감지기가
+    // 판정하고, 그 결과는 /stream으로 나간다. 응답은 "무엇을 얼마나 재생하는지"까지다.
+    const clipId = url.searchParams.get('clip') ?? clips[0].id;
+    const tagId = url.searchParams.get('tagId') ?? '';
+    try {
+      const handle = injector.start(tagId, clipId);
+      return sendJson(response, { ok: true, ...handle });
+    } catch (error: unknown) {
+      if (error instanceof ClipNotFoundError || error instanceof TagNotFoundError) {
+        return sendJson(response, { ok: false, error: error.message }, 400);
+      }
+      throw error;
     }
-    const alert = sim.injectFall(url.searchParams.get('tagId') ?? '', requested);
-    return sendJson(response, { ok: true, scenario: requested, alert });
   }
   if (pathname === '/tags') {
     return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));
@@ -163,11 +211,15 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
 });
 
 server.listen(port, () => {
-  console.log(`시물 스트림 서버 실행: http://localhost:${port}`);
-  console.log(`  대시보드   http://localhost:${port}/`);
-  console.log(`  SSE 스트림 http://localhost:${port}/stream`);
-  console.log(`  ingest     POST http://localhost:${port}/ingest`);
+  // PORT=0이면 OS가 포트를 고른다. 요청값을 그대로 찍으면 "localhost:0"이라고 알려주게 된다.
+  const address = server.address();
+  const shown = typeof address === 'object' && address !== null ? address.port : port;
+  console.log(`시물 스트림 서버 실행: http://localhost:${shown}`);
+  console.log(`  대시보드   http://localhost:${shown}/`);
+  console.log(`  SSE 스트림 http://localhost:${shown}/stream`);
+  console.log(`  ingest     POST http://localhost:${shown}/ingest`);
   console.log(`  앵커       ${anchorConfig.mainAnchorId} (0,0) / ${anchorConfig.subAnchorId} (${anchorConfig.anchorDistance},0), ${anchorConfig.halfPlane}`);
   console.log(`  스무딩     태그별 최근 ${DEFAULT_POSITION_WINDOW}개 좌표 이동평균`);
+  console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
 });

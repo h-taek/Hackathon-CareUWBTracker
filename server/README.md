@@ -23,7 +23,13 @@ npm start -- \
 
 실행 인자는 `config/cli.ts`가 소유자별로 나눠 각 설정 모듈에 넘기고, 아무도 안 가져간 인자는 거기서 한 번만 거절한다. 서버 옵션을 추가할 때 손대는 자리도 `config/cli.ts` 한 곳이다.
 
-낙상 주입은 `GET /inject-fall?tagId=<ID>&scenario=confirm|cancel`이다. `confirm`은 후보 다음 5초 뒤 확진을, `cancel`은 3초 뒤 해제를 이어서 낸다(기본 `confirm`). 감지기를 거치지 않는 화면 검증용 트리거라 측위 소스와 무관하게 동작한다.
+낙상 주입은 `GET /inject-fall?tagId=<ID>&clip=<클립 ID>`다. 클립 목록은 `GET /clips`. **주입은 실제 파이프라인을 그대로 통과한다** — 공개 데이터셋에서 잘라둔 가속도 구간을 ingest 프레임으로 되돌려(`inject/`) `validateIngest` → 삼각측량 → 스무딩 → 낙상 감지 순으로 흘리고, 경보는 감지기가 낸다. 그래서 응답에는 경보가 없고 재생 정보(`clipId` `frames` `durationMs`)만 들어 있다. 결과는 `/stream`으로 나온다.
+
+클립이 정하는 건 입력 신호뿐이고 결과는 감지기가 정한다. 헛경보 클립처럼 AI가 기각하는 신호는 아무 경보도 안 낸다(기각 사실은 `[fall] 기각 ...` 로그에만 남는다). 클립을 다시 만드는 법은 `tools/README.md`.
+
+데이터셋에는 UWB 거리가 없으므로 태그가 서 있던 좌표에서 앵커 거리를 거꾸로 만들어 넣는다(`positioning/to-ranges.ts`). 좌표를 직접 꽂지 않는 이유는 그래야 삼각측량·스무딩까지 실측과 같은 코드를 타기 때문이다. 재생 중에는 그 태그를 시뮬 대상에서 빼(`sim.freeze`) 5Hz 시뮬 좌표와 50Hz 주입 좌표가 마커를 뺏지 않게 한다.
+
+주입 프레임도 ingest라 `formatIngestLine` 로그가 프레임마다 찍힌다(50Hz × 10초 ≈ 500줄). 실측 ingest와 같은 취급이라 일부러 그대로 뒀다.
 
 ## 테스트
 
@@ -42,7 +48,7 @@ server/                재사용 런타임
   config/cli.ts        실행 인자 전체의 소유자 · argv 분배 · 사용법 · 미지 인자 거절
   config/argv.ts       argv를 소유자별로 나누는 도구(takeFlags)
   config/anchor.ts     앵커 인자 파싱·검증(자기 플래그만 받는다)
-  sim.ts               데모용 시뮬레이터(가짜 보행/낙상 주입)
+  sim.ts               배경 태그 보행 시뮬레이터(경보는 안 만든다)
   map.json             좌표계 범위·구역 메타
   lib/
     ingest-log.ts      수신 프레임 → 콘솔 한 줄 포맷(순수 함수)
@@ -55,7 +61,12 @@ server/                재사용 런타임
     handler.ts         ingest → 위치 핸들러 팩토리
     from-ingest.ts     main/sub 거리 추출 → 삼각측량 → 위치 레코드
     triangulate.ts     2앵커 기하(순수 함수)
+    to-ranges.ts       그 역함수 — 좌표 → 앵커 거리(클립 주입이 쓴다)
     smoother.ts        태그별 최근 5개 좌표 이동평균(방출 전 적용)
+  inject/              데모 주입 — 데이터셋 클립을 실제 파이프라인에 흘린다
+    injector.ts        클립 → ingest 프레임 재생(태그별 1개, 겹치면 나중 것만)
+    clip.ts            클립 로드·검증·요약
+    clips/*.json       커밋된 원신호 구간 + 출처 + 기대 판정(tools/cli.ts clip으로 재생성)
   detection/           낙상 감지
     fall.ts            고전 상태머신(B4)
     cascade.ts         고전 + LightGBM 2단계 캐스케이드(기본)
@@ -81,11 +92,11 @@ test/                  모든 테스트 — 루트로 분리, 소스 구조 미�
   detection/ ingest/ positioning/ lib/ config/ tools/  fixtures/
 ```
 
-런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `sim.ts`(데모) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
+런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
 
 ## 페이지·에셋 추가
 
-API 라우트(`/ingest` `/stream` `/map` `/inject-fall` `/tags`)를 먼저 처리하고, 나머지는 전부 `public/` 정적 서빙으로 떨어진다. **디스크 배치가 곧 URL이므로 페이지를 늘려도 서버 코드는 손대지 않는다.**
+API 라우트(`/ingest` `/stream` `/map` `/clips` `/inject-fall` `/tags`)를 먼저 처리하고, 나머지는 전부 `public/` 정적 서빙으로 떨어진다. **디스크 배치가 곧 URL이므로 페이지를 늘려도 서버 코드는 손대지 않는다.**
 
 | 파일 | URL |
 |---|---|

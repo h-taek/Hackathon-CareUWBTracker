@@ -37,9 +37,9 @@ import {
   })();
   const COLOR = () => CSS_VAR;
 
-  // sim/live 페이로드 차이 흡수:
-  //   position — sim은 name 포함, live(uwb+imu)는 tagId만
-  //   alert    — sim은 ts·name·confidence 포함, live(FallEvent)는 type·tagId·peakAccel·freefall·pos·zone만
+  // 페이로드 차이 흡수:
+  //   position — 시뮬 배경 태그는 name 포함, ingest(uwb+imu)를 거친 것은 tagId만
+  //   alert    — 전부 감지기(FallEvent)가 낸다. name이 없으므로 /tags로 보강한다
   const nameOf = (tagId) => names.get(tagId) || tagId;
   const tsOf = (a) => (typeof a.ts === 'number' ? a.ts : Date.now());
   const errOf = (p) => (p && p.err && typeof p.err.xy === 'number' ? p.err.xy : 0.2);
@@ -381,17 +381,70 @@ import {
     resize();
   });
 
+  // ── 데모 주입 ──
+  // 버튼을 누르면 서버가 데이터셋 클립을 ingest 프레임으로 되돌려 실제 파이프라인에
+  // 흘린다. 경보가 뜰지 말지는 감지기가 정하므로 여기서 결과를 예고하지 않는다.
+  const clipsById = new Map();
+  let clipTimer = null;
+
+  const setClipStatus = (html, active) => {
+    const el = $('clipStatus');
+    el.innerHTML = html;
+    el.classList.toggle('on', !!active);
+  };
+
+  function injectClip(tag) {
+    const clip = clipsById.get($('clipPick').value);
+    if (!clip) return;
+    const src = clip.source;
+    const origin = src.dataset + ' ' + src.activity + '/' + src.trial + ' · ' + src.placement;
+
+    fetch('/inject-fall?tagId=' + encodeURIComponent(tag.id) + '&clip=' + encodeURIComponent(clip.id))
+      .then((r) => r.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(res.error || '주입 실패');
+        clearTimeout(clipTimer);
+        setClipStatus('<b>' + esc(tag.name) + '</b> ← ' + esc(clip.label)
+          + ' 재생 중 · ' + (res.durationMs / 1000).toFixed(1) + '초 · ' + res.frames + '프레임'
+          + ' <span class="src">(' + esc(origin) + ')</span>', true);
+        // 재생이 끝나도 서버는 따로 알려주지 않는다(경보만 SSE로 온다). 길이를 알고 있으니
+        // 여기서 재어 끝을 표시한다 — 경보가 안 뜬 경우에도 "끝났다"는 걸 알아야 한다.
+        clipTimer = setTimeout(() => {
+          setClipStatus('재생 끝 · ' + esc(clip.label) + '. 경보가 안 떴다면 감지기가 낙상이 아니라고 판정한 것이다.', false);
+        }, res.durationMs + 300);
+      })
+      .catch((error) => setClipStatus('주입 실패: ' + esc(error.message), false));
+  }
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  fetch('/clips').then((r) => r.json()).then((list) => {
+    const pick = $('clipPick');
+    for (const clip of list) {
+      clipsById.set(clip.id, clip);
+      const option = document.createElement('option');
+      option.value = clip.id;
+      option.textContent = clip.label + ' · ' + (clip.durationMs / 1000).toFixed(1) + '초';
+      option.title = clip.summary;
+      pick.appendChild(option);
+    }
+    const first = list[0];
+    if (first) setClipStatus(esc(first.summary), false);
+    pick.onchange = () => {
+      const clip = clipsById.get(pick.value);
+      if (clip) setClipStatus(esc(clip.summary), false);
+    };
+  }).catch(() => {});
+
   // 표시명 보강: live position에는 name이 없다.
   fetch('/tags').then((r) => r.json()).then((list) => {
     for (const t of list) names.set(t.id, t.name);
-    // 낙상 주입 버튼(데모 트리거). 각본은 옆 드롭다운이 정한다 — 클릭 한 번에
-    // 후보부터 확진(또는 해제)까지 서버가 순서대로 흘려준다.
     const bar = $('demobar');
     for (const t of list) {
       const b = document.createElement('button');
       b.className = 'btn'; b.type = 'button'; b.textContent = t.name;
-      b.onclick = () => fetch('/inject-fall?tagId=' + encodeURIComponent(t.id)
-        + '&scenario=' + encodeURIComponent($('fallScenario').value));
+      b.onclick = () => injectClip(t);
       bar.appendChild(b);
     }
     renderRooms();

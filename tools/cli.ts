@@ -10,11 +10,13 @@ import {
   detectTrial, feedTyped, trialFeed, makeConfusion, sweepAll, type TrialLike, type SweepResult,
 } from './evaluate.ts';
 import { formatEvaluation, formatSweep } from './report.ts';
+import { readTrial, buildClip, formatClipReport, writeClip } from './clip.ts';
 
 const USAGE = `Usage:
   node tools/cli.ts generate [options]
   node tools/cli.ts replay <file.ndjson> [options]
   node tools/cli.ts evaluate <normalized.csv> [options]
+  node tools/cli.ts clip <normalized.csv> [options]
 
 Generate options:
   --hz <number>                Sample rate (default: 50)
@@ -32,8 +34,14 @@ Evaluate options (고전 감지기 베이스라인 성적 + 임계 스윕):
   --sweep-placement <name>     스윕 대상 위치(기본 waist, all=전체)
   --json <path>                결과를 JSON으로도 저장
 
+Clip options (데모 주입용 클립을 데이터셋에서 다시 만든다):
+  --manifest <path>            레시피 파일(기본 tools/clips.json)
+  --only <clip-id>             이 클립 하나만 다시 만든다
+  --dry-run                    파일을 쓰지 않고 검증 결과만 출력
+
 Output:
-  generate/replay: spec-03 ingest JSON NDJSON. evaluate: 혼동행렬/스윕 표.`;
+  generate/replay: spec-03 ingest JSON NDJSON. evaluate: 혼동행렬/스윕 표.
+  clip: server/inject/clips/*.json + 클립별 감지 결과 리포트.`;
 
 export interface HelpConfig {
   command: 'help';
@@ -63,7 +71,15 @@ export interface EvaluateConfig {
   json?: string;
 }
 
-export type Config = HelpConfig | GenerateConfig | ReplayConfig | EvaluateConfig;
+export interface ClipConfig {
+  command: 'clip';
+  file: string;
+  manifest: string;
+  only?: string;
+  dryRun: boolean;
+}
+
+export type Config = HelpConfig | GenerateConfig | ReplayConfig | EvaluateConfig | ClipConfig;
 
 type OptionMap = Record<string, string | boolean | undefined>;
 
@@ -105,6 +121,18 @@ export function parseArgs(argv: string[]): Config {
       sweep: options.sweep === true,
       sweepPlacement: (options['sweep-placement'] as string | undefined) ?? 'waist',
       json: options.json as string | undefined,
+    };
+  }
+
+  if (command === 'clip') {
+    if (!rest[0] || rest[0].startsWith('--')) throw new Error('clip requires a normalized CSV file');
+    const options = parseOptions(rest.slice(1), new Set(['manifest', 'only', 'dry-run']), new Set(['dry-run']));
+    return {
+      command,
+      file: rest[0],
+      manifest: (options.manifest as string | undefined) ?? 'tools/clips.json',
+      only: options.only as string | undefined,
+      dryRun: options['dry-run'] === true,
     };
   }
 
@@ -230,6 +258,39 @@ export async function runEvaluate(
   return result;
 }
 
+// 마스터 CSV를 레시피 수만큼 훑는다. 3.7GB × N회라 느리지만 1회성 도구다 —
+// 클립을 메모리에 다 들고 한 번에 훑는 최적화보다 코드가 단순한 편이 낫다.
+export async function runClip(
+  config: ClipConfig,
+  out: { write: (chunk: string) => unknown } = process.stdout,
+): Promise<void> {
+  const manifest = JSON.parse(fs.readFileSync(config.manifest, 'utf8'));
+  const recipes = manifest.recipes.filter(
+    (r: { id: string }) => !config.only || r.id === config.only,
+  );
+  if (recipes.length === 0) throw new Error(`레시피를 찾지 못했습니다: ${config.only}`);
+
+  for (const recipe of recipes) {
+    const rows = await readTrial(config.file, recipe.select);
+    const result = buildClip(rows, recipe.select, {
+      id: recipe.id,
+      label: recipe.label,
+      summary: recipe.summary,
+      activityLabel: recipe.activityLabel,
+    });
+    out.write(`${formatClipReport(result)}\n`);
+
+    if (config.dryRun) {
+      out.write('  (dry-run — 파일을 쓰지 않았습니다)\n\n');
+      continue;
+    }
+    const outPath = `${manifest.outDir}/${recipe.file}`;
+    fs.mkdirSync(manifest.outDir, { recursive: true });
+    writeClip(result.clip, outPath);
+    out.write(`  저장   ${outPath}\n\n`);
+  }
+}
+
 function positiveNumber(value: string | boolean | number | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new Error(`--${name} must be a positive number`);
@@ -259,6 +320,8 @@ async function main(argv: string[]): Promise<void> {
       runReplay(config, config.url ? (createHttpWriter(config.url) as unknown as WriteFn) : writeNdjson);
     } else if (config.command === 'evaluate') {
       await runEvaluate(config);
+    } else if (config.command === 'clip') {
+      await runClip(config);
     }
   } catch (error) {
     process.stderr.write(`Error: ${(error as Error).message}\n\n${USAGE}\n`);

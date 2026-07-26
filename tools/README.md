@@ -87,6 +87,29 @@ node tools/cli.ts evaluate ml/datasets/_normalized/waist_falls_50hz.csv --sweep 
 
 `tools/results/`에 최근 실행 결과(허리·마스터)를 저장해 둔다.
 
+## 클립 (clip) — 데모 주입용 실신호 잘라내기
+
+대시보드의 낙상 주입 버튼은 데이터셋에서 잘라낸 **실제 가속도 구간**을 흘린다. 그 구간을 만드는 도구다. 만들어진 클립은 `server/inject/clips/*.json`으로 커밋되고, 원본 마스터 CSV(3.7GB)는 git에 없으므로 이 명령이 유일한 재생성 경로다.
+
+무엇을 왜 골랐는지는 레시피 파일 `tools/clips.json`에 남는다. 클립을 바꾸려면 레시피를 고치고 다시 돌린다.
+
+```bash
+node tools/cli.ts clip ml/datasets/_normalized/falls_all_50hz.csv
+```
+
+레시피 하나만, 또는 파일을 쓰지 않고 결과만 보려면:
+
+```bash
+node tools/cli.ts clip <csv> --only false-alarm --dry-run
+```
+
+자르는 기준은 두 가지다.
+
+- 앞은 **첫 이벤트 인덱스 − (특징창 150샘플 + 여유)**. 여기서 더 자르면 AI가 채점할 때 링버퍼가 안 차서 가장자리 복제로 메우고(`detection/cascade.ts`), 원본에서 기각됐던 충격이 클립에서는 통과해 버린다. 기준점은 캐스케이드가 아니라 **고전 단독** 이벤트까지 합쳐서 잡는다 — AI가 기각한 자리도 클립 안에 들어와야 하기 때문이다.
+- 뒤는 마지막 이벤트 + 여유.
+
+자른 뒤 캐스케이드와 고전 단독 양쪽으로 다시 흘려 이벤트 순서가 원본 trial과 같은지 확인하고, 다르면 던진다. 결과 판정은 클립 JSON의 `expect`에 박혀 `test/inject/clips.test.ts`가 매번 대조한다 — 데모 화면의 문구와 실제 감지 결과를 묶어 두는 장치다.
+
 ## 테스트
 
 ```bash
