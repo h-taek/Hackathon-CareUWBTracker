@@ -63,9 +63,9 @@ server/                재사용 런타임
     index.html         대시보드 마크업
     assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
     assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
-    assets/splat/      가우시안 스플랫 씬(git 제외 — README의 curl로 조달)
+                       scene3d.js(3D 실사 패널 — 스플랫 뷰어 · 마커 · 좌표 정합, ESM)
+    assets/splat/      스플랫 씬(git 제외 — README의 curl로 조달) + scene.json(씬·정합 설정, git 포함)
     vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
-    spike/             웹 GS 성능 스파이크 페이지(F3 게이트용 일회성, 끝나면 폴더째 삭제)
 
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts

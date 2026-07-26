@@ -6,6 +6,15 @@
 <title>돌봄시설 실시간 위치 관제</title>
 <link rel="stylesheet" href="/assets/css/base.css" />
 <link rel="stylesheet" href="/assets/css/dashboard.css" />
+<!-- 3D 패널이 쓰는 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다(plan/07). -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/three.module.min.js",
+    "@mkkellogg/gaussian-splats-3d": "/vendor/gaussian-splats-3d/gaussian-splats-3d.module.js"
+  }
+}
+</script>
 <script src="/assets/js/dashboard.js" defer></script>
 </head>
 <body>
@@ -72,12 +81,13 @@
       <h2>실시간 뷰 <span id="viewMode" style="color:var(--faint);font-weight:400">2D 개요</span></h2>
       <div class="viewport" id="viewport">
         <div class="v3d">
+          <!-- 스플랫 캔버스가 여기에 붙는다(assets/js/scene3d.js) -->
+          <div class="v3d-stage" id="scene3dStage"></div>
           <div class="scene-tag">
             <span class="badge3d">3D 실사 뷰</span>
             <span class="badge3d" id="scene3dWho" style="background:rgba(248,81,73,.18);color:#ffc7c3">—</span>
           </div>
-          <div class="stub-note">가우시안 스플랫 씬 자리 (스텁)<br>Three.js + gaussian-splats-3d · plan/07<br>F3에서 실장 · 성능 스파이크 후</div>
-          <div class="marker3d"><span class="ring"></span><span class="dot"></span></div>
+          <div class="scene-note" id="scene3dStatus"></div>
         </div>
         <div class="v2d" id="v2d">
           <span class="pip-label">2D 개요</span>

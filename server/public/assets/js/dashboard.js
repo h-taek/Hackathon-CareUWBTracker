@@ -154,8 +154,10 @@
     if (a.type === 'fall_canceled') { clearAlert(a); return; }
 
     alertingTag = a.tagId;
+    alertPos = a.pos || null;
     alertCount++;
     setState('alerting');
+    if (scene3d) scene3d.focus(alertPos);   // 이미 열려 있으면 새 위치로 옮긴다
 
     const who = nameOf(a.tagId);
     const where = a.pos ? '(' + round1(a.pos.x) + ', ' + round1(a.pos.y) + ')m' : '위치 미상';
@@ -178,6 +180,8 @@
   function clearAlert(a) {
     if (alertingTag !== a.tagId) return;
     alertingTag = null;
+    alertPos = null;
+    if (scene3d) scene3d.clearFocus();
     setState('idle');
     close3d();
     overlay.classList.remove('on');
@@ -226,24 +230,59 @@
     $('cntEvt').textContent = String(n);
   }
 
-  // ── 3D 패널 전환 ──
+  // ── 3D 패널 (F3) ──
+  // scene3d는 three·gaussian-splats-3d를 쓰는 ESM이라 동적 import로 불러온다.
+  // 첫 열기 때 1.4MB 뷰어 + 수십 MB 스플랫을 받으므로, 2D 대시보드 초기화를 막지 않도록
+  // 페이지 로드 시가 아니라 유휴 시간에 미리 당겨온다.
+  let scene3d = null;
+  let scene3dLoading = null;
+  let scene3dFailed = false;
+  let alertPos = null;                 // 마지막 경보 위치(맵 좌표 m)
+
+  const setScene3dStatus = (text) => { $('scene3dStatus').textContent = text; };
+
+  function importScene3d() {
+    if (!scene3dLoading) scene3dLoading = import('/assets/js/scene3d.js');
+    return scene3dLoading;
+  }
+
+  async function mountScene3d() {
+    if (scene3dFailed || !map) return;
+    try {
+      scene3d = scene3d || (await importScene3d());
+      await scene3d.open($('scene3dStage'), map, setScene3dStatus);
+      scene3d.focus(alertPos);
+    } catch (error) {
+      scene3dFailed = true;            // 씬 파일이 없거나 뷰어가 못 뜬 경우. 상태 문구는 모듈이 남긴다
+      if (!$('scene3dStatus').textContent) setScene3dStatus('3D 실사 뷰를 띄우지 못했다.');
+      console.error('[scene3d]', error);
+    }
+  }
+
   function open3d() {
     overlay.classList.remove('on');
     viewport.classList.add('three-on');
     $('viewMode').textContent = '3D 실사 뷰 · 2D 미니맵';
     requestAnimationFrame(resize);
+    mountScene3d();                    // 패널이 보이는 상태여야 렌더러 크기가 잡힌다
   }
   function close3d() {
     viewport.classList.remove('three-on');
     $('viewMode').textContent = '2D 개요';
     requestAnimationFrame(resize);
+    if (scene3d) scene3d.close();
   }
 
   $('popView3d').onclick = open3d;
   $('popDismiss').onclick = () => overlay.classList.remove('on');
   $('popClose').onclick = () => overlay.classList.remove('on');
   overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('on'); };
-  $('bannerClose').onclick = () => { close3d(); alertingTag = null; setState('idle'); draw(); renderRooms(); };
+  $('bannerClose').onclick = () => {
+    close3d();
+    alertingTag = null; alertPos = null;
+    if (scene3d) scene3d.clearFocus();
+    setState('idle'); draw(); renderRooms();
+  };
   $('navToggle').onclick = () => { $('shell').classList.toggle('nav-collapsed'); requestAnimationFrame(resize); };
   document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
     const f = h.closest('.floor');
@@ -286,6 +325,12 @@
   });
 
   es.addEventListener('alert', (e) => onAlert(JSON.parse(e.data)));
+
+  // 3D 뷰어 모듈(three + 스플랫 뷰어, 약 1.4MB)을 유휴 시간에 미리 받아둔다.
+  // 뷰어 생성·씬 로드는 패널이 실제로 열릴 때 한다 — 숨겨진 요소는 크기가 0이라 렌더러가 0×0으로 뜬다.
+  const preload = () => importScene3d().catch(() => {});
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(preload, { timeout: 5000 });
+  else setTimeout(preload, 3000);
 
   // 오프라인 판정·목록 갱신 주기
   setInterval(() => { renderRooms(); draw(); }, 1000);

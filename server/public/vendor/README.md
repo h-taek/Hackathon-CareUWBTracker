@@ -42,3 +42,15 @@ cp gs-pkg/build/gaussian-splats-3d.module.js gs-pkg/LICENSE "$DEST/gaussian-spla
 ```
 
 갱신 후 이 표의 버전을 같이 고친다. `gaussian-splats-3d`의 three peer 범위는 `>=0.160.0`.
+
+## 함정 — `gpuAcceleratedSort`는 켜지 마라
+
+라이브러리 README 예제에는 `gpuAcceleratedSort: true`가 박혀 있지만 **0.4.7에서 켜면 화면이
+검게 나온다.** 이 모드에서는 스플랫 좌표를 정렬 워커에 올리는 경로(`preSortMessages`)가 통째로
+생략되는데, 워커는 `min(요청 렌더수, 업로드된 스플랫수)`로 그릴 개수를 정한다 — 업로드가 0이니
+항상 0이 되어 `geometry.instanceCount`가 0, draw call 자체가 안 나간다. 오류도 경고도 안 나고
+로드 지표(스플랫 수·로드 시간)와 FPS는 정상으로 찍히므로 원인 찾기가 고약하다.
+라이브러리 기본값(`false`)을 쓴다.
+
+**증상 구분법**: 로드는 멀쩡한데 화면만 까맣다 → 콘솔에서
+`viewer.splatMesh.geometry.instanceCount`가 0이면 확정. 버전을 올릴 때 이 항목을 다시 확인한다.

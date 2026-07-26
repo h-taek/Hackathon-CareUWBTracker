@@ -71,20 +71,23 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 .v2d canvas { width: 100%; height: 100%; display: block; background: var(--map-bg); }
 .v2d .pip-label { display: none; }
 
-/* 3D 실사(스플랫) 패널 — F3에서 gaussian-splats-3d 실장, 지금은 스텁 */
-.v3d { position: absolute; inset: 0; display: none;
+/* 3D 실사(스플랫) 패널 — assets/js/scene3d.js가 캔버스를 붙인다.
+   display:none으로 숨기지 않는 이유: 숨긴 요소는 크기가 0이라 WebGL 렌더러가 0×0으로 잡힌다.
+   2D 개요일 때는 불투명한 .v2d가 위를 덮고, 렌더 루프도 멈춰 있다. */
+.v3d { position: absolute; inset: 0;
   background:
     radial-gradient(60% 50% at 50% 45%, rgba(255,255,255,.06), transparent 70%),
     linear-gradient(135deg, #6f5a48 0%, #574a41 30%, #3a3531 60%, #241f1d 100%);
 }
+.v3d-stage { position: absolute; inset: 0; }
+.v3d-stage canvas { display: block; width: 100%; height: 100%; }
+/* 뱃지·안내문은 z-index를 주지 않는다. 주는 순간 쌓임 순서가 올라가, 2D 개요일 때 위를 덮는
+   .v2d를 뚫고 비쳐 보인다. DOM 순서(.v3d 다음 .v2d)만으로 이미 가려진다. */
 .v3d .scene-tag { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .badge3d { background: rgba(88,166,255,.18); color: #bcdcff; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
-.v3d .stub-note { position: absolute; top: 12px; right: 12px; color: rgba(255,255,255,.5); font-size: 11px; text-align: right; line-height: 1.45; }
-.v3d .marker3d { position: absolute; left: 42%; top: 52%; transform: translate(-50%,-50%); }
-.v3d .marker3d .dot { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--alarm); box-shadow: 0 0 0 3px rgba(248,81,73,.35); }
-.v3d .marker3d .ring { position: absolute; left: 50%; top: 50%; width: 90px; height: 90px; transform: translate(-50%,-50%);
-  border: 2px solid rgba(248,81,73,.6); border-radius: 50%; animation: pulse 2s ease-out infinite; }
-@keyframes pulse { 0% { transform: translate(-50%,-50%) scale(.6); opacity: 1; } 100% { transform: translate(-50%,-50%) scale(1.3); opacity: 0; } }
+.v3d .scene-note { position: absolute; top: 12px; right: 12px; max-width: 46%;
+  color: rgba(255,255,255,.62); font-size: 11.5px; text-align: right; line-height: 1.45; }
+.v3d .scene-note:empty { display: none; }
 
 /* 낙상 경보 배너 (3D 켜짐 시 좌하단) */
 .banner { position: absolute; left: 0; bottom: 0; display: none; align-items: center; gap: 16px;
@@ -97,7 +100,6 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 
 /* 3D 켜짐: 2D는 우하단 미니맵으로 */
 .viewport.three-on { background: #241f1d; }
-.viewport.three-on .v3d { display: block; }
 .viewport.three-on .banner { display: flex; }
 .viewport.three-on .v2d {
   inset: auto; right: 14px; bottom: 14px; width: 40%; height: 44%;
@@ -150,5 +152,4 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 
 @media (prefers-reduced-motion: reduce) {
   .popup { animation: none; transform: none; opacity: 1; }
-  .v3d .marker3d .ring { animation: none; }
 }
