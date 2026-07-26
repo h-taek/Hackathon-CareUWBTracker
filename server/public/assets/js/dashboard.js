@@ -1,4 +1,13 @@
-// 실시간 관제 대시보드(F1). /map·/tags로 초기화하고 /stream(SSE)을 구독한다.
+import {
+  acknowledgeAlert,
+  applyAlertEvent,
+  createAlertStore,
+  dismissAlert,
+  finishResolved,
+  getActiveAlert,
+} from './alert-state.js';
+
+// 실시간 관제 대시보드(F1·F2). /map·/tags로 초기화하고 /stream(SSE)을 구독한다.
 (function () {
   'use strict';
 
@@ -8,8 +17,8 @@
   const lastSeen = new Map();        // tagId -> 마지막 수신 시각(ms). 오프라인 판정용
   const names = new Map();           // tagId -> 표시명. live position에는 name이 없어 /tags로 보강
   let selectedTag = null;            // 사용자가 목록에서 고른 태그
-  let alertingTag = null;            // 현재 경보 중인 태그
-  let alertCount = 0;
+  const alertStore = createAlertStore();
+  let resolveTimer = null;
   const OFFLINE_MS = 4000;           // 이 시간 넘게 미수신이면 오프라인 표시
 
   const $ = (id) => document.getElementById(id);
@@ -21,7 +30,8 @@
     const s = getComputedStyle(document.documentElement);
     const read = (n) => s.getPropertyValue(n).trim();
     return {
-      ok: read('--ok'), sel: read('--sel'), offline: read('--offline'), fall: read('--alarm'),
+      ok: read('--ok'), sel: read('--sel'), offline: read('--offline'),
+      candidate: read('--warning'), confirmed: read('--alarm'),
       mapLine: read('--map-line'), mapInk: read('--map-ink'),
     };
   })();
@@ -35,7 +45,8 @@
   const errOf = (p) => (p && p.err && typeof p.err.xy === 'number' ? p.err.xy : 0.2);
 
   function stateOf(tagId) {
-    if (tagId === alertingTag) return 'fall';
+    const alert = alertStore.alertsByTag.get(tagId);
+    if (alert && alert.resolvedAt === null) return alert.phase;
     const seen = lastSeen.get(tagId);
     if (!seen || Date.now() - seen > OFFLINE_MS) return 'offline';
     if (tagId === selectedTag) return 'sel';
@@ -89,12 +100,13 @@
     for (const [id, t] of tags) {
       if (!t.pos) continue;
       const px = mx(t.pos.x), py = my(t.pos.y);
-      const c = C[stateOf(id)], rd = isSmall() ? 5 : 7;
+      const st = stateOf(id), c = C[st], rd = isSmall() ? 5 : 7;
       ctx.beginPath(); ctx.arc(px, py, errOf(t) * scale, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(c, id === alertingTag ? 0.20 : 0.16); ctx.fill();
+      const isAlert = st === 'candidate' || st === 'confirmed';
+      ctx.fillStyle = rgba(c, isAlert ? 0.20 : 0.16); ctx.fill();
       ctx.beginPath(); ctx.arc(px, py, rd, 0, Math.PI * 2);
       ctx.fillStyle = c; ctx.fill();
-      if (id === alertingTag) { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.stroke(); }
+      if (isAlert) { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.stroke(); }
       if (!isSmall()) {
         ctx.fillStyle = C.mapInk; ctx.font = 'bold 12px sans-serif';
         ctx.fillText(nameOf(id), px + 11, py + 4);
@@ -143,87 +155,146 @@
   const overlay = $('overlay');
   const viewport = $('viewport');
 
-  function labelOf(type) {
-    if (type === 'fall_confirmed') return '낙상 확진';
-    if (type === 'fall_canceled') return '낙상 해제';
-    return '낙상 후보';
+  const phaseCopy = {
+    candidate: { icon: '⚠️', label: '낙상 후보', message: '확인이 필요합니다' },
+    confirmed: { icon: '🚨', label: '낙상 확진', message: '즉시 확인이 필요합니다' },
+    canceled: { icon: '✓', label: '후보 해제', message: '움직임이 감지되어 자동 해제됐습니다' },
+  };
+  const finite = (value, suffix = '') => Number.isFinite(value) ? round1(value) + suffix : '—';
+  const whereOf = (alert) => alert.pos
+    ? '(' + round1(alert.pos.x) + ', ' + round1(alert.pos.y) + ')m'
+    : '위치 미상';
+  const zoneOf = (alert) => alert.zone || '구역 미지정';
+
+  // F4의 3D 뷰어가 연결할 경보 lifecycle 경계.
+  function onAlertActivated() {}
+  function onAlertUpdated() {}
+  function onAlertResolved() {}
+
+  function onAlert(event) {
+    if (event && event.name) names.set(event.tagId, event.name);
+    const result = applyAlertEvent(alertStore, event);
+    if (result.change === 'ignored') {
+      if (result.reason === 'invalid_event') console.warn('[alert] 알 수 없는 경보 이벤트', event);
+      return;
+    }
+
+    clearResolveTimer();
+    if (result.change === 'activated') onAlertActivated(result.alert);
+    if (result.change === 'updated') onAlertUpdated(result.alert);
+    if (result.change === 'resolved') onAlertResolved(result.alert);
+    renderAlertState(result.change !== 'resolved');
+    if (alertStore.view === 'resolved') scheduleIdle(result.alert.tagId);
   }
 
-  function onAlert(a) {
-    if (a.name) names.set(a.tagId, a.name);          // sim은 name을 실어 보냄
-    if (a.type === 'fall_canceled') { clearAlert(a); return; }
+  function renderAlertState(showPopup = false) {
+    const alert = getActiveAlert(alertStore);
+    const pill = $('statePill');
+    pill.classList.remove('alerting', 'candidate', 'confirmed', 'resolved');
+    pill.classList.add(alertStore.view);
+    pill.textContent = alertStore.view + (alertStore.view === 'alerting' ? ' · 확인 필요' : '');
 
-    alertingTag = a.tagId;
-    alertCount++;
-    setState('alerting');
+    if (!alert) {
+      overlay.classList.remove('on');
+      close3d();
+      draw();
+      renderRooms();
+      return;
+    }
 
-    const who = nameOf(a.tagId);
-    const where = a.pos ? '(' + round1(a.pos.x) + ', ' + round1(a.pos.y) + ')m' : '위치 미상';
-    const zone = a.zone || (a.pos && map ? zoneAt(a.pos.x, a.pos.y) : '미지정');
-    const kind = labelOf(a.type);
-    const ai = (typeof a.aiScore === 'number') ? ' · AI ' + a.aiScore : '';
+    const resolved = alertStore.view === 'resolved';
+    const copy = resolved
+      ? {
+          icon: '✓',
+          label: '경보 해제',
+          message: alert.resolution === 'auto_canceled'
+            ? '움직임이 감지되어 자동 해제됐습니다'
+            : '이 화면에서 경보를 닫았습니다',
+        }
+      : phaseCopy[alert.phase];
+    const who = nameOf(alert.tagId);
+    const zone = zoneOf(alert);
+    const where = whereOf(alert);
+    const details = where + ' · 충격 ' + finite(alert.peakAccel, 'g')
+      + ' · 자유낙하 ' + (alert.freefall === null ? '—' : alert.freefall ? '감지' : '미감지')
+      + (alert.aiScore === null ? '' : ' · AI ' + finite(alert.aiScore));
 
-    $('popKind').textContent = kind + ' 감지';
+    $('popIcon').textContent = copy.icon;
+    $('popKind').textContent = copy.label + ' — ' + copy.message;
     $('popWho').textContent = 'f1 · ' + zone + ' · ' + who;
-    $('popWhere').textContent = where + ' · 피크 ' + a.peakAccel + 'g' + ai;
+    $('popWhere').textContent = details;
+    $('popTime').textContent = new Date(alert.updatedAt).toLocaleTimeString('ko-KR');
+    $('popAck').textContent = alert.acknowledgedAt ? '확인됨' : '확인함';
+    $('popAck').disabled = alert.acknowledgedAt !== null || alertStore.view === 'resolved';
+    $('popDismiss').textContent = alertStore.view === 'resolved' ? '해제됨' : '화면에서 닫기';
+    $('popDismiss').disabled = alertStore.view === 'resolved';
+    $('popup').dataset.phase = resolved ? 'canceled' : alert.phase;
+    overlay.dataset.phase = resolved ? 'canceled' : alert.phase;
     $('bannerTitle').firstChild.textContent = 'f1 · ' + zone + ' · ' + who;
-    $('bannerSub').textContent = kind + ' · 피크 ' + a.peakAccel + 'g · ' + where;
-    $('scene3dWho').textContent = who + ' · ' + kind;
+    $('bannerSub').textContent = copy.label + ' · ' + details;
+    $('scene3dWho').textContent = who + ' · ' + copy.label;
+    upsertAlertLog(alert);
 
-    logAlert(a, kind, zone, where);
-    overlay.classList.add('on');
-    draw();
-  }
-
-  function clearAlert(a) {
-    if (alertingTag !== a.tagId) return;
-    alertingTag = null;
-    setState('idle');
-    close3d();
-    overlay.classList.remove('on');
-    markLogCleared(a.tagId);
+    if (showPopup || alertStore.view === 'resolved') overlay.classList.add('on');
     draw();
     renderRooms();
   }
 
-  function setState(s) {
-    const pill = $('statePill');
-    if (s === 'alerting') { pill.textContent = 'alerting (3D)'; pill.classList.add('alerting'); }
-    else { pill.textContent = 'idle (2D)'; pill.classList.remove('alerting'); }
-  }
-
-  function logAlert(a, kind, zone, where) {
+  function upsertAlertLog(alert) {
     const box = $('log');
     const first = box.querySelector('.empty');
     if (first) box.textContent = '';
-    const row = document.createElement('div');
-    row.className = 'logrow fall active';
-    row.dataset.tag = a.tagId;
+    let row = box.querySelector('.logrow[data-tag="' + CSS.escape(alert.tagId) + '"]');
+    if (!row) {
+      row = document.createElement('div');
+      row.dataset.tag = alert.tagId;
+      const fl = document.createElement('span'); fl.className = 'fl'; fl.textContent = 'f1';
+      const mid = document.createElement('span');
+      const who = document.createElement('div'); who.className = 'who';
+      const desc = document.createElement('div'); desc.className = 'desc';
+      mid.appendChild(who); mid.appendChild(desc);
+      const x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.textContent = '✕';
+      x.setAttribute('aria-label', '로그 삭제');
+      x.onclick = (e) => {
+        e.stopPropagation();
+        row.remove();
+        if (!box.querySelector('.logrow')) box.innerHTML = '<span class="empty">아직 경보 없음</span>';
+        updateLogCount();
+      };
+      row.appendChild(fl); row.appendChild(mid); row.appendChild(x);
+      row.onclick = () => {
+        selectedTag = alert.tagId;
+        alertStore.activeTagId = alert.tagId;
+        renderAlertState(false);
+      };
+      box.prepend(row);
+    }
     box.querySelectorAll('.logrow.active').forEach((r) => r.classList.remove('active'));
-
-    const fl = document.createElement('span'); fl.className = 'fl'; fl.textContent = 'f1';
-    const mid = document.createElement('span');
-    const who = document.createElement('div'); who.className = 'who'; who.textContent = nameOf(a.tagId);
-    const desc = document.createElement('div'); desc.className = 'desc';
-    desc.textContent = zone + ' · ' + kind + ' · ' + new Date(tsOf(a)).toLocaleTimeString('ko-KR');
-    mid.appendChild(who); mid.appendChild(desc);
-    const x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.textContent = '✕';
-    x.onclick = (e) => { e.stopPropagation(); row.remove(); if (!box.querySelector('.logrow')) box.innerHTML = '<span class="empty">아직 경보 없음</span>'; updateLogCount(); };
-
-    row.appendChild(fl); row.appendChild(mid); row.appendChild(x);
-    row.onclick = () => { selectedTag = a.tagId; open3d(); renderRooms(); draw(); };
-    box.prepend(row);
+    row.className = 'logrow fall ' + alert.phase
+      + (alert.resolvedAt === null ? ' active' : ' cleared');
+    row.querySelector('.who').textContent = nameOf(alert.tagId);
+    row.querySelector('.desc').textContent = zoneOf(alert) + ' · ' + phaseCopy[alert.phase].label
+      + ' · ' + new Date(alert.updatedAt).toLocaleTimeString('ko-KR')
+      + (alert.acknowledgedAt ? ' · 확인됨' : '');
     updateLogCount();
   }
-  function markLogCleared(tagId) {
-    document.querySelectorAll('.logrow[data-tag="' + CSS.escape(tagId) + '"]').forEach((r) => {
-      r.classList.remove('active'); r.classList.add('cleared');
-    });
-  }
+
   function updateLogCount() {
     const n = document.querySelectorAll('#log .logrow').length;
     $('logCount').textContent = n ? n + '건' : '';
     $('cntEvt').textContent = String(n);
+  }
+
+  function clearResolveTimer() {
+    if (resolveTimer !== null) clearTimeout(resolveTimer);
+    resolveTimer = null;
+  }
+  function scheduleIdle(tagId) {
+    clearResolveTimer();
+    resolveTimer = setTimeout(() => {
+      if (finishResolved(alertStore, tagId)) renderAlertState(false);
+      resolveTimer = null;
+    }, 3000);
   }
 
   // ── 3D 패널 전환 ──
@@ -240,10 +311,21 @@
   }
 
   $('popView3d').onclick = open3d;
-  $('popDismiss').onclick = () => overlay.classList.remove('on');
+  $('popAck').onclick = () => {
+    const alert = getActiveAlert(alertStore);
+    if (alert && acknowledgeAlert(alertStore, alert.tagId)) renderAlertState(false);
+  };
+  function dismissCurrentAlert() {
+    const alert = getActiveAlert(alertStore);
+    if (!alert || !dismissAlert(alertStore, alert.tagId)) return;
+    onAlertResolved(alert);
+    renderAlertState(false);
+    if (alertStore.view === 'resolved') scheduleIdle(alert.tagId);
+  }
+  $('popDismiss').onclick = dismissCurrentAlert;
   $('popClose').onclick = () => overlay.classList.remove('on');
   overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('on'); };
-  $('bannerClose').onclick = () => { close3d(); alertingTag = null; setState('idle'); draw(); renderRooms(); };
+  $('bannerClose').onclick = dismissCurrentAlert;
   $('navToggle').onclick = () => { $('shell').classList.toggle('nav-collapsed'); requestAnimationFrame(resize); };
   document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
     const f = h.closest('.floor');

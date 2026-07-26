@@ -6,7 +6,7 @@
 <title>돌봄시설 실시간 위치 관제</title>
 <link rel="stylesheet" href="/assets/css/base.css" />
 <link rel="stylesheet" href="/assets/css/dashboard.css" />
-<script src="/assets/js/dashboard.js" defer></script>
+<script src="/assets/js/dashboard.js" type="module"></script>
 </head>
 <body>
 
@@ -76,7 +76,7 @@
             <span class="badge3d">3D 실사 뷰</span>
             <span class="badge3d" id="scene3dWho" style="background:rgba(248,81,73,.18);color:#ffc7c3">—</span>
           </div>
-          <div class="stub-note">가우시안 스플랫 씬 자리 (스텁)<br>Three.js + gaussian-splats-3d · plan/07<br>F3에서 실장 · 성능 스파이크 후</div>
+          <div class="stub-note">웹 Gaussian Splat 뷰어 연결 예정<br>F3 렌더러 · F4 경보 lifecycle 연동<br>현재는 2D 위치·경보 상태를 유지합니다</div>
           <div class="marker3d"><span class="ring"></span><span class="dot"></span></div>
         </div>
         <div class="v2d" id="v2d">
@@ -114,19 +114,21 @@
 
 <!-- 경보 팝업 -->
 <div class="overlay" id="overlay">
-  <div class="popup">
+  <div class="popup" id="popup" role="alert" aria-live="assertive" data-phase="candidate">
     <button class="close" id="popClose" aria-label="닫기">✕</button>
     <div class="top">
-      <div class="bell">🔔</div>
+      <div class="bell" id="popIcon" aria-hidden="true">⚠️</div>
       <div>
         <div class="k" id="popKind">낙상 후보 감지</div>
         <div class="h" id="popWho">—</div>
         <div class="w" id="popWhere">—</div>
+        <div class="time" id="popTime">—</div>
       </div>
     </div>
     <div class="acts">
       <button class="btn primary" id="popView3d">3D 실사 뷰 열기</button>
-      <button class="btn" id="popDismiss">나중에</button>
+      <button class="btn" id="popAck">확인함</button>
+      <button class="btn" id="popDismiss">화면에서 닫기</button>
     </div>
   </div>
 </div>
