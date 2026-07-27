@@ -25,20 +25,20 @@ test('pct는 null을 대시로, 값을 퍼센트로', () => {
   assert.equal(pct(0.5).trim(), '50.0%');
 });
 
-test('formatEvaluation은 candidate/confirmed 섹션과 전체 행을 낸다', () => {
+test('formatEvaluation은 감지 섹션과 전체 행을 낸다', () => {
   const res = evaluateTrials([
     trial({ impactG: 3, isFall: true }),
     trial({ impactG: 0, isFall: false }),
   ]);
   const txt = formatEvaluation(res, { title: '테스트' });
-  assert.match(txt, /CANDIDATE/);
-  assert.match(txt, /CONFIRMED/);
+  assert.match(txt, /DETECTED/);
+  assert.doesNotMatch(txt, /CONFIRMED/, '승격 단계는 없어졌다');
   assert.match(txt, /전체/);
 });
 
 test('formatSweep은 각 파라미터와 기본값 표시를 낸다', () => {
   const trials = [trial({ impactG: 3, isFall: true }), trial({ impactG: 0, isFall: false })];
-  const sweep = sweepAll(trials, { impactG: { values: [2.5, 3.5], affects: 'candidate+confirmed' } });
+  const sweep = sweepAll(trials, { impactG: { values: [2.5, 3.5], affects: 'detected' } });
   const txt = formatSweep(sweep);
   assert.match(txt, /impactG/);
   assert.match(txt, /\*/); // 기본값 표시

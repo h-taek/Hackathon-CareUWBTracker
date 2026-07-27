@@ -25,7 +25,7 @@ function valid(): Clip {
       dataset: 'Test', subject: 'Test:S1', activity: 'F01', activityLabel: 'test',
       trial: 'R01', placement: 'waist', isFall: true, srcHz: 200, rowRange: [0, 3],
     },
-    expect: { events: ['fall_candidate'], classicalEvents: ['fall_candidate'], aiScore: 0.9 },
+    expect: { events: ['fall_detected'], classicalEvents: ['fall_detected'], aiScore: 0.9 },
     samples: { ax: [0, 1, 2], ay: [0, 1, 2], az: [1, 1, 1] },
   };
 }

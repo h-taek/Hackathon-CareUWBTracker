@@ -1,9 +1,7 @@
 import {
-  acknowledgeAlert,
   applyAlertEvent,
   createAlertStore,
   dismissAlert,
-  finishResolved,
   getActiveAlert,
 } from './alert-state.js';
 
@@ -18,7 +16,7 @@ import {
   const names = new Map();           // tagId -> 표시명. live position에는 name이 없어 /tags로 보강
   let selectedTag = null;            // 사용자가 목록에서 고른 태그
   const alertStore = createAlertStore();
-  let resolveTimer = null;
+  let bannerHidden = false;          // 배너 ✕로 접었는가. 새 경보 갱신이 오면 다시 편다
   const OFFLINE_MS = 4000;           // 이 시간 넘게 미수신이면 오프라인 표시
 
   const $ = (id) => document.getElementById(id);
@@ -31,7 +29,7 @@ import {
     const read = (n) => s.getPropertyValue(n).trim();
     return {
       ok: read('--ok'), sel: read('--sel'), offline: read('--offline'),
-      candidate: read('--warning'), confirmed: read('--alarm'),
+      alert: read('--alarm'),
       mapLine: read('--map-line'), mapInk: read('--map-ink'),
     };
   })();
@@ -46,7 +44,7 @@ import {
 
   function stateOf(tagId) {
     const alert = alertStore.alertsByTag.get(tagId);
-    if (alert && alert.resolvedAt === null) return alert.phase;
+    if (alert && alert.resolvedAt === null) return 'alert';
     const seen = lastSeen.get(tagId);
     if (!seen || Date.now() - seen > OFFLINE_MS) return 'offline';
     if (tagId === selectedTag) return 'sel';
@@ -102,7 +100,7 @@ import {
       const px = mx(t.pos.x), py = my(t.pos.y);
       const st = stateOf(id), c = C[st], rd = isSmall() ? 5 : 7;
       ctx.beginPath(); ctx.arc(px, py, errOf(t) * scale, 0, Math.PI * 2);
-      const isAlert = st === 'candidate' || st === 'confirmed';
+      const isAlert = st === 'alert';
       ctx.fillStyle = rgba(c, isAlert ? 0.20 : 0.16); ctx.fill();
       ctx.beginPath(); ctx.arc(px, py, rd, 0, Math.PI * 2);
       ctx.fillStyle = c; ctx.fill();
@@ -155,11 +153,8 @@ import {
   const overlay = $('overlay');
   const viewport = $('viewport');
 
-  const phaseCopy = {
-    candidate: { icon: '⚠️', label: '낙상 후보', message: '확인이 필요합니다' },
-    confirmed: { icon: '🚨', label: '낙상 확진', message: '즉시 확인이 필요합니다' },
-    canceled: { icon: '✓', label: '후보 해제', message: '움직임이 감지되어 자동 해제됐습니다' },
-  };
+  // 경보는 한 종류다. 감지기가 충격을 잡고 AI가 낙상으로 통과시킨 순간 이 문구가 뜬다.
+  const ALERT_COPY = { icon: '🚨', label: '낙상 감지', message: '즉시 확인이 필요합니다' };
   const finite = (value, suffix = '') => Number.isFinite(value) ? round1(value) + suffix : '—';
   const whereOf = (alert) => alert.pos
     ? '(' + round1(alert.pos.x) + ', ' + round1(alert.pos.y) + ')m'
@@ -188,39 +183,29 @@ import {
       return;
     }
 
-    clearResolveTimer();
+    bannerHidden = false;            // 새 소식이 왔으면 접어둔 배너를 다시 편다
     if (result.change === 'activated') onAlertActivated(result.alert);
     if (result.change === 'updated') onAlertUpdated(result.alert);
-    if (result.change === 'resolved') onAlertResolved(result.alert);
-    renderAlertState(result.change !== 'resolved');
-    if (alertStore.view === 'resolved') scheduleIdle(result.alert.tagId);
+    renderAlertState(true);
   }
 
   function renderAlertState(showPopup = false) {
     const alert = getActiveAlert(alertStore);
     const pill = $('statePill');
-    pill.classList.remove('alerting', 'candidate', 'confirmed', 'resolved');
+    pill.classList.remove('alerting');
     pill.classList.add(alertStore.view);
     pill.textContent = alertStore.view + (alertStore.view === 'alerting' ? ' · 확인 필요' : '');
 
     if (!alert) {
       overlay.classList.remove('on');
+      viewport.classList.remove('banner-off');
       close3d();
       draw();
       renderRooms();
       return;
     }
 
-    const resolved = alertStore.view === 'resolved';
-    const copy = resolved
-      ? {
-          icon: '✓',
-          label: '경보 해제',
-          message: alert.resolution === 'auto_canceled'
-            ? '움직임이 감지되어 자동 해제됐습니다'
-            : '이 화면에서 경보를 닫았습니다',
-        }
-      : phaseCopy[alert.phase];
+    const copy = ALERT_COPY;
     const who = nameOf(alert.tagId);
     const zone = zoneOf(alert);
     const where = whereOf(alert);
@@ -233,18 +218,13 @@ import {
     $('popWho').textContent = 'f1 · ' + zone + ' · ' + who;
     $('popWhere').textContent = details;
     $('popTime').textContent = new Date(alert.updatedAt).toLocaleTimeString('ko-KR');
-    $('popAck').textContent = alert.acknowledgedAt ? '확인됨' : '확인함';
-    $('popAck').disabled = alert.acknowledgedAt !== null || alertStore.view === 'resolved';
-    $('popDismiss').textContent = alertStore.view === 'resolved' ? '해제됨' : '화면에서 닫기';
-    $('popDismiss').disabled = alertStore.view === 'resolved';
-    $('popup').dataset.phase = resolved ? 'canceled' : alert.phase;
-    overlay.dataset.phase = resolved ? 'canceled' : alert.phase;
     $('bannerTitle').firstChild.textContent = 'f1 · ' + zone + ' · ' + who;
     $('bannerSub').textContent = copy.label + ' · ' + details;
     $('scene3dWho').textContent = who + ' · ' + copy.label;
+    viewport.classList.toggle('banner-off', bannerHidden);
     upsertAlertLog(alert);
 
-    if (showPopup || alertStore.view === 'resolved') overlay.classList.add('on');
+    if (showPopup) overlay.classList.add('on');
     draw();
     renderRooms();
   }
@@ -271,20 +251,22 @@ import {
         updateLogCount();
       };
       row.appendChild(fl); row.appendChild(mid); row.appendChild(x);
+      // 로그를 누르면 팝업을 다시 연다. ✕로 접은 뒤 되돌아올 길이 이것뿐이다.
       row.onclick = () => {
         selectedTag = alert.tagId;
-        alertStore.activeTagId = alert.tagId;
-        renderAlertState(false);
+        const target = alertStore.alertsByTag.get(alert.tagId);
+        const live = !!target && target.resolvedAt === null;
+        if (live) alertStore.activeTagId = alert.tagId;
+        renderAlertState(live);
       };
       box.prepend(row);
     }
     box.querySelectorAll('.logrow.active').forEach((r) => r.classList.remove('active'));
-    row.className = 'logrow fall ' + alert.phase
-      + (alert.resolvedAt === null ? ' active' : ' cleared');
+    row.className = 'logrow fall' + (alert.resolvedAt === null ? ' active' : ' cleared');
     row.querySelector('.who').textContent = nameOf(alert.tagId);
-    row.querySelector('.desc').textContent = zoneOf(alert) + ' · ' + phaseCopy[alert.phase].label
+    row.querySelector('.desc').textContent = zoneOf(alert) + ' · ' + ALERT_COPY.label
       + ' · ' + new Date(alert.updatedAt).toLocaleTimeString('ko-KR')
-      + (alert.acknowledgedAt ? ' · 확인됨' : '');
+      + (alert.resolvedAt ? ' · 종료됨' : '');
     updateLogCount();
   }
 
@@ -294,17 +276,6 @@ import {
     $('cntEvt').textContent = String(n);
   }
 
-  function clearResolveTimer() {
-    if (resolveTimer !== null) clearTimeout(resolveTimer);
-    resolveTimer = null;
-  }
-  function scheduleIdle(tagId) {
-    clearResolveTimer();
-    resolveTimer = setTimeout(() => {
-      if (finishResolved(alertStore, tagId)) renderAlertState(false);
-      resolveTimer = null;
-    }, 3000);
-  }
 
   // ── 3D 패널 (F3) ──
   // scene3d는 three·gaussian-splats-3d를 쓰는 무거운 모듈이라 동적 import로 분리한다.
@@ -351,21 +322,25 @@ import {
   }
 
   $('popView3d').onclick = open3d;
-  $('popAck').onclick = () => {
-    const alert = getActiveAlert(alertStore);
-    if (alert && acknowledgeAlert(alertStore, alert.tagId)) renderAlertState(false);
-  };
-  function dismissCurrentAlert() {
+  // 경보를 끝내는 유일한 버튼. ✕들은 전부 "감추기"라서 이것과 헷갈리면 안 된다.
+  function endCurrentAlert() {
     const alert = getActiveAlert(alertStore);
     if (!alert || !dismissAlert(alertStore, alert.tagId)) return;
     onAlertResolved(alert);
+    overlay.classList.remove('on');
+    bannerHidden = false;
+    // 로그를 먼저 닫는다. 마지막 경보였다면 renderAlertState가 활성 경보 없음으로
+    // 조기 반환해 여기까지 못 온다 — 그러면 로그가 '진행 중'인 채로 굳는다.
+    upsertAlertLog(alert);
     renderAlertState(false);
-    if (alertStore.view === 'resolved') scheduleIdle(alert.tagId);
   }
-  $('popDismiss').onclick = dismissCurrentAlert;
+  $('popDismiss').onclick = endCurrentAlert;
   $('popClose').onclick = () => overlay.classList.remove('on');
   overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('on'); };
-  $('bannerClose').onclick = dismissCurrentAlert;
+  $('bannerClose').onclick = () => {
+    bannerHidden = true;
+    viewport.classList.add('banner-off');
+  };
   $('navToggle').onclick = () => { $('shell').classList.toggle('nav-collapsed'); requestAnimationFrame(resize); };
   document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
     const f = h.closest('.floor');

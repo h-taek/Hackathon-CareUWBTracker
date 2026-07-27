@@ -22,85 +22,109 @@ function seq(startTs: number, dt: number, gs: number[]) {
   return gs.map((g, i) => frame(startTs + i * dt, g));
 }
 
-test('정상 낙상: 자유낙하->충격->5초 정지 => candidate 그리고 confirmed', () => {
+// dt=100ms 프레임 기준, 판정 지연 1.5초 = 정점 뒤 15프레임.
+const QUIET = (n: number) => Array(n).fill(1);
+
+test('자유낙하 -> 충격이면 정점 1.5초 뒤에 fall_detected가 나온다', () => {
   const det = createFallDetector();
-  // 정지 1g 몇 프레임 -> 자유낙하 0.1g -> 충격 4g -> 이후 5.2초간 1g 정지(정착 0.4s 포함)
   const frames = [
     ...seq(0, 100, [1, 1, 0.1, 0.1]),   // t=200,300: freefall
-    frame(400, 4.0),                     // 충격
-    ...seq(500, 100, Array(54).fill(1)), // 500~5800ms 정지(>=5000ms 창)
+    frame(400, 4.0),                     // 충격(정점)
+    ...seq(500, 100, QUIET(30)),         // 500~3400ms
   ];
   const events = run(det, frames);
-  const types = events.map((e) => e.type);
-  assert.ok(types.includes('fall_candidate'), '후보 발행');
-  assert.ok(types.includes('fall_confirmed'), '확진 발행');
-  assert.strictEqual(types.filter((t) => t === 'fall_canceled').length, 0, '취소 없음');
-  const cand = events.find((e) => e.type === 'fall_candidate')!;
-  assert.strictEqual(cand.confidence, 'candidate');
-  assert.strictEqual(cand.freefall, true, '직전 자유낙하 감지');
-  assert.ok((cand.peakAccel as number) >= 4.0);
+  assert.deepStrictEqual(events.map((e) => e.type), ['fall_detected']);
+  assert.strictEqual(events[0].confidence, 'detected');
+  assert.strictEqual(events[0].freefall, true, '직전 자유낙하 감지');
+  assert.strictEqual(events[0].peakAccel, 4.0);
+  // 이벤트 ts는 판정 시각이 아니라 충격 시각이다 — 관제사에게 의미 있는 건 넘어진 때다.
+  assert.strictEqual(events[0].ts, 400);
 });
 
-test('자유낙하 없는 충격도 후보->확진, freefall=false', () => {
+test('정점 뒤 1.5초가 안 지나면 아직 안 쏜다', () => {
   const det = createFallDetector();
-  const frames = [frame(0, 1), frame(100, 3.0), ...seq(200, 100, Array(54).fill(1))];
+  // 충격 후 1.4초까지만 흘린다
+  const events = run(det, [frame(0, 4.0), ...seq(100, 100, QUIET(14))]);
+  assert.strictEqual(events.length, 0);
+});
+
+test('판정 지연은 마지막 정점 갱신 기준이다 — 늦게 온 더 큰 충격이 기준을 다시 잡는다', () => {
+  const det = createFallDetector();
+  // 3g 충격 -> 0.5초 뒤 6g(진짜 정점) -> 그 뒤로 조용
+  const frames = [frame(0, 3.0), ...seq(100, 100, QUIET(4)),
+    frame(500, 6.0), ...seq(600, 100, QUIET(30))];
   const events = run(det, frames);
-  const cand = events.find((e) => e.type === 'fall_candidate')!;
-  assert.strictEqual(cand.freefall, false);
-  assert.ok(events.some((e) => e.type === 'fall_confirmed'));
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].peakAccel, 6.0, 'peak은 관찰 구간 최대여야 한다');
+  assert.ok((events[0].ts as number) === 0, 'ts는 첫 충격 시각');
+  // 500(정점) + 1500 = 2000ms 이후에 나와야 한다. 즉 3.0 기준(1500)보다 늦다.
 });
 
-test('정착 이후 움직임 재개 => canceled, 확진 없음', () => {
-  const det = createFallDetector();
-  // 충격 -> 정착(0.4s) 지나고 500ms 시점 큰 움직임(2g)
-  const frames = [frame(0, 3.0), ...seq(100, 100, [1, 1, 1, 1]), frame(500, 2.0)];
-  const events = run(det, frames);
-  assert.ok(events.some((e) => e.type === 'fall_canceled'));
-  assert.ok(!events.some((e) => e.type === 'fall_confirmed'));
+test('판정 지연은 설정으로 바꾼다', () => {
+  const det = createFallDetector({ decisionDelayMs: 300 });
+  const events = run(det, [frame(0, 4.0), ...seq(100, 100, QUIET(5))]);
+  assert.strictEqual(events.length, 1);
 });
 
-test('정착 구간 내 튐은 취소하지 않는다(바운스 무시)', () => {
-  const det = createFallDetector();
-  // 충격 -> 정착창(0.4s) 안 200ms에 6g 바운스 -> 이후 5.2초 정지
-  const frames = [frame(0, 3.0), frame(200, 6.0), ...seq(300, 100, Array(54).fill(1))];
-  const events = run(det, frames);
-  assert.ok(!events.some((e) => e.type === 'fall_canceled'), '바운스로 취소 안 됨');
-  assert.ok(events.some((e) => e.type === 'fall_confirmed'));
-  const conf = events.find((e) => e.type === 'fall_confirmed')!;
-  assert.ok((conf.peakAccel as number) >= 6.0, 'peak은 관찰 구간 최대');
+test('정점이 계속 갱신돼도 상한(지연 2배)에서 판정한다', () => {
+  const det = createFallDetector({ decisionDelayMs: 300 });
+  // 매 프레임 조금씩 더 큰 충격 -> peakTs가 계속 밀리지만 600ms 상한에서 나가야 한다
+  const rising = Array.from({ length: 20 }, (_, i) => 3.0 + i * 0.1);
+  const events = run(det, [frame(0, 2.9), ...seq(100, 100, rising)]);
+  assert.strictEqual(events.length, 1);
+  assert.ok((events[0].ts as number) === 0);
 });
 
-test('무동작 창 미달 시 아직 확진 없음', () => {
+test('자유낙하 없는 충격도 감지되고 freefall=false', () => {
   const det = createFallDetector();
-  const frames = [frame(0, 3.0), ...seq(100, 100, Array(30).fill(1))]; // 100~3000ms(<5000)
-  const events = run(det, frames);
-  assert.ok(events.some((e) => e.type === 'fall_candidate'));
-  assert.ok(!events.some((e) => e.type === 'fall_confirmed'));
+  const events = run(det, [frame(0, 1), frame(100, 3.0), ...seq(200, 100, QUIET(30))]);
+  assert.deepStrictEqual(events.map((e) => e.type), ['fall_detected']);
+  assert.strictEqual(events[0].freefall, false);
 });
 
-test('cooldown 재무장: 확진 후 움직였다가 다시 충격 => 새 후보', () => {
+test('충격 뒤 움직여도 아무 일 없다 — 자동 해제는 없다', () => {
   const det = createFallDetector();
-  const first = [frame(0, 3.0), ...seq(100, 100, Array(54).fill(1))]; // 확진까지
-  const move = [frame(5500, 2.0)];                                    // 움직임 -> IDLE 재무장
-  const second = [frame(5700, 3.5)];                                  // 새 충격
-  const events = run(det, [...first, ...move, ...second]);
-  assert.strictEqual(events.filter((e) => e.type === 'fall_candidate').length, 2);
+  // 옛 규칙이면 여기서 fall_canceled가 나와 경보가 사라졌다.
+  const frames = [frame(0, 3.0), ...seq(100, 100, [1, 1, 1, 1]),
+    frame(500, 2.0), ...seq(600, 100, QUIET(30))];
+  assert.deepStrictEqual(run(det, frames).map((e) => e.type), ['fall_detected']);
 });
 
-test('정착 이후 밴드~움직임 사이 흔들림은 무동작 시계를 리셋해 확진을 지연한다', () => {
+test('충격 파형이 임계를 여러 번 넘어도 한 건만 나간다', () => {
   const det = createFallDetector();
-  // 충격 -> 정지 3초 -> 갭(0.3g 움직임, 취소 아님) 한 프레임 -> 다시 정지. 갭 이후 5초 지나야 확진.
-  const frames = [
-    frame(0, 3.0),
-    ...seq(100, 100, Array(30).fill(1)), // 100~3000ms 정지 (아직 확진 전, <5000)
-    frame(3100, 1.3),                    // 갭: motion 0.3 (밴드 0.25 초과, 움직임 0.4 미만) -> 시계 리셋
-    ...seq(3200, 100, Array(60).fill(1)),// 3200~9100ms 정지: 리셋 시점(3100)+5000=8100에 확진
-  ];
-  const events = run(det, frames);
-  assert.ok(!events.some((e) => e.type === 'fall_canceled'), '갭은 취소가 아니다');
-  const conf = events.find((e) => e.type === 'fall_confirmed');
-  assert.ok(conf, '확진은 발생한다');
-  assert.ok((conf!.ts as number) >= 8100, `확진이 갭 이후로 지연됨(ts=${conf!.ts})`);
+  // 실제 낙상 파형은 2.5g를 연속 표본으로 넘는다. 이게 전부 하나의 충격이어야 한다.
+  const events = run(det, [...seq(0, 20, [4.0, 5.2, 6.1, 3.3, 2.9, 2.6]),
+    ...seq(120, 20, QUIET(120))]);
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].peakAccel, 6.1, '정점은 6.1g');
+  assert.strictEqual(events[0].ts, 0, '충격 시작 시각으로 낸다');
+});
+
+test('쿨다운이 지나면 다음 충격을 다시 감지한다', () => {
+  const det = createFallDetector({ decisionDelayMs: 200, cooldownMs: 1000 });
+  const events = run(det, [
+    frame(0, 4.0), ...seq(100, 100, QUIET(3)),   // 200ms 지연 -> t=200에 발화
+    frame(400, 4.0),                              // 쿨다운(1s) 안 — 무시
+    ...seq(500, 100, QUIET(8)),                   // t=1200에 쿨다운 만료 -> IDLE
+    frame(1400, 4.5), ...seq(1500, 100, QUIET(3)),
+  ]);
+  assert.strictEqual(events.length, 2);
+  assert.deepStrictEqual(events.map((e) => e.ts), [0, 1400]);
+});
+
+test('reset은 쿨다운까지 풀어 다음 충격을 바로 받는다 — AI 기각 경로다', () => {
+  const det = createFallDetector({ decisionDelayMs: 200 });
+  assert.strictEqual(run(det, [frame(0, 4.0), ...seq(100, 100, QUIET(3))]).length, 1);
+  det.reset('tag-watch');
+  assert.strictEqual(
+    run(det, [frame(400, 4.0), ...seq(500, 100, QUIET(3))]).length, 1,
+    '기각된 충격은 쿨다운을 안 먹는다',
+  );
+});
+
+test('임계 미만 충격은 감지하지 않는다', () => {
+  const det = createFallDetector();
+  assert.strictEqual(run(det, seq(0, 100, [1, 2.4, 2.49, 1, 1, 1, 1, 1, 1, 1])).length, 0);
 });
 
 test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
@@ -108,20 +132,29 @@ test('과거 ts 프레임은 무시된다(단조 ts 가드)', () => {
   const out = run(det, [
     frame(0, 1),
     frame(5000, 1),   // lastTs를 5000으로 전진(아직 IDLE)
-    frame(1000, 4.0), // 과거 ts(1000<5000) 충격: 무시되어 candidate 안 나옴
+    frame(1000, 4.0), // 과거 ts(1000<5000) 충격: 무시되어 이벤트 안 나옴
+    ...seq(5100, 100, QUIET(30)),
   ]);
   assert.strictEqual(out.length, 0, '과거 ts 충격은 무시');
-  const out2 = run(det, [frame(6000, 4.0)]); // 미래 ts 충격은 정상
-  assert.strictEqual(out2.filter((e) => e.type === 'fall_candidate').length, 1);
+  const out2 = run(det, [frame(9000, 4.0), ...seq(9100, 100, QUIET(30))]);
+  assert.strictEqual(out2.filter((e) => e.type === 'fall_detected').length, 1);
+});
+
+test('태그마다 상태가 독립이다', () => {
+  const det = createFallDetector({ decisionDelayMs: 200 });
+  const feed = (tag: string) => run(det, [frame(0, 4.0, tag), ...[100, 200, 300]
+    .map((t) => frame(t, 1, tag))]);
+  assert.strictEqual(feed('tag-a').length, 1);
+  assert.strictEqual(feed('tag-b').length, 1, '한 태그의 쿨다운이 다른 태그를 막으면 안 된다');
 });
 
 test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', () => {
-  const det = createFallDetector();
-  const pos = { pos: { x: 3, y: 4, z: 0 } };
-  const withPos = run(det, [frame(0, 3.0)], pos);
+  const det = createFallDetector({ decisionDelayMs: 200 });
+  const frames = [frame(0, 3.0), ...seq(100, 100, QUIET(3))];
+  const withPos = run(det, frames, { pos: { x: 3, y: 4, z: 0 } });
   assert.deepStrictEqual(withPos[0].pos, { x: 3, y: 4, z: 0 });
 
-  const det2 = createFallDetector();
-  const noPos = run(det2, [frame(0, 3.0)], null);
+  const det2 = createFallDetector({ decisionDelayMs: 200 });
+  const noPos = run(det2, frames, null);
   assert.strictEqual(noPos[0].pos, null);
 });

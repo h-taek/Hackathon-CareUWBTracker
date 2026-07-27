@@ -28,26 +28,25 @@ function trial({ impactG = 0, impactAtMs = 1000, quietMs = 6000, hz = 50, isFall
   return { dataset, placement, isFall, samples };
 }
 
-test('충격 2.5g 이상이면 candidate 감지', () => {
-  const r = detectTrial(feedSamples(trial({ impactG: 3.0 }).samples!));
-  assert.equal(r.candidate, true);
+test('충격 2.5g 이상이면 감지', () => {
+  assert.equal(detectTrial(feedSamples(trial({ impactG: 3.0 }).samples!)).detected, true);
 });
 
-test('충격 없으면 candidate 미감지', () => {
-  const r = detectTrial(feedSamples(trial({ impactG: 0 }).samples!));
-  assert.equal(r.candidate, false);
+test('충격 없으면 미감지', () => {
+  assert.equal(detectTrial(feedSamples(trial({ impactG: 0 }).samples!)).detected, false);
 });
 
-test('충격 후 무동작 5초 지속되면 confirmed', () => {
+test('충격 뒤 정지가 길게 이어져도 판정은 그대로 한 건이다', () => {
+  // 예전에는 여기서 confirmed로 승격했다. 이제 승격 단계가 없다.
   const r = detectTrial(feedSamples(trial({ impactG: 3.0, impactAtMs: 500, quietMs: 7000 }).samples!));
-  assert.equal(r.candidate, true);
-  assert.equal(r.confirmed, true);
+  assert.equal(r.detected, true);
+  assert.deepEqual(Object.keys(r), ['detected']);
 });
 
 test('충격이 impactG 미만이면 안 잡힌다(임계 스윕 효과)', () => {
   const s = trial({ impactG: 2.0 }).samples!;
-  assert.equal(detectTrial(feedSamples(s), { impactG: 2.5 }).candidate, false);
-  assert.equal(detectTrial(feedSamples(s), { impactG: 1.5 }).candidate, true);
+  assert.equal(detectTrial(feedSamples(s), { impactG: 2.5 }).detected, false);
+  assert.equal(detectTrial(feedSamples(s), { impactG: 1.5 }).detected, true);
 });
 
 test('혼동행렬 지표 계산', () => {
@@ -70,7 +69,7 @@ test('evaluateTrials가 전체+그룹 혼동행렬을 만든다', () => {
     trial({ impactG: 3.0, isFall: false, dataset: 'Y' }), // ADL인데 충격 -> fp
   ];
   const { overall, byGroup } = evaluateTrials(trials);
-  const m = overall.candidate.metrics();
+  const m = overall.metrics();
   assert.equal(m.tp, 1); assert.equal(m.tn, 1); assert.equal(m.fp, 1);
   assert.ok(byGroup.has('X|waist'));
   assert.ok(byGroup.has('Y|waist'));
@@ -80,6 +79,6 @@ test('sweepParam은 값마다 지표점을 만든다', () => {
   const trials = [trial({ impactG: 2.0, isFall: true })];
   const pts = sweepParam(trials, 'impactG', [1.5, 2.5]);
   assert.equal(pts.length, 2);
-  assert.equal(pts[0].candidate.tp, 1); // 1.5 임계 -> 2.0충격 잡음
-  assert.equal(pts[1].candidate.fn, 1); // 2.5 임계 -> 놓침
+  assert.equal(pts[0].detected.tp, 1); // 1.5 임계 -> 2.0충격 잡음
+  assert.equal(pts[1].detected.fn, 1); // 2.5 임계 -> 놓침
 });

@@ -1,16 +1,14 @@
-export type AlertPhase = 'candidate' | 'confirmed' | 'canceled';
-export type AlertView = 'idle' | 'alerting' | 'resolved';
+export type AlertView = 'idle' | 'alerting';
 
 export interface AlertViewModel {
   tagId: string;
   name: string | null;
   eventIds: Set<string>;
-  phase: AlertPhase;
   firstDetectedAt: number;
   updatedAt: number;
-  acknowledgedAt: number | null;
   resolvedAt: number | null;
-  resolution: 'auto_canceled' | 'dismissed' | null;
+  /** 경보를 끝내는 경로는 관제사뿐이다 */
+  resolution: 'dismissed' | null;
   peakAccel: number | null;
   freefall: boolean | null;
   aiScore: number | null;
@@ -43,8 +41,6 @@ export function applyAlertEvent(
   store: AlertStore,
   event: AlertEvent,
   receivedAt?: number,
-): { change: 'ignored' | 'activated' | 'updated' | 'resolved'; reason: string | null; alert: AlertViewModel | null };
-export function acknowledgeAlert(store: AlertStore, tagId: string, acknowledgedAt?: number): AlertViewModel | null;
+): { change: 'ignored' | 'activated' | 'updated'; reason: string | null; alert: AlertViewModel | null };
 export function dismissAlert(store: AlertStore, tagId: string, dismissedAt?: number): AlertViewModel | null;
-export function finishResolved(store: AlertStore, tagId: string): boolean;
 export function getActiveAlert(store: AlertStore): AlertViewModel | null;

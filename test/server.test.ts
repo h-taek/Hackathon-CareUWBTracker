@@ -173,27 +173,28 @@ async function collectStream(
 
 const alertsIn = (events: SseEvent[]) => events.filter((e) => e.event === 'alert');
 
-test('확진 클립을 주입하면 감지기가 후보와 확진을 낸다', async () => {
+test('낙상 클립을 주입하면 감지기가 감지 이벤트를 낸다', async () => {
   const server = await start([...ANCHOR_ARGS, '--source', 'live']);
   try {
     const clips = await (await fetch(`http://127.0.0.1:${server.port}/clips`)).json();
     assert.ok(Array.isArray(clips) && clips.length >= 1);
-    assert.ok(clips.some((c: { id: string }) => c.id === 'fall-confirmed'));
+    assert.ok(clips.some((c: { id: string }) => c.id === 'fall-detected'));
     assert.equal(clips[0].samples, undefined, '목록에 원신호를 실으면 안 된다');
 
-    const stream = collectStream(server.port, (events) => alertsIn(events).length >= 2);
+    const stream = collectStream(server.port, (events) => alertsIn(events).length >= 1);
     await new Promise((r) => setTimeout(r, 300)); // 구독이 붙고 나서 주입한다
 
     const started = await (await fetch(
-      `http://127.0.0.1:${server.port}/inject-fall?tagId=tag-101&clip=fall-confirmed`,
+      `http://127.0.0.1:${server.port}/inject-fall?tagId=tag-101&clip=fall-detected`,
     )).json();
     assert.equal(started.ok, true);
-    assert.equal(started.clipId, 'fall-confirmed');
+    assert.equal(started.clipId, 'fall-detected');
     assert.ok(started.frames > 150, '샘플 수가 AI 채점창보다 많아야 한다');
 
     const events = await stream;
     const alerts = alertsIn(events);
-    assert.deepEqual(alerts.map((a) => a.data.type), ['fall_candidate', 'fall_confirmed']);
+    // 감지는 한 단계다. 승격 이벤트가 따라오면 안 된다.
+    assert.deepEqual(alerts.map((a) => a.data.type), ['fall_detected']);
 
     const candidate = alerts[0].data;
     // aiScore가 붙어 있다는 건 LightGBM 채점을 거쳤다는 뜻이다. 각본 재생이면 없는 값이다.
@@ -240,7 +241,7 @@ test('모르는 클립·태그는 400으로 거절한다', async () => {
     assert.equal(badClip.status, 400);
     assert.match((await badClip.json()).error, /알 수 없는 클립: nope/);
 
-    const badTag = await fetch(`${base}?tagId=nope&clip=fall-confirmed`);
+    const badTag = await fetch(`${base}?tagId=nope&clip=fall-detected`);
     assert.equal(badTag.status, 400);
     assert.match((await badTag.json()).error, /알 수 없는 태그/);
   } finally {

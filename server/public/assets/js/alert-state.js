@@ -1,15 +1,11 @@
-const PHASE_BY_TYPE = {
-  fall_candidate: 'candidate',
-  fall_confirmed: 'confirmed',
-  fall_canceled: 'canceled',
-};
+// 경보는 한 종류뿐이다. 감지기가 fall_detected 하나를 내고 끝나며(detection/fall.ts),
+// 승격도 자동 해제도 없다. 경보를 지우는 경로는 관제사의 dismissAlert() 하나다.
+const ALERT_TYPE = 'fall_detected';
 
+// 단계가 하나뿐이라 심각도 비교가 없다. 최근에 갱신된 경보가 대표가 된다.
 const activeAlerts = (store) => [...store.alertsByTag.values()]
   .filter((alert) => alert.resolvedAt === null)
-  .sort((a, b) => {
-    const severity = (phase) => phase === 'confirmed' ? 2 : 1;
-    return severity(b.phase) - severity(a.phase) || b.updatedAt - a.updatedAt;
-  });
+  .sort((a, b) => b.updatedAt - a.updatedAt);
 
 const selectActive = (store) => {
   const next = activeAlerts(store)[0] || null;
@@ -27,8 +23,7 @@ export function createAlertStore() {
 }
 
 export function applyAlertEvent(store, event, receivedAt = Date.now()) {
-  const phase = event && PHASE_BY_TYPE[event.type];
-  if (!phase || typeof event.tagId !== 'string' || !event.tagId) {
+  if (!event || event.type !== ALERT_TYPE || typeof event.tagId !== 'string' || !event.tagId) {
     return { change: 'ignored', reason: 'invalid_event', alert: null };
   }
   if (event.eventId && store.processedEventIds.has(event.eventId)) {
@@ -37,9 +32,6 @@ export function applyAlertEvent(store, event, receivedAt = Date.now()) {
   if (event.eventId) store.processedEventIds.add(event.eventId);
 
   const previous = store.alertsByTag.get(event.tagId);
-  if (phase === 'canceled' && !previous) {
-    return { change: 'ignored', reason: 'unknown_alert', alert: null };
-  }
 
   const eventAt = Number.isFinite(event.ts) ? event.ts : receivedAt;
   const eventIds = new Set(previous ? previous.eventIds : []);
@@ -48,12 +40,10 @@ export function applyAlertEvent(store, event, receivedAt = Date.now()) {
     tagId: event.tagId,
     name: event.name || (previous && previous.name) || null,
     eventIds,
-    phase,
     firstDetectedAt: previous ? previous.firstDetectedAt : eventAt,
     updatedAt: eventAt,
-    acknowledgedAt: previous ? previous.acknowledgedAt : null,
-    resolvedAt: phase === 'canceled' ? receivedAt : null,
-    resolution: phase === 'canceled' ? 'auto_canceled' : null,
+    resolvedAt: null,
+    resolution: null,
     peakAccel: Number.isFinite(event.peakAccel)
       ? event.peakAccel
       : (previous ? previous.peakAccel : null),
@@ -72,42 +62,22 @@ export function applyAlertEvent(store, event, receivedAt = Date.now()) {
   };
   store.alertsByTag.set(event.tagId, alert);
 
-  if (phase === 'canceled') {
-    const next = selectActive(store);
-    store.view = next ? 'alerting' : 'resolved';
-    if (!next) store.activeTagId = event.tagId;
-    return { change: 'resolved', reason: 'auto_canceled', alert };
-  }
-
+  // 쿨다운이 끝난 뒤 같은 태그에서 새 충격이 오면, 아직 안 닫은 경보를 갱신한다.
   const wasActive = store.activeTagId === event.tagId && previous && previous.resolvedAt === null;
   store.view = 'alerting';
   selectActive(store);
   return { change: wasActive ? 'updated' : 'activated', reason: null, alert };
 }
 
-export function acknowledgeAlert(store, tagId, acknowledgedAt = Date.now()) {
-  const alert = store.alertsByTag.get(tagId);
-  if (!alert || alert.resolvedAt !== null) return null;
-  alert.acknowledgedAt = acknowledgedAt;
-  return alert;
-}
-
+/** 경보를 끝내는 유일한 경로. 감지기가 아니라 관제사만 이걸 부른다. */
 export function dismissAlert(store, tagId, dismissedAt = Date.now()) {
   const alert = store.alertsByTag.get(tagId);
   if (!alert || alert.resolvedAt !== null) return null;
   alert.resolvedAt = dismissedAt;
   alert.resolution = 'dismissed';
   const next = selectActive(store);
-  store.view = next ? 'alerting' : 'resolved';
-  if (!next) store.activeTagId = tagId;
+  store.view = next ? 'alerting' : 'idle';
   return alert;
-}
-
-export function finishResolved(store, tagId) {
-  if (store.view !== 'resolved' || store.activeTagId !== tagId) return false;
-  store.view = 'idle';
-  store.activeTagId = null;
-  return true;
 }
 
 export function getActiveAlert(store) {

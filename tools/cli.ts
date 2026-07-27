@@ -202,23 +202,21 @@ export async function runEvaluate(
   config: EvaluateConfig,
   out: { write: (chunk: string) => unknown } = process.stdout,
 ): Promise<import('./evaluate.ts').EvaluationResult> {
-  const overall = { candidate: makeConfusion(), confirmed: makeConfusion() };
-  const byGroup = new Map<string, { dataset: string; placement: string; candidate: ReturnType<typeof makeConfusion>; confirmed: ReturnType<typeof makeConfusion> }>();
+  const overall = makeConfusion();
+  const byGroup = new Map<string, { dataset: string; placement: string; detected: ReturnType<typeof makeConfusion> }>();
   const cache: TrialLike[] = []; // 스윕용 압축 trial
   const wantAll = config.sweepPlacement === 'all';
 
   const onTrial = (t: import('./csv.ts').Trial): void => {
-    const { candidate, confirmed } = detectTrial(trialFeed(t));
-    overall.candidate.add(t.isFall, candidate);
-    overall.confirmed.add(t.isFall, confirmed);
+    const { detected } = detectTrial(trialFeed(t));
+    overall.add(t.isFall, detected);
     const key = `${t.dataset}|${t.placement}`;
     let g = byGroup.get(key);
     if (!g) {
-      g = { dataset: t.dataset, placement: t.placement, candidate: makeConfusion(), confirmed: makeConfusion() };
+      g = { dataset: t.dataset, placement: t.placement, detected: makeConfusion() };
       byGroup.set(key, g);
     }
-    g.candidate.add(t.isFall, candidate);
-    g.confirmed.add(t.isFall, confirmed);
+    g.detected.add(t.isFall, detected);
 
     if (config.sweep && (wantAll || t.placement === config.sweepPlacement)) {
       const n = t.samples.length;
@@ -246,10 +244,9 @@ export async function runEvaluate(
 
   if (config.json) {
     const toObj = (r: typeof result) => ({
-      overall: { candidate: r.overall.candidate.metrics(), confirmed: r.overall.confirmed.metrics() },
+      overall: r.overall.metrics(),
       byGroup: [...r.byGroup.values()].map((g) => ({
-        dataset: g.dataset, placement: g.placement,
-        candidate: g.candidate.metrics(), confirmed: g.confirmed.metrics(),
+        dataset: g.dataset, placement: g.placement, detected: g.detected.metrics(),
       })),
     });
     fs.writeFileSync(config.json, JSON.stringify({ file: config.file, stats, evaluation: toObj(result), sweep }, null, 2));

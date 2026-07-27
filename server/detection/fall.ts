@@ -1,6 +1,22 @@
 // 고전 낙상 감지 상태머신(순수·결정적). 04 §3 알고리즘.
-// IDLE -> (충격) fall_candidate -> MONITORING -> (무동작 유지) fall_confirmed / (움직임) fall_canceled -> COOLDOWN -> (움직임) IDLE
+// IDLE -> (충격) PENDING -> (정점 뒤 판정지연 경과) fall_detected -> COOLDOWN -> IDLE
 // 시간은 payload.ts만 사용. Date.now() 비의존 -> 테스트 재현 가능.
+//
+// 감지는 한 단계다. 충격을 잡아 fall_detected 하나를 내고 끝이며, 그 뒤로 시스템은
+// 아무것도 판단하지 않는다. 낙상이냐 아니냐는 캐스케이드 AI가 한 번 정하고
+// (detection/cascade.ts), 그 다음은 관제사가 본다.
+//
+// PENDING이 있는 이유 — AI에 넣는 창을 학습 때와 같은 모양으로 만들기 위해서다.
+// 임계를 넘은 표본에서 즉시 쏘면 링버퍼 끝(149/150)에 정점이 박히고 정점 이후 표본이
+// 0개가 된다. 그러면 post_activity/post_still_ratio가 0, pre_post_ratio가 1e11로
+// 고정돼 19특징 중 3개가 학습 때 본 적 없는 값으로 들어간다.
+// 실측(waist trial 15,883건): 즉시 판정은 민감도 79.2% / 헛경보 9.1%,
+// 정상 입력 기준선은 민감도 97.9% / 헛경보 1.4%(LOSO OOF, ml/_out/train_loso.txt).
+// 정점 뒤 decisionDelayMs(=창 절반)만큼 기다렸다 쏘면 정점이 창 중앙에 놓인다.
+//
+// 예전에는 여기에 단계가 더 있었다 — 무동작 5초면 확진으로 승격, 움직이면 자동 해제.
+// 둘 다 뺐다. 승격은 AI가 이미 내린 판정을 5초 늦출 뿐이었고, 자동 해제는 20ms 표본 하나로
+// 경보를 지워 SisFall 낙상 1,361건 중 387건(28%)을 잃었다.
 
 const DEFAULT_GRAVITY = 9.80665;
 
@@ -9,10 +25,12 @@ const DEFAULTS = {
   impactG: 2.5,
   freefallG: 0.6,
   freefallWindowMs: 500,
-  settleMs: 400,
-  immobilityMs: 5000,
-  immobilityBandG: 0.25, // 정지 밴드: |SMV-1g|가 이내여야 무동작 시계가 이어짐(초과 시 리셋)
-  movementG: 0.4,
+  // 정점 이후 이만큼 지나면 판정한다. 특징 창(features.ts WINDOW=150 @50Hz)의 절반인
+  // 1.5초여야 정점이 창 한가운데 놓인다. 줄이면 경보는 빨라지지만 입력이 다시 치우친다.
+  decisionDelayMs: 1500,
+  // 충격 파형은 임계를 여러 표본 연속으로 넘는다. 이 시간 동안 같은 태그의 재발화를 막지
+  // 않으면 낙상 한 번에 경보가 수십 건 뜬다.
+  cooldownMs: 10000,
 };
 
 export interface FallEvent {
@@ -30,22 +48,23 @@ export interface FallDetectorOptions {
   impactG?: number;
   freefallG?: number;
   freefallWindowMs?: number;
-  settleMs?: number;
-  immobilityMs?: number;
-  immobilityBandG?: number;
-  movementG?: number;
+  decisionDelayMs?: number;
+  cooldownMs?: number;
 }
 
 interface FallState {
-  phase: 'IDLE' | 'MONITORING' | 'COOLDOWN';
+  phase: 'IDLE' | 'PENDING' | 'COOLDOWN';
   lastTs: number | null;
   impactTs: number;
+  /** 마지막으로 최댓값을 갱신한 시각. 판정 지연은 여기서부터 잰다 */
+  peakTs: number;
   peakG: number;
   freefallAt: number | null;
   freefallSeen: boolean;
   lastPos: { x: number; y: number; z?: number } | null;
   seq: number;
-  quietStartTs: number;
+  /** 이벤트를 낸 시각. 쿨다운은 여기서부터 잰다 */
+  firedTs: number;
 }
 
 function num(env: Record<string, string | undefined>, key: string, fallback: number): number {
@@ -59,10 +78,8 @@ export function optionsFromEnv(env: Record<string, string | undefined> = process
     impactG: num(env, 'FALL_IMPACT_G', DEFAULTS.impactG),
     freefallG: num(env, 'FALL_FREEFALL_G', DEFAULTS.freefallG),
     freefallWindowMs: num(env, 'FALL_FREEFALL_WINDOW_MS', DEFAULTS.freefallWindowMs),
-    settleMs: num(env, 'FALL_SETTLE_MS', DEFAULTS.settleMs),
-    immobilityMs: num(env, 'FALL_IMMOBILITY_MS', DEFAULTS.immobilityMs),
-    immobilityBandG: num(env, 'FALL_IMMOBILITY_BAND_G', DEFAULTS.immobilityBandG),
-    movementG: num(env, 'FALL_MOVEMENT_G', DEFAULTS.movementG),
+    decisionDelayMs: num(env, 'FALL_DECISION_DELAY_MS', DEFAULTS.decisionDelayMs),
+    cooldownMs: num(env, 'FALL_COOLDOWN_MS', DEFAULTS.cooldownMs),
   };
 }
 
@@ -73,7 +90,10 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
   function stateFor(tagId: string): FallState {
     let st = states.get(tagId);
     if (!st) {
-      st = { phase: 'IDLE', lastTs: null, impactTs: 0, peakG: 0, freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, quietStartTs: 0 };
+      st = {
+        phase: 'IDLE', lastTs: null, impactTs: 0, peakTs: 0, peakG: 0,
+        freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, firedTs: 0,
+      };
       states.set(tagId, st);
     }
     return st;
@@ -89,7 +109,9 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
       eventId: `evt-${payload.tagId}-${st.impactTs}-${++st.seq}`,
       tagId: payload.tagId,
       type,
-      ts: payload.ts,
+      // 충격이 일어난 시각을 싣는다. 판정은 그보다 decisionDelayMs 늦게 나지만,
+      // 관제사에게 의미 있는 건 넘어진 시각이다.
+      ts: st.impactTs,
       trigger: 'imu_accel',
       peakAccel: Math.round(st.peakG * 100) / 100,
       freefall: st.freefallSeen,
@@ -105,14 +127,13 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
   ) {
     const st = stateFor(payload.tagId);
     const payloadTs = payload.ts as number;
-    // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 elapsed 계산 왜곡을 막는다.
+    // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 경과 계산 왜곡을 막는다.
     if (st.lastTs !== null && payloadTs < st.lastTs) return [];
     st.lastTs = payloadTs;
     if (position && position.pos) st.lastPos = position.pos;
 
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0) / cfg.gravity;
-    const motion = Math.abs(g - 1);
     const ts = payloadTs;
     const events: ReturnType<typeof makeEvent>[] = [];
 
@@ -120,41 +141,33 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
 
     if (st.phase === 'IDLE') {
       if (g >= cfg.impactG) {
-        st.phase = 'MONITORING';
+        st.phase = 'PENDING';
         st.impactTs = ts;
-        st.quietStartTs = ts;
+        st.peakTs = ts;
         st.peakG = g;
         st.freefallSeen = st.freefallAt != null && (ts - st.freefallAt) <= cfg.freefallWindowMs;
-        events.push(makeEvent(st, payload, 'fall_candidate', 'candidate'));
       }
-    } else if (st.phase === 'MONITORING') {
-      if (g > st.peakG) st.peakG = g;
-      const elapsed = ts - st.impactTs;
-      if (elapsed <= cfg.settleMs) {
-        // 정착 구간: 바운스 무시(판정 보류). quietStartTs는 impactTs 유지.
-      } else if (motion > cfg.movementG) {
-        st.phase = 'IDLE';
-        st.freefallAt = null;
-        events.push(makeEvent(st, payload, 'fall_canceled', 'cleared'));
-      } else {
-        // 정지 밴드 초과(단 움직임 임계 미만): 완전 정지가 아니므로 무동작 시계 리셋(취소는 안 함).
-        if (motion > cfg.immobilityBandG) st.quietStartTs = ts;
-        if (ts - st.quietStartTs >= cfg.immobilityMs) {
-          st.phase = 'COOLDOWN';
-          events.push(makeEvent(st, payload, 'fall_confirmed', 'confirmed'));
-        }
+    } else if (st.phase === 'PENDING') {
+      // 더 큰 충격이 오면 그게 진짜 정점이다. 대기를 새 정점 기준으로 다시 잰다.
+      if (g > st.peakG) { st.peakG = g; st.peakTs = ts; }
+      // 상한: 정점이 계속 갱신돼도 충격 뒤 2배 시간이 지나면 그냥 판정한다.
+      const ripe = ts - st.peakTs >= cfg.decisionDelayMs
+        || ts - st.impactTs >= cfg.decisionDelayMs * 2;
+      if (ripe) {
+        st.phase = 'COOLDOWN';
+        st.firedTs = ts;
+        events.push(makeEvent(st, payload, 'fall_detected', 'detected'));
       }
-    } else if (st.phase === 'COOLDOWN') {
-      if (motion > cfg.movementG) {
-        st.phase = 'IDLE';
-        st.freefallAt = null;
-      }
+    } else if (ts - st.firedTs >= cfg.cooldownMs) {
+      st.phase = 'IDLE';
+      st.freefallAt = null;
     }
 
     return events;
   }
 
-  // 태그 상태를 IDLE로 되돌린다(캐스케이드 AI가 candidate를 기각할 때 후속 confirmed 차단용).
+  // 태그 상태를 IDLE로 되돌린다(캐스케이드 AI가 감지를 기각할 때 쿨다운까지 함께 푼다).
+  // 판정이 정점 뒤로 미뤄진 덕에, 기각 시점엔 그 충격이 이미 지나가 재발화가 안 생긴다.
   function reset(tagId: string): void {
     const st = states.get(tagId);
     if (!st) return;

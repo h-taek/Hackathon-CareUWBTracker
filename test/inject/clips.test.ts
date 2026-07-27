@@ -1,7 +1,7 @@
 // 커밋된 클립이 라벨대로 동작하는지 확인한다.
 //
 // 이 테스트가 이 리포에서 하는 일이 하나 있다: 데모 화면의 문구와 실제 감지 결과를 묶어 둔다.
-// "낙상 확진 클립"이라고 적어 놓고 감지기가 확진을 안 내면 데모가 거짓말을 하는 것이고,
+// "낙상 감지 클립"이라고 적어 놓고 감지기가 이벤트를 안 내면 데모가 거짓말을 하는 것이고,
 // 그건 임계값 한 줄, 모델 파일 한 번 교체로 조용히 일어난다. 여기서 잡는다.
 
 import * as assert from 'node:assert/strict';
@@ -72,27 +72,20 @@ for (const clip of clips) {
   });
 }
 
-test('확진 클립은 후보를 거쳐 확진까지 간다', () => {
-  const clip = clips.find((c) => c.id === 'fall-confirmed');
-  assert.ok(clip, 'fall-confirmed 클립이 없다');
-  assert.deepEqual(run(clip, true).types, ['fall_candidate', 'fall_confirmed']);
-  assert.equal(clip.source.isFall, true, '확진 클립은 실제 낙상 trial이어야 한다');
+test('낙상 클립은 감지 이벤트 하나를 낸다 — 승격도 해제도 없다', () => {
+  const clip = clips.find((c) => c.id === 'fall-detected');
+  assert.ok(clip, 'fall-detected 클립이 없다');
+  assert.deepEqual(run(clip, true).types, ['fall_detected']);
+  assert.equal(clip.source.isFall, true, '낙상 클립은 실제 낙상 trial이어야 한다');
 });
 
-test('해제 클립은 후보를 낸 뒤 감지기가 스스로 거둔다', () => {
-  const clip = clips.find((c) => c.id === 'fall-canceled');
-  assert.ok(clip, 'fall-canceled 클립이 없다');
-  assert.deepEqual(run(clip, true).types, ['fall_candidate', 'fall_canceled']);
-  assert.equal(clip.source.isFall, true);
-});
-
-test('헛경보 클립은 고전만으로는 확진까지 가고 AI가 전부 막는다', () => {
+test('헛경보 클립은 고전만 켜면 울리고 AI가 전부 막는다', () => {
   const clip = clips.find((c) => c.id === 'false-alarm');
   assert.ok(clip, 'false-alarm 클립이 없다');
   assert.equal(clip.source.isFall, false, '헛경보 클립은 낙상이 아닌 trial이어야 한다');
   // 캐스케이드를 넣은 이유가 이 한 줄이다. 둘이 같아지면 클립이 의미를 잃는다.
   assert.deepEqual(run(clip, true).types, []);
-  assert.deepEqual(run(clip, false).types, ['fall_candidate', 'fall_confirmed']);
+  assert.deepEqual(run(clip, false).types, ['fall_detected']);
 });
 
 test('클립 출처가 남아 있다 — 어느 데이터셋의 어느 trial인지 추적 가능해야 한다', () => {

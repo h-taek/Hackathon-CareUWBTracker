@@ -98,12 +98,12 @@
         <div class="banner">
           <div class="bell">🔔</div>
           <div class="k" id="bannerTitle">—<small id="bannerSub">—</small></div>
-          <button class="bx" id="bannerClose" aria-label="닫기">✕</button>
+          <button class="bx" id="bannerClose" aria-label="배너 접기">✕</button>
         </div>
       </div>
       <div class="maplegend">
         <span><i class="sw" style="background:var(--ok)"></i>정상</span>
-        <span><i class="sw" style="background:var(--alarm)"></i>낙상</span>
+        <span><i class="sw" style="background:var(--alarm)"></i>경보</span>
         <span><i class="sw" style="background:var(--sel)"></i>선택</span>
         <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
         <span><i class="sw" style="background:var(--hazard);border-radius:2px"></i>위험구역</span>
@@ -130,12 +130,12 @@
 
 <!-- 경보 팝업 -->
 <div class="overlay" id="overlay">
-  <div class="popup" id="popup" role="alert" aria-live="assertive" data-phase="candidate">
-    <button class="close" id="popClose" aria-label="닫기">✕</button>
+  <div class="popup" id="popup" role="alert" aria-live="assertive">
+    <button class="close" id="popClose" aria-label="팝업 감추기 (경보는 유지)">✕</button>
     <div class="top">
-      <div class="bell" id="popIcon" aria-hidden="true">⚠️</div>
+      <div class="bell" id="popIcon" aria-hidden="true">🚨</div>
       <div>
-        <div class="k" id="popKind">낙상 후보 감지</div>
+        <div class="k" id="popKind">낙상 감지</div>
         <div class="h" id="popWho">—</div>
         <div class="w" id="popWhere">—</div>
         <div class="time" id="popTime">—</div>
@@ -143,8 +143,7 @@
     </div>
     <div class="acts">
       <button class="btn primary" id="popView3d">3D 실사 뷰 열기</button>
-      <button class="btn" id="popAck">확인함</button>
-      <button class="btn" id="popDismiss">화면에서 닫기</button>
+      <button class="btn" id="popDismiss">경보 종료</button>
     </div>
   </div>
 </div>
