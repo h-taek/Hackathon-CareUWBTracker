@@ -68,16 +68,13 @@ CLI는 기본적으로 ingest JSON을 표준 출력으로 내보내며, `--url`�
 node tools/cli.ts evaluate ml/datasets/_normalized/waist_falls_50hz.csv
 ```
 
-두 판정 수준을 함께 낸다.
-
-- candidate: 충격(impactG) 감지 순간. 순수 신호 분별력이며 `impactG` 하나에만 의존한다.
-- confirmed: 충격 + 무동작 5초 확인. 라이브 게이트 효과이며 짧은 클립이나 즉시 회복하는 trial은 미확진일 수 있다(정상).
+판정 수준은 하나다(DETECTED). 고전 감지기가 `fall_detected`를 냈는가 = 충격(impactG)을 잡았는가이며, 순수 신호 분별력을 본다. AI는 이 도구를 안 거친다 — 캐스케이드까지 포함한 성적은 `ml/train.py`의 LOSO OOF(`ml/_out/train_loso.txt`)를 본다.
 
 CSV는 g 단위, 감지기는 m/s²를 기대하므로 도구가 gravity를 곱해 넣는다. trial마다 새 감지기 인스턴스를 써서 상태가 새지 않는다. 대용량 CSV는 한 줄씩 스트리밍하며 trial 단위로 끊어 평가한다(메모리 안전).
 
 ### 임계 스윕(트레이드오프 곡선)
 
-`--sweep`은 감지기의 전 임계값을 각각 단독으로 흔들어(1D 스윕, 나머지는 기본값) 민감도-특이도-헛경보 곡선을 낸다. 스윕 대상 위치는 기본 waist(다회 패스용으로 해당 위치 trial만 메모리에 타입배열로 압축 캐시), `all`이면 전체.
+`--sweep`은 감지기의 임계값을 각각 단독으로 흔들어(1D 스윕, 나머지는 기본값) 민감도-특이도-헛경보 곡선을 낸다. 감지 여부를 실제로 바꾸는 것은 `impactG` 하나이고, freefall 계열은 이벤트의 표시 플래그만 바꾸므로 `flag-only`로 나온다. 스윕 대상 위치는 기본 waist(다회 패스용으로 해당 위치 trial만 메모리에 타입배열로 압축 캐시), `all`이면 전체.
 
 ```bash
 node tools/cli.ts evaluate ml/datasets/_normalized/waist_falls_50hz.csv --sweep --json tools/results/waist_eval.json

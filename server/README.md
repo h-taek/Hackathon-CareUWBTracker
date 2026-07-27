@@ -68,8 +68,8 @@ server/                재사용 런타임
     clip.ts            클립 로드·검증·요약
     clips/*.json       커밋된 원신호 구간 + 출처 + 기대 판정(tools/cli.ts clip으로 재생성)
   detection/           낙상 감지
-    fall.ts            고전 상태머신(B4)
-    cascade.ts         고전 + LightGBM 2단계 캐스케이드(기본)
+    fall.ts            고전 상태머신. 충격을 잡아 정점 뒤 1.5초에 fall_detected 1건 발행
+    cascade.ts         고전 + LightGBM 2단계 캐스케이드(기본). 낙상 여부는 여기서만 정한다
     features.ts        충격 윈도우 코어 19특징
     lgbm.ts            LightGBM 앙상블 추론(무의존)
     model-lgbm.json    학습된 모델(dump_lgbm.py 산출)
