@@ -22,7 +22,7 @@ import {
   const $ = (id) => document.getElementById(id);
   const round1 = (n) => Math.round(n * 10) / 10;
 
-  // CSS 변수는 시작 시 1회만 읽는다. draw()가 초당 15회 돌기 때문에
+  // CSS 변수는 시작 시 1회만 읽는다. paint()가 마커 이동 중 60fps로 돌기 때문에
   // 프레임마다 getComputedStyle을 부르면 구역 수만큼 레이아웃 비용이 붙는다.
   const CSS_VAR = (() => {
     const s = getComputedStyle(document.documentElement);
@@ -72,7 +72,7 @@ import {
   const my = (y) => H - PAD - y * scale;
   const isSmall = () => W < 380;
 
-  function draw() {
+  function paint() {
     if (!map) return;
     const C = CSS_VAR;
     ctx.clearRect(0, 0, W, H);
@@ -97,7 +97,8 @@ import {
     }
     for (const [id, t] of tags) {
       if (!t.pos) continue;
-      const px = mx(t.pos.x), py = my(t.pos.y);
+      const v = view.get(id) || t.pos;      // 서버 좌표가 아니라 보간 중인 화면 좌표를 그린다
+      const px = mx(v.x), py = my(v.y);
       const st = stateOf(id), c = C[st], rd = isSmall() ? 5 : 7;
       ctx.beginPath(); ctx.arc(px, py, errOf(t) * scale, 0, Math.PI * 2);
       const isAlert = st === 'alert';
@@ -114,6 +115,49 @@ import {
   function rgba(hex, a) {
     const n = parseInt(String(hex).replace('#', ''), 16);
     return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+
+  // ── 마커 이동 보간 ──
+  // 좌표는 10Hz로 들어온다. 그때마다 마커를 그 자리로 옮기면 초당 10번 순간이동해서, 서버에서
+  // 남은 오차가 '진동'으로 보인다. 들어온 좌표는 목표로만 두고 화면 좌표를 60fps로 끌어당긴다 —
+  // 노이즈가 사라지는 게 아니라, 튀는 대신 흐르는 움직임으로 보이게 하는 것이다.
+  const view = new Map();            // tagId -> 현재 화면 좌표 {x, y}
+  const SMOOTH_TAU_MS = 200;         // 목표까지 따라붙는 시간상수. 키우면 부드럽지만 굼떠진다
+  const SETTLED_M = 0.005;           // 이보다 가까우면 도착으로 보고 루프를 멈춘다
+  let rafId = 0;
+  let lastFrameAt = 0;
+
+  // 목표 쪽으로 한 프레임만큼 당긴다. 아직 도착 못 한 태그가 하나라도 있으면 true.
+  function stepView(now) {
+    // 프레임 간격 기준이라 모니터 주사율이 달라도 같은 속도로 따라간다. 탭이 백그라운드에
+    // 있다 돌아오면 dt가 크게 튀므로 100ms에서 자른다.
+    const dt = Math.min(100, Math.max(0, now - lastFrameAt));
+    const k = 1 - Math.exp(-dt / SMOOTH_TAU_MS);
+    let animating = false;
+    for (const [id, t] of tags) {
+      if (!t.pos) continue;
+      const v = view.get(id);
+      if (!v) { view.set(id, { x: t.pos.x, y: t.pos.y }); continue; }  // 새 태그는 제자리에서 시작
+      const dx = t.pos.x - v.x, dy = t.pos.y - v.y;
+      if (Math.abs(dx) < SETTLED_M && Math.abs(dy) < SETTLED_M) { v.x = t.pos.x; v.y = t.pos.y; continue; }
+      v.x += dx * k; v.y += dy * k;
+      animating = true;
+    }
+    return animating;
+  }
+
+  function tick(now) {
+    const animating = stepView(now);
+    lastFrameAt = now;
+    paint();
+    rafId = animating ? requestAnimationFrame(tick) : 0;
+  }
+
+  // 기존 호출부는 그대로 draw()를 쓴다. 즉시 한 번 그리고, 아직 움직일 게 남았으면 루프를 잇는다.
+  function draw() {
+    if (rafId) return;               // 루프가 이미 돌고 있으면 다음 프레임에 반영된다
+    lastFrameAt = performance.now();
+    rafId = requestAnimationFrame(tick);
   }
 
   // ── 좌측 태그 목록 ──

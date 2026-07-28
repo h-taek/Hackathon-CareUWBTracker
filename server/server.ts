@@ -11,7 +11,8 @@ import {
 } from './config/cli.ts';
 import {
   createPositionSmoother,
-  DEFAULT_POSITION_WINDOW,
+  smootherOptionsFromEnv,
+  SMOOTHER_DEFAULTS,
   type PositionRecord,
 } from './positioning/smoother.ts';
 import { handleIngest } from './ingest/endpoint.ts';
@@ -73,7 +74,8 @@ const fallDetector = (() => {
     return createFallDetector(optionsFromEnv());
   }
 })();
-const positionSmoother = createPositionSmoother(DEFAULT_POSITION_WINDOW);
+const smootherConfig = { ...SMOOTHER_DEFAULTS, ...smootherOptionsFromEnv() };
+const positionSmoother = createPositionSmoother(smootherConfig);
 const clients = new Set<ServerResponse>();
 
 function broadcast(event: 'position' | 'alert', data: unknown): void {
@@ -254,7 +256,11 @@ server.listen(port, () => {
   console.log(`  SSE 스트림 http://localhost:${shown}/stream`);
   console.log(`  ingest     POST http://localhost:${shown}/ingest`);
   console.log(`  앵커       ${anchorConfig.mainAnchorId} (0,0) / ${anchorConfig.subAnchorId} (${anchorConfig.anchorDistance},0), ${anchorConfig.halfPlane}`);
-  console.log(`  스무딩     태그별 최근 ${DEFAULT_POSITION_WINDOW}개 좌표 이동평균`);
+  console.log(
+    `  스무딩     최근 ${smootherConfig.windowSize}개 이동평균`
+    + ` · 정지 ${smootherConfig.staticDeadbandM}m 고정 · 점프 ${smootherConfig.jumpBaseM}m↑ 컷 · 클램프 프레임 제외`
+    + ' (POS_DEADBAND_M / POS_MAX_JUMP_M 로 조절)',
+  );
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {
