@@ -85,8 +85,27 @@ const handlePositioning = createPositioningHandler({
   ...anchorConfig,
 });
 
+// 삼각측량이 해 없음으로 클램프됐을 때 알리는 경고. 50Hz로 쏟아지면 로그가 못 쓰게 되므로
+// 태그별로 간격을 둔다. 시각은 payload.ts를 쓴다 — 주입 재생과 실측이 같은 기준으로 찍힌다.
+const GEOM_WARN_INTERVAL_MS = 2000;
+const lastGeomWarnAt = new Map<string, number>();
+
+function warnIfGeometryBroken(position: { tagId: string; ts?: unknown; geom?: { error: number } } | null): void {
+  if (!position?.geom) return;
+  const ts = typeof position.ts === 'number' ? position.ts : 0;
+  const last = lastGeomWarnAt.get(position.tagId);
+  if (last != null && ts - last < GEOM_WARN_INTERVAL_MS) return;
+  lastGeomWarnAt.set(position.tagId, ts);
+  console.warn(
+    `[position] ⚠ ${position.tagId} 삼각측량 해가 없어 y를 0으로 클램프했습니다`
+    + ` (${position.geom.error.toFixed(2)}m 모자람).`
+    + ` --anchor-distance ${anchorConfig.anchorDistance}m 가 실제 두 앵커 간격과 맞는지 확인하세요.`,
+  );
+}
+
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
   const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
+  warnIfGeometryBroken(rawPosition);
   const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
   if (position) broadcast('position', position);
   console.log(formatIngestLine(payload, position, {

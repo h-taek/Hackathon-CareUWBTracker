@@ -29,6 +29,11 @@ export interface PositionResult {
   err: { xy: number; z: number };
   accel?: { x: number; y: number; z: number };
   source: 'sim' | 'uwb+imu';
+  /**
+   * 삼각측량이 spec 03의 y 클램프를 탄 프레임에만 실린다(정상해면 아예 없다).
+   * 있다는 것 자체가 "이 좌표는 두 거리와 앵커 간격이 안 맞는 상태에서 나왔다"는 신호다.
+   */
+  geom?: { clamped: true; error: number };
   [key: string]: unknown;
 }
 
@@ -42,7 +47,7 @@ export function positionFromIngest(payload: IngestPayload, options: PositionFrom
   const subRange = payload.ranges.find((range) => range.anchorId === options.subAnchorId);
   if (!mainRange || !subRange) return null;
 
-  const { x, y } = triangulateTwoAnchors({
+  const { x, y, clamped, clampError } = triangulateTwoAnchors({
     rA: mainRange.distance,
     rB: subRange.distance,
     d: options.anchorDistance,
@@ -56,6 +61,8 @@ export function positionFromIngest(payload: IngestPayload, options: PositionFrom
     err: { xy: options.xyError ?? 0.2, z: options.zError ?? 1.2 },
     accel: payload.accel,
     source: payload.source === 'sim' ? 'sim' : 'uwb+imu',
+    // 정상해에는 안 싣는다 — 필드가 있다는 것 자체가 이상 신호가 되게 한다.
+    ...(clamped ? { geom: { clamped: true as const, error: clampError } } : {}),
   };
 }
 

@@ -91,3 +91,24 @@ test('앵커 설정 누락과 동일한 앵커 ID를 거부한다', () => {
     /must be different/,
   );
 });
+
+test('정상해면 geom 필드를 안 싣는다', () => {
+  const position = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: Math.sqrt(5) },
+    { anchorId: 'phoneSub', distance: Math.sqrt(13) },
+  ]), OPTIONS)!;
+
+  assert.equal(position.geom, undefined, '평상시 프레임에는 안 붙는다');
+});
+
+test('삼각측량이 클램프되면 geom으로 알린다', () => {
+  // 앵커 간격 4m인데 두 거리 합이 0.73m — 교점이 없다(실측에서 나온 배치 불일치).
+  const position = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: 0.23 },
+    { anchorId: 'phoneSub', distance: 0.5 },
+  ]), OPTIONS)!;
+
+  assert.equal(position.pos.y, 0);
+  assert.equal(position.geom?.clamped, true);
+  assertClose(position.geom!.error, 4 - 0.73, 1e-12);
+});
