@@ -31,6 +31,10 @@ const DEFAULTS = {
   // 충격 파형은 임계를 여러 표본 연속으로 넘는다. 이 시간 동안 같은 태그의 재발화를 막지
   // 않으면 낙상 한 번에 경보가 수십 건 뜬다.
   cooldownMs: 10000,
+  // 도착 순서가 뒤집힌 프레임을 어디까지 "늦게 온 것"으로 받아줄지. 프레임당 POST 1건이라
+  // 전송이 겹치면 순서가 섞이는데, 실측 지연은 약 100ms였다. 이보다 더 과거면 재정렬이 아니라
+  // 낡은/중복 프레임으로 보고 버린다 — 몇 초 전 충격을 지금 것으로 세면 경보가 헛나간다.
+  reorderToleranceMs: 500,
 };
 
 export interface FallEvent {
@@ -50,6 +54,7 @@ export interface FallDetectorOptions {
   freefallWindowMs?: number;
   decisionDelayMs?: number;
   cooldownMs?: number;
+  reorderToleranceMs?: number;
 }
 
 interface FallState {
@@ -127,14 +132,22 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
   ) {
     const st = stateFor(payload.tagId);
     const payloadTs = payload.ts as number;
-    // 단조 ts 가드: 순서 뒤바뀐(과거) 프레임은 무시해 경과 계산 왜곡을 막는다.
-    if (st.lastTs !== null && payloadTs < st.lastTs) return [];
-    st.lastTs = payloadTs;
+    // 늦게 도착한 과거 프레임 처리. 프레임당 POST 1건이라 전송이 겹치면 도착 순서가 뒤집힌다
+    // (실측: 5개 중 1개가 약 100ms 늦게 도착).
+    //
+    // reorderToleranceMs 안이면 시계는 되감지 않되(경과 계산 왜곡 방지) 그 표본의 가속도는
+    // 반영한다. 예전에는 통째로 버렸는데, 하필 충격 정점 표본이 늦게 오면 peakG가 실제보다
+    // 낮게 남아 경보의 peakAccel과 AI 채점이 함께 약해졌다.
+    // 허용폭을 넘어가면 재정렬이 아니라 낡은 프레임이므로 예전처럼 버린다.
+    const behind = st.lastTs !== null ? st.lastTs - payloadTs : 0;
+    if (behind > cfg.reorderToleranceMs) return [];
+    const late = behind > 0;
+    const ts = late ? (st.lastTs as number) : payloadTs;
+    if (!late) st.lastTs = payloadTs;
     if (position && position.pos) st.lastPos = position.pos;
 
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0) / cfg.gravity;
-    const ts = payloadTs;
     const events: ReturnType<typeof makeEvent>[] = [];
 
     if (g <= cfg.freefallG) st.freefallAt = ts;

@@ -158,3 +158,43 @@ test('pos: position 있으면 마지막 좌표를 붙이고, 없으면 null', ()
   const noPos = run(det2, frames, null);
   assert.strictEqual(noPos[0].pos, null);
 });
+
+test('허용폭 안에서 늦게 도착한 정점 프레임도 peakAccel에 반영된다', () => {
+  // 전송이 겹치면 도착 순서가 뒤집힌다(실측: 5개 중 1개가 약 100ms 늦음).
+  // 예전에는 늦은 프레임을 통째로 버려서, 하필 그게 정점이면 peakAccel이 낮게 남았다.
+  const det = createFallDetector();
+  const out = run(det, [
+    frame(0, 1),
+    frame(100, 3.0),   // 충격 — 여기서 PENDING 진입
+    frame(200, 1),
+    frame(150, 4.5),   // 100ms 늦게 도착한 진짜 정점
+    ...seq(300, 100, QUIET(30)),
+  ]);
+  const detected = out.filter((e) => e.type === 'fall_detected');
+  assert.strictEqual(detected.length, 1);
+  assert.strictEqual(detected[0].peakAccel, 4.5, '늦게 온 정점이 peakAccel에 잡혀야 한다');
+});
+
+test('늦게 온 프레임이 판정 시계를 되감지 않는다', () => {
+  // 늦은 프레임의 ts를 그대로 쓰면 경과가 줄어 판정이 밀린다. 시계는 최신 시각을 유지해야 한다.
+  const det = createFallDetector({ decisionDelayMs: 300 });
+  const out = run(det, [
+    frame(0, 4.0),     // 정점 t=0
+    frame(100, 1),
+    frame(50, 1),      // 늦은 프레임 — 시계를 100에서 50으로 되돌리면 안 된다
+    frame(300, 1),     // 정점 뒤 300ms → 여기서 판정되어야 한다
+  ]);
+  assert.strictEqual(out.filter((e) => e.type === 'fall_detected').length, 1);
+});
+
+test('허용폭을 넘게 늦은 프레임은 여전히 버린다', () => {
+  // 재정렬이 아니라 낡은/중복 프레임이다. 몇 초 전 충격을 지금 것으로 세면 경보가 헛나간다.
+  const det = createFallDetector({ reorderToleranceMs: 200 });
+  const out = run(det, [
+    frame(0, 1),
+    frame(5000, 1),
+    frame(4000, 4.0),  // 1초 과거 — 허용폭 200ms를 한참 넘는다
+    ...seq(5100, 100, QUIET(30)),
+  ]);
+  assert.strictEqual(out.length, 0);
+});

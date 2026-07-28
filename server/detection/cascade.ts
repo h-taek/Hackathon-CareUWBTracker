@@ -39,10 +39,42 @@ export interface CascadeOptions extends FallDetectorOptions {
   onReject?: (info: RejectionInfo) => void;
 }
 
-interface AccelBuffer {
+export interface AccelBuffer {
+  ts: number[];
   ax: number[];
   ay: number[];
   az: number[];
+}
+
+/**
+ * 표본을 **시간 순서로** 끼워 넣고 창 길이를 유지한다.
+ *
+ * 프레임당 POST 1건이라 전송이 겹치면 도착 순서가 뒤집힌다(실측: 5개 중 1개가 약 100ms 늦음).
+ * 창 통계(평균·최대·표준편차)는 순서에 둔감하지만, 이 창의 전제는 "정점이 한가운데(≈74/150)"이고
+ * 앞뒤 구간을 갈라 쓰는 특징(pre/post_activity, pre_post_ratio)은 순서를 그대로 믿는다.
+ * 그래서 도착 순서가 아니라 표본 시각으로 정렬해 담는다.
+ *
+ * 지연 폭이 수십 ms라 뒤에서 몇 칸만 훑으면 제자리를 찾는다. ts가 숫자가 아니면 비교가 전부
+ * false가 되어 맨 뒤에 붙는다 — 순서 정보가 없는 입력은 최신으로 보는 게 안전하다.
+ */
+export function insertOrdered(
+  b: AccelBuffer,
+  ts: number,
+  axg: number,
+  ayg: number,
+  azg: number,
+  window: number,
+): AccelBuffer {
+  let at = b.ts.length;
+  while (at > 0 && b.ts[at - 1] > ts) at -= 1;
+  b.ts.splice(at, 0, ts);
+  b.ax.splice(at, 0, axg);
+  b.ay.splice(at, 0, ayg);
+  b.az.splice(at, 0, azg);
+  while (b.ts.length > window) {
+    b.ts.shift(); b.ax.shift(); b.ay.shift(); b.az.shift();
+  }
+  return b;
 }
 
 function isModelInstance(m: unknown): m is ModelInstance {
@@ -67,14 +99,12 @@ export function createCascadeDetector(options: CascadeOptions = {}) {
   const threshold = options.aiThreshold != null
     ? options.aiThreshold : (model ? model.threshold : 0.5);
 
-  const buffers = new Map<string, AccelBuffer>(); // tagId -> {ax:[],ay:[],az:[]} (g 단위, 최근 WINDOW개)
+  const buffers = new Map<string, AccelBuffer>(); // tagId -> {ts:[],ax:[],ay:[],az:[]} (g 단위, 최근 WINDOW개)
 
-  function push(tagId: string, axg: number, ayg: number, azg: number): AccelBuffer {
+  function push(tagId: string, ts: number, axg: number, ayg: number, azg: number): AccelBuffer {
     let b = buffers.get(tagId);
-    if (!b) { b = { ax: [], ay: [], az: [] }; buffers.set(tagId, b); }
-    b.ax.push(axg); b.ay.push(ayg); b.az.push(azg);
-    if (b.ax.length > WINDOW) { b.ax.shift(); b.ay.shift(); b.az.shift(); }
-    return b;
+    if (!b) { b = { ts: [], ax: [], ay: [], az: [] }; buffers.set(tagId, b); }
+    return insertOrdered(b, ts, axg, ayg, azg, WINDOW);
   }
 
   function scoreBuffer(b: AccelBuffer): number {
@@ -87,7 +117,11 @@ export function createCascadeDetector(options: CascadeOptions = {}) {
     position: { pos?: { x: number; y: number; z?: number } } | null,
   ): FallEvent[] {
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
-    const b = push(payload.tagId, (a.x || 0) / gravity, (a.y || 0) / gravity, (a.z || 0) / gravity);
+    const b = push(
+      payload.tagId,
+      payload.ts as number,
+      (a.x || 0) / gravity, (a.y || 0) / gravity, (a.z || 0) / gravity,
+    );
 
     const events = classical.observe(payload, position) as unknown as FallEvent[];
     if (!aiEnabled || events.length === 0) return events;

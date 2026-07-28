@@ -7,7 +7,7 @@ import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { createCascadeDetector } from '../../server/detection/cascade.ts';
+import { createCascadeDetector, insertOrdered } from '../../server/detection/cascade.ts';
 import { createFallDetector } from '../../server/detection/fall.ts';
 
 const GRAVITY = 9.80665;
@@ -80,4 +80,36 @@ test('실 LightGBM: golden 낙상 다수가 감지를 통과한다', () => {
   for (const g of falls) if (replayReal(createCascadeDetector(OPTS), g).detected) passed += 1;
   assert.ok(passed >= Math.ceil(falls.length * 0.6),
     `낙상 통과 ${passed}/${falls.length} — 게이트가 과하게 기각`);
+});
+
+// --- AI 채점 창의 표본 순서 ---------------------------------------------------
+// 창 통계(평균·최대·표준편차)는 순서에 둔감하지만, 이 창의 전제는 "정점이 한가운데"이고
+// 앞뒤 구간을 갈라 쓰는 특징은 순서를 그대로 믿는다. 도착 순서가 아니라 표본 시각으로 담아야 한다.
+
+test('늦게 도착한 표본을 시간 순서에 맞춰 끼워 넣는다', () => {
+  const b = { ts: [], ax: [], ay: [], az: [] } as Parameters<typeof insertOrdered>[0];
+  // 도착 순서: 100, 120, 140, 160, 80  (마지막이 가장 오래된 표본)
+  for (const [ts, v] of [[100, 1], [120, 2], [140, 3], [160, 4], [80, 9]] as const) {
+    insertOrdered(b, ts, v, v, v, 150);
+  }
+  assert.deepStrictEqual(b.ts, [80, 100, 120, 140, 160]);
+  assert.deepStrictEqual(b.ax, [9, 1, 2, 3, 4], '세 축이 ts와 같은 자리로 따라와야 한다');
+  assert.deepStrictEqual(b.ay, [9, 1, 2, 3, 4]);
+  assert.deepStrictEqual(b.az, [9, 1, 2, 3, 4]);
+});
+
+test('창 길이를 넘으면 가장 오래된 표본부터 버린다', () => {
+  const b = { ts: [], ax: [], ay: [], az: [] } as Parameters<typeof insertOrdered>[0];
+  for (let i = 0; i < 5; i += 1) insertOrdered(b, i * 20, i, i, i, 3);
+  assert.deepStrictEqual(b.ts, [40, 60, 80], '최근 3개만 남는다');
+  assert.deepStrictEqual(b.ax, [2, 3, 4]);
+});
+
+test('ts가 숫자가 아니면 맨 뒤에 붙인다', () => {
+  // 순서 정보가 없는 입력은 최신으로 보는 게 안전하다 — 과거로 밀어 넣으면 창을 왜곡한다.
+  const b = { ts: [], ax: [], ay: [], az: [] } as Parameters<typeof insertOrdered>[0];
+  insertOrdered(b, 100, 1, 1, 1, 150);
+  insertOrdered(b, Number.NaN, 2, 2, 2, 150);
+  assert.strictEqual(b.ax.length, 2);
+  assert.deepStrictEqual(b.ax, [1, 2]);
 });
