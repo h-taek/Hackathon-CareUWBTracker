@@ -71,11 +71,43 @@ test('반평면은 positive 또는 negative만 허용한다', () => {
   assert.throws(() => parseAnchorConfig(args), /positive 또는 negative/);
 });
 
+test('1앵커 테스트 모드는 기본으로 꺼져 있고 각도를 주면 켜진다', () => {
+  // 꺼져 있을 때 키가 undefined로라도 남으면 "설정된 적 있다"로 읽힌다 — 아예 없어야 한다.
+  assert.ok(!('singleAnchorBearingDeg' in parseAnchorConfig(VALID_ARGS)));
+
+  assert.equal(
+    parseAnchorConfig([...VALID_ARGS, '--single-anchor-bearing', '45']).singleAnchorBearingDeg,
+    45,
+  );
+  assert.equal(
+    parseAnchorConfig([...VALID_ARGS, '--single-anchor-bearing=-30']).singleAnchorBearingDeg,
+    -30,
+  );
+  assert.equal(
+    parseAnchorConfig([...VALID_ARGS, '--single-anchor-bearing', '0']).singleAnchorBearingDeg,
+    0,
+  );
+});
+
+test('1앵커 방위각은 유한한 -360~360 숫자만 허용한다', () => {
+  for (const bearing of ['NaN', 'Infinity', 'north']) {
+    assert.throws(
+      () => parseAnchorConfig([...VALID_ARGS, '--single-anchor-bearing', bearing]),
+      /유한한 숫자/,
+    );
+  }
+  assert.throws(
+    () => parseAnchorConfig([...VALID_ARGS, '--single-anchor-bearing', '361']),
+    /-360~360/,
+  );
+});
+
 test('사용법 조각과 소유 플래그 목록을 노출한다', () => {
   assert.match(ANCHOR_OPTION_LINES, /--anchor-distance/);
   // 목록이 두 곳으로 갈라지면 cli.ts의 argv 분배가 조용히 어긋난다.
   assert.deepEqual([...ANCHOR_FLAGS].sort(), [
-    '--anchor-distance', '--half-plane', '--main-anchor-id', '--sub-anchor-id',
+    '--anchor-distance', '--half-plane', '--main-anchor-id',
+    '--single-anchor-bearing', '--sub-anchor-id',
   ]);
   for (const flag of ANCHOR_FLAGS) assert.match(ANCHOR_OPTION_LINES, new RegExp(flag));
 });

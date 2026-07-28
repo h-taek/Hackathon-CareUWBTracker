@@ -112,3 +112,69 @@ test('삼각측량이 클램프되면 geom으로 알린다', () => {
   assert.equal(position.geom?.clamped, true);
   assertClose(position.geom!.error, 4 - 0.73, 1e-12);
 });
+
+// --- 1앵커 테스트 모드(--single-anchor-bearing) — 서브폰 없이 화면을 볼 때만 쓴다 ---
+
+const SINGLE = Object.freeze({ ...OPTIONS, singleAnchorBearingDeg: 45 });
+
+test('서브 앵커가 없어도 테스트 모드면 메인 거리 하나로 좌표를 만든다', () => {
+  const position = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: Math.SQRT2 },
+  ]), SINGLE)!;
+
+  // 45도에 거리 √2 → (1, 1). 거리가 늘면 같은 방향으로 그만큼 멀어진다.
+  assertClose(position.pos.x, 1, 1e-12);
+  assertClose(position.pos.y, 1, 1e-12);
+  assert.equal(position.pos.z, 0);
+  assert.deepEqual(position.accel, { x: 0, y: 0, z: 9.81 });
+  assert.equal(position.source, 'uwb+imu');
+});
+
+test('1앵커 좌표에는 estimate 꼬리표를 달아 진짜 측위와 구분한다', () => {
+  const single = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: 3 },
+  ]), SINGLE)!;
+  assert.deepEqual(single.estimate, { mode: 'single-anchor', anchorId: 'phoneMain', bearingDeg: 45 });
+
+  // 앵커 둘이 다 있으면 삼각측량이 이긴다 — 테스트 모드는 폴백일 뿐이다.
+  const both = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: Math.sqrt(5) },
+    { anchorId: 'phoneSub', distance: Math.sqrt(13) },
+  ]), SINGLE)!;
+  assertClose(both.pos.x, 1);
+  assertClose(both.pos.y, 2);
+  assert.equal(both.estimate, undefined);
+});
+
+test('테스트 모드가 꺼져 있으면 서브 앵커 없는 프레임은 예전대로 보류한다', () => {
+  assert.equal(positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: 3 },
+  ]), OPTIONS), null);
+});
+
+test('메인 앵커 거리가 없거나 비정상이면 테스트 모드에서도 좌표를 안 만든다', () => {
+  // 서브 거리만 온 프레임 — 기준이 되는 메인 거리가 없다.
+  assert.equal(positionFromIngest(ingest([
+    { anchorId: 'phoneSub', distance: 3 },
+  ]), SINGLE), null);
+  assert.equal(positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: Number.NaN },
+  ]), SINGLE), null);
+  assert.equal(positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: -1 },
+  ]), SINGLE), null);
+});
+
+test('방위각 0도는 기준선 위, 음수각은 반대쪽 반평면에 놓는다', () => {
+  const onAxis = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: 2 },
+  ]), { ...OPTIONS, singleAnchorBearingDeg: 0 })!;
+  assertClose(onAxis.pos.x, 2, 1e-12);
+  assertClose(onAxis.pos.y, 0, 1e-12);
+
+  const below = positionFromIngest(ingest([
+    { anchorId: 'phoneMain', distance: 2 },
+  ]), { ...OPTIONS, singleAnchorBearingDeg: -90 })!;
+  assertClose(below.pos.x, 0, 1e-12);
+  assertClose(below.pos.y, -2, 1e-12);
+});

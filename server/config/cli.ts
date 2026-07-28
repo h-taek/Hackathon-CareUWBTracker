@@ -30,7 +30,8 @@ export const SERVER_CONFIG_USAGE = `
     --sub-anchor-id <ID> \\
     --anchor-distance <미터> \\
     --half-plane <positive|negative> \\
-    [--source <sim|live>]
+    [--source <sim|live>] \\
+    [--single-anchor-bearing <각도>]
 
 옵션:
 ${ANCHOR_OPTION_LINES}

@@ -103,9 +103,25 @@ function warnIfGeometryBroken(position: { tagId: string; ts?: unknown; geom?: { 
   );
 }
 
+// 1앵커 추정 좌표는 방향이 설정값이라 진짜 측위가 아니다. 태그마다 처음 한 번만 알린다 —
+// 매 프레임 찍으면 로그가 못 쓰게 되고, 아예 안 찍으면 가짜 좌표가 조용히 화면에 오른다.
+const singleAnchorNoticed = new Set<string>();
+
+function noteSingleAnchorEstimate(
+  position: { tagId: string; estimate?: { bearingDeg: number; anchorId: string } } | null,
+): void {
+  if (!position?.estimate || singleAnchorNoticed.has(position.tagId)) return;
+  singleAnchorNoticed.add(position.tagId);
+  console.warn(
+    `[position] ⚠ ${position.tagId} 1앵커 추정 좌표입니다 — ${position.estimate.anchorId} 거리만 실측이고`
+    + ` 방향은 ${position.estimate.bearingDeg}도 고정입니다(--single-anchor-bearing). 측위 검증에는 쓸 수 없습니다.`,
+  );
+}
+
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
   const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
   warnIfGeometryBroken(rawPosition);
+  noteSingleAnchorEstimate(rawPosition);
   const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
   if (position) broadcast('position', position);
   console.log(formatIngestLine(payload, position, {
@@ -241,4 +257,11 @@ server.listen(port, () => {
   console.log(`  스무딩     태그별 최근 ${DEFAULT_POSITION_WINDOW}개 좌표 이동평균`);
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
+  if (anchorConfig.singleAnchorBearingDeg !== undefined) {
+    console.warn(
+      `  ⚠ 1앵커 테스트 모드 — 서브 앵커 거리가 없으면 ${anchorConfig.mainAnchorId} 거리를`
+      + ` ${anchorConfig.singleAnchorBearingDeg}도 방향에 얹어 좌표를 만듭니다.`
+      + ' 거리만 실측이고 방향은 가짜이므로 리허설·시연에는 끄고 실행하세요.',
+    );
+  }
 });

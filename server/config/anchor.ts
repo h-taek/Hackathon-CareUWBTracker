@@ -10,6 +10,11 @@ export interface AnchorConfig {
   subAnchorId: string;
   anchorDistance: number;
   halfPlane: HalfPlane;
+  /**
+   * 서브 앵커가 없는 자리에서 화면을 확인하려고 켜는 테스트 모드(기본 꺼짐).
+   * 거리 1개로는 2D 좌표가 안 나오므로 방향을 이 각도로 고정한다 — 좌표의 방향은 가짜다.
+   */
+  singleAnchorBearingDeg?: number;
 }
 
 const FLAG_TO_KEY = {
@@ -17,6 +22,7 @@ const FLAG_TO_KEY = {
   '--sub-anchor-id': 'subAnchorId',
   '--anchor-distance': 'anchorDistance',
   '--half-plane': 'halfPlane',
+  '--single-anchor-bearing': 'singleAnchorBearingDeg',
 } as const;
 
 type ConfigKey = (typeof FLAG_TO_KEY)[keyof typeof FLAG_TO_KEY];
@@ -31,6 +37,9 @@ export const ANCHOR_OPTION_LINES = `
   --sub-anchor-id    (d,0)에 놓인 서브 앵커 ID
   --anchor-distance  두 앵커 사이 거리 d (0보다 큰 미터 값)
   --half-plane       태그가 놓이는 기준선의 반평면 (positive|negative)
+  --single-anchor-bearing
+                     [테스트] 서브 앵커 없이 메인 앵커 거리만으로 좌표를 만든다.
+                     기준선(+x)에서 반시계로 잰 각도(도). 거리는 실측, 방향은 이 값 고정
 `.replace(/^\n+|\n+$/g, '');
 
 /**
@@ -75,12 +84,25 @@ export function parseAnchorConfig(args: readonly string[]): AnchorConfig {
     throw new Error('--anchor-distance는 0보다 큰 유한한 숫자여야 합니다.');
   }
 
-  const halfPlane = requireText(values.halfPlane, '--half-plane');
-  if (halfPlane !== 'positive' && halfPlane !== 'negative') {
+  const halfPlaneText = requireText(values.halfPlane, '--half-plane');
+  if (halfPlaneText !== 'positive' && halfPlaneText !== 'negative') {
     throw new Error('--half-plane은 positive 또는 negative여야 합니다.');
   }
+  const halfPlane: HalfPlane = halfPlaneText;
 
-  return { mainAnchorId, subAnchorId, anchorDistance, halfPlane };
+  const base: AnchorConfig = { mainAnchorId, subAnchorId, anchorDistance, halfPlane };
+  if (values.singleAnchorBearingDeg === undefined) return base;
+
+  // 키를 undefined로 달고 다니지 않는다 — 꺼져 있으면 아예 없는 설정이어야 한다.
+  const bearingText = requireText(values.singleAnchorBearingDeg, '--single-anchor-bearing');
+  const singleAnchorBearingDeg = Number(bearingText);
+  if (!Number.isFinite(singleAnchorBearingDeg)) {
+    throw new Error('--single-anchor-bearing은 유한한 숫자(도)여야 합니다.');
+  }
+  if (Math.abs(singleAnchorBearingDeg) > 360) {
+    throw new Error('--single-anchor-bearing은 -360~360 사이여야 합니다.');
+  }
+  return { ...base, singleAnchorBearingDeg };
 }
 
 function requireText(value: string | undefined, flag: string): string {
