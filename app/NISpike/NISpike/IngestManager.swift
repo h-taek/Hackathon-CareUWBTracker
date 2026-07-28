@@ -66,7 +66,9 @@ final class IngestManager: NSObject, ObservableObject {
     @Published var postCount = 0
     @Published var lastPostStatus = ""
     /// 서버 주소. 맥의 Bonjour 이름(<맥이름>.local):포트 또는 사설 IP. DHCP로 IP가 바뀌어도 이름은 유지.
-    @Published var serverHost = "MacBook-Pro-39.local:8080"
+    /// 저장되지 않으므로(앱 재실행 시 이 기본값으로 복귀) 맥을 바꾸면 여기를 같이 고쳐야 한다.
+    /// 맥 이름 확인: `scutil --get LocalHostName`
+    @Published var serverHost = "MacBook-Pro-14-M5-Max.local:8080"
 
     var anyPeerConnected: Bool { peers.contains { $0.connected } }
 
