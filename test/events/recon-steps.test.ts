@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
@@ -210,4 +211,18 @@ test('opensplat은 환경변수 → 프로젝트 빌드본 → PATH 순으로 �
 test('빌드본 경로는 빌드 절차가 만드는 자리와 같다', () => {
   // tools/recon/README.md의 cmake 산출 위치. 둘이 어긋나면 자동 탐색이 조용히 실패한다.
   assert.equal(path.resolve('/proj/server', BUNDLED_OPENSPLAT), '/proj/tools/recon/OpenSplat/build/opensplat');
+});
+
+test('화면 폼 기본값과 서버 기본값이 같다', () => {
+  // 두 벌이 다르면 "기본으로 돌렸다"가 어느 쪽인지 알 수 없어진다. 실제로 한 번 어긋났다.
+  const html = fs.readFileSync(new URL('../../server/public/recon/index.html', import.meta.url), 'utf8');
+  const formValue = (id: string) => {
+    const m = new RegExp(`id="${id}"[^>]*value="([0-9.]+)"`).exec(html);
+    return m ? Number(m[1]) : null;
+  };
+  assert.equal(formValue('fps'), RECON_DEFAULTS.fps);
+  assert.equal(formValue('maxFrames'), RECON_DEFAULTS.maxFrames);
+  assert.equal(formValue('frameWidth'), RECON_DEFAULTS.frameWidth);
+  assert.equal(formValue('iters'), RECON_DEFAULTS.numIters);
+  assert.match(html, /id="gpu"[^>]*checked/, 'GPU 기본 켬도 같아야 한다');
 });

@@ -45,11 +45,25 @@ export interface ReconTuning {
   ffmpegBin: string;
 }
 
+/**
+ * 권장 기본값. **화면 폼과 같은 값이어야 한다** — 두 벌이 다르면 "기본으로 돌렸다"가
+ * 어느 쪽인지 알 수 없어진다.
+ *
+ * 근거(M5 Max 실측, 1600px 128장): COLMAP 추출 GPU 10초 · 매칭 29초 ·
+ * **매핑 80초(CPU 전용, 여기가 병목)** · 학습 1500회 12초.
+ * 아래 값이면 전체 6분 안팎이다.
+ *
+ * - `fps 3` — 1~2분 촬영이면 300~400장이 나온다. 이웃 프레임 겹침을 벌기 위한 값
+ * - `maxFrames 180` — 매핑이 CPU 전용이고 장수에 급히 는다. 여기가 시간을 정한다
+ * - `frameWidth 2000` — 특징점 수가 여기에 가장 민감하다. 4K 원본을 그대로 넣으면 몇 시간
+ * - `numIters 15000` — 상류 기본은 30000. 1500회는 눈에 띄게 뿌옇다(실측).
+ *   **15000은 그 사이에서 고른 값이고 품질을 재보진 않았다**
+ */
 export const RECON_DEFAULTS: ReconTuning = {
-  fps: 2,
-  maxFrames: 150,
-  frameWidth: 1600,
-  numIters: 2000,
+  fps: 3,
+  maxFrames: 180,
+  frameWidth: 2000,
+  numIters: 15000,
   useGpu: true,
   openSplatBin: 'opensplat',
   colmapBin: 'colmap',
