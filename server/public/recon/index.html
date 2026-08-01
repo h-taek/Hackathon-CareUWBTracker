@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>사고 현장 3D 기록</title>
+<link rel="stylesheet" href="/assets/css/base.css" />
+<link rel="stylesheet" href="/assets/css/recon.css" />
+<!-- 뷰어 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다. 첫 모듈 스크립트보다 앞서야 한다. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/three.module.min.js",
+    "@mkkellogg/gaussian-splats-3d": "/vendor/gaussian-splats-3d/gaussian-splats-3d.module.js"
+  }
+}
+</script>
+<script src="/assets/js/recon.js" type="module"></script>
+</head>
+<body class="reconpage">
+
+<div class="topbar">
+  <a class="btn" href="/">← 관제로</a>
+  <div class="title">사고 현장 3D 기록 <small>영상을 올려 낙상 기록에 3D 현장을 붙인다</small></div>
+  <span class="spacer"></span>
+  <button class="btn" id="reload">새로고침</button>
+</div>
+
+<main class="wrap">
+
+  <!-- ── 1. 영상 ── -->
+  <section class="card step">
+    <h2><span class="lbl"><span class="n">1</span> 현장 영상</span> <span class="hint">사고 직후 촬영분</span></h2>
+    <div class="body">
+      <div class="filepick">
+        <button class="btn" id="pick">파일 선택</button>
+        <input type="file" id="file" accept="video/*,.mov,.MOV,.mp4,.MP4" hidden />
+        <div class="filemeta" id="filemeta"><span>선택된 영상이 없다</span></div>
+      </div>
+      <p class="note">치수를 실측한 물건(A4 종이·자)이 화면에 나와야 절대 크기를 잡는다. <b>흰 벽·천장만 오래 비추거나 빨리 움직이면 자세를 못 푼다.</b></p>
+    </div>
+  </section>
+
+  <!-- ── 2. 낙상 기록 ── -->
+  <section class="card step">
+    <h2><span class="lbl"><span class="n">2</span> 붙일 낙상 기록</span> <span class="hint" id="eventCount">…</span></h2>
+    <div class="body pad0" id="events"><div class="empty">불러오는 중…</div></div>
+  </section>
+
+  <!-- ── 3. 변환 설정 ── -->
+  <section class="card step">
+    <h2><span class="lbl"><span class="n">3</span> 변환 설정</span> <span class="hint">이 실행에만 적용된다</span></h2>
+    <div class="body">
+      <div class="grid">
+        <label>프레임 추출<input type="number" id="fps" value="4" min="0.1" step="0.5" /><span class="u">fps</span></label>
+        <label>최대 장수<input type="number" id="maxFrames" value="300" min="10" /><span class="u">장</span></label>
+        <label>프레임 가로<input type="number" id="frameWidth" value="2400" min="640" step="100" /><span class="u">px</span></label>
+        <label>학습 반복<input type="number" id="iters" value="7000" min="100" step="500" /><span class="u">회</span></label>
+        <label class="wide">기준물체<input type="text" id="scaleLabel" placeholder="예: A4 긴 변" /><input type="number" id="scaleMm" class="mm" placeholder="297" /><span class="u">mm</span></label>
+      </div>
+      <p class="note">자세를 못 풀면 <b>fps</b>와 <b>프레임 가로</b>를 올린다. 이웃 프레임이 60% 이상 겹쳐야 COLMAP이 푼다.</p>
+      <button class="btn go" id="go" disabled>영상을 먼저 고른다</button>
+    </div>
+  </section>
+
+  <!-- ── 진행 ── -->
+  <section class="card step" id="progress">
+    <h2><span class="lbl">진행</span> <span class="hint" id="progressHint"></span></h2>
+    <div class="body pad0">
+      <ol class="steps" id="steps"></ol>
+      <details id="logWrap">
+        <summary>자세히 — 도구 출력</summary>
+        <pre class="log" id="log"></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ── 기존 기록 ── -->
+  <section class="card step">
+    <h2><span class="lbl">기존 기록</span></h2>
+    <div class="body pad0">
+      <table class="tbl">
+        <thead><tr><th>사고 시각</th><th>태그</th><th>구역</th><th>현장 영상</th><th>3D</th><th></th></tr></thead>
+        <tbody id="records"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── 뷰어 ── -->
+  <section class="card step">
+    <h2><span class="lbl">3D 현장</span> <span class="hint" id="viewerHint"></span></h2>
+    <div class="body pad0">
+      <div class="stage" id="stage"></div>
+      <div class="stagenote" id="stagenote">기록에서 <b>3D 보기</b>를 누르면 여기에 뜬다</div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

@@ -7,6 +7,7 @@
 // 경로는 레코드에 적힌 첨부만 따라간다. 요청 문자열로 파일 이름을 만들지 않는다.
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { AttachmentStore } from './attachments.ts';
@@ -42,6 +43,41 @@ export function parseAttachmentFilePath(pathname: string): AttachmentTarget | nu
   const match = /^\/events\/([^/]+)\/attachments\/([^/]+)$/.exec(pathname);
   if (!match) return null;
   return { eventId: decodeSegment(match[1]), attachmentId: decodeSegment(match[2]) };
+}
+
+/** `/events/<eventId>/attachments/<attachmentId>/log`면 둘을, 아니면 null. */
+export function parseReconLogPath(pathname: string): AttachmentTarget | null {
+  const match = /^\/events\/([^/]+)\/attachments\/([^/]+)\/log\/?$/.exec(pathname);
+  if (!match) return null;
+  return { eventId: decodeSegment(match[1]), attachmentId: decodeSegment(match[2]) };
+}
+
+/** 로그 꼬리 몇 줄. COLMAP이 몇 분씩 조용해서, 화면이 "돌고는 있다"를 보이려면 이게 필요하다. */
+export const DEFAULT_LOG_TAIL_LINES = 60;
+
+export function readReconLogTail(
+  eventsDir: string,
+  target: AttachmentTarget,
+  lines: number = DEFAULT_LOG_TAIL_LINES,
+): string | null {
+  if (!isValidEventId(target.eventId) || !isValidEventId(target.attachmentId)) return null;
+  const file = path.join(eventsDir, target.eventId, 'recon', target.attachmentId, 'recon.log');
+  try {
+    // 로그가 수십 MB가 될 수 있다(OpenSplat이 10스텝마다 한 줄). 끝쪽만 읽는다.
+    const size = fs.statSync(file).size;
+    const window = Math.min(size, 256 * 1024);
+    const handle = fs.openSync(file, 'r');
+    try {
+      const buffer = Buffer.alloc(window);
+      fs.readSync(handle, buffer, 0, window, size - window);
+      const text = buffer.toString('utf8');
+      return text.split('\n').slice(-Math.max(1, lines)).join('\n');
+    } finally {
+      fs.closeSync(handle);
+    }
+  } catch {
+    return null; // 아직 안 돌았거나 지워졌다
+  }
 }
 
 /** 처리했으면 true. 첨부가 없으면 false를 돌려 호출부가 404를 내게 한다. */

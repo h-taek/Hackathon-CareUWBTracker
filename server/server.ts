@@ -32,9 +32,14 @@ import { createEventStore } from './events/store.ts';
 import { routeEvents } from './events/routes.ts';
 import { attachmentLimitFromEnv, createAttachmentStore } from './events/attachments.ts';
 import { handleAttachmentUpload, parseAttachmentPath, parseReconTriggerPath } from './events/upload.ts';
-import { parseAttachmentFilePath, serveAttachment } from './events/download.ts';
+import {
+  parseAttachmentFilePath,
+  parseReconLogPath,
+  readReconLogTail,
+  serveAttachment,
+} from './events/download.ts';
 import { createReconRunner } from './events/recon/runner.ts';
-import { tuningFromEnv, RECON_DEFAULTS } from './events/recon/steps.ts';
+import { tuningFromEnv, tuningFromParams, RECON_DEFAULTS } from './events/recon/steps.ts';
 
 const args = process.argv.slice(2);
 if (wantsHelp(args)) {
@@ -271,7 +276,15 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     request.on('close', () => clients.delete(response));
     return;
   }
-  // 첨부는 네 갈래다. 재구성 걸기(POST) → 업로드(POST) → 파일 내려주기(GET) → JSON 조회.
+  // 첨부는 다섯 갈래다. 로그(GET) → 재구성 걸기(POST) → 업로드(POST) → 파일(GET) → JSON 조회.
+  const logTarget = parseReconLogPath(pathname);
+  if (logTarget) {
+    const tail = readReconLogTail(eventStore.dir, logTarget, Number(url.searchParams.get('tail')) || undefined);
+    if (tail === null) return sendJson(response, { ok: false, error: '로그가 아직 없습니다' }, 404);
+    response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    return void response.end(tail);
+  }
+
   const reconTarget = parseReconTriggerPath(pathname);
   if (reconTarget) {
     if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
@@ -280,7 +293,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     if (attachment.kind !== 'video') {
       return sendJson(response, { ok: false, error: `재구성 대상은 영상뿐입니다: kind=${attachment.kind}` }, 400);
     }
-    const queued = reconRunner.enqueue(reconTarget);
+    const queued = reconRunner.enqueue({ ...reconTarget, tuning: tuningFromParams(url.searchParams) });
     return sendJson(response, {
       ok: true,
       queued,
@@ -295,7 +308,12 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     handleAttachmentUpload(request, uploadTarget, url.searchParams, eventAttachments, (attachment) => {
       // 영상이 붙으면 그 자리에서 재구성 대기열로 보낸다. 실제 실행은 응답 밖에서 돈다.
       if (attachment.kind !== 'video' || !reconAuto) return;
-      reconRunner.enqueue({ eventId: attachment.eventId, attachmentId: attachment.attachmentId });
+      reconRunner.enqueue({
+        eventId: attachment.eventId,
+        attachmentId: attachment.attachmentId,
+        // 화면이 이 업로드에만 쓸 설정을 같이 보낸다. 없으면 서버 기본값으로 돈다.
+        tuning: tuningFromParams(url.searchParams),
+      });
     })
       .then((result) => sendJson(response, result.body, result.status))
       .catch((error: unknown) => {

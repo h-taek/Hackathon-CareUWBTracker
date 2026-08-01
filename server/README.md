@@ -79,12 +79,23 @@ UWB 거리는 제자리에 서 있어도 수 cm씩 흔들린다. 이동평균만
 
 경보를 SSE로 뿌리고 끝내지 않는다. `fall_detected` 하나마다 **그 전후 구간의 궤적·가속도를 묶어 파일 하나**로 남긴다. 스키마는 `../docs/spec/03_data-interface.md` §6.1이고, 여기 남은 `eventId`가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
 
+**화면으로 하는 게 빠르다.** `http://localhost:8080/recon` — 영상 올리기, 붙일 낙상 기록 고르기, 변환 설정, 진행 보기, 결과 3D 보기가 한 페이지에 있다. 관제 화면 상단의 `사고 현장 3D 기록` 버튼으로 넘어간다.
+
 ```bash
 curl localhost:8080/events                  # 최신순 목록(요약). ?limit= ?tagId=
 curl localhost:8080/events/<eventId>        # 전문 — 궤적·가속도·첨부까지
 ```
 
-저장 위치는 기본 `server/data/events/<eventId>.json`이고 git에서 제외돼 있다. 이벤트 하나가 파일 하나이며, 임시 파일에 쓰고 이름을 바꾸는 방식이라 쓰는 중에 목록을 읽어도 반쪽짜리 JSON이 안 나온다.
+**이벤트 하나가 폴더 하나다.** 첨부가 붙으면 사고 1건이 파일 여러 개가 되므로 반출·삭제가 폴더 단위로 끝나게 뒀다. git에서 제외돼 있다.
+
+```
+server/data/events/<eventId>/
+  record.json                    경보 + 전후 궤적·가속도
+  <attachmentId>.mov             업로드된 현장 영상
+  recon/<attachmentId>/          프레임 · COLMAP 프로젝트 · recon.log · scene.ply
+```
+
+레코드는 임시 파일에 쓰고 이름을 바꾸는 방식이라 쓰는 중에 목록을 읽어도 반쪽짜리 JSON이 안 나온다.
 
 **기록은 경보 즉시 닫히지 않는다.** 사고 이후 구간이 필요하므로 `post` 창이 찰 때까지 기다린다. 프레임이 계속 오면 데이터로 닫고, 클립 재생이 끝나 ingest가 멎으면 벽시계 타이머가 있는 만큼으로 닫는다 — **둘 중 먼저 오는 쪽**이다.
 
@@ -93,6 +104,16 @@ curl localhost:8080/events/<eventId>        # 전문 — 궤적·가속도·첨�
 | `EVENTS_DIR` | `server/data/events` | 기록 저장 폴더 |
 | `EVENT_PRE_MS` | 10000 | 경보 시각 이전으로 담을 구간(ms). 접근 동선이 보이는 길이 |
 | `EVENT_POST_MS` | 10000 | 경보 시각 이후로 담을 구간(ms). 넘어진 뒤 정지가 보이는 길이 |
+| `ATTACHMENT_LIMIT_MB` | 2048 | 업로드 한도. 아이폰 4K 30fps가 분당 약 310MB다 |
+
+첨부·재구성 경로는 아래와 같다. **재구성 설정은 요청마다 받는다**(`fps` `maxFrames` `frameWidth` `iters`) — 환경변수는 서버 기본값 자리로만 남고, 화면이 실행마다 그 위를 덮는다. 도구 조달과 촬영 지침은 `../tools/recon/README.md`.
+
+| 경로 | 뜻 |
+| --- | --- |
+| `POST /events/<id>/attachments?kind=video&…` | 본문이 파일 바이트 그대로다(multipart 아님). 201 + 첨부 정보 |
+| `GET /events/<id>/attachments/<attId>` | 첨부 원본(영상·`.ply`) |
+| `POST /events/<id>/attachments/<attId>/recon?…` | 재구성을 다시 건다. 설정을 같이 넘긴다 |
+| `GET /events/<id>/attachments/<attId>/log?tail=N` | `recon.log` 꼬리 N줄 |
 
 삼각측량이 보류된 프레임(accel-only)은 **가속도만 남고 궤적에는 안 들어간다.** 없는 위치를 지어내지 않기 때문이며, 그 구간은 화면에서도 비어 보이는 게 맞다.
 
@@ -146,10 +167,13 @@ server/                재사용 런타임
     resolve.ts         요청 경로 → public/ 파일 해석 + MIME(순수 함수)
     handler.ts         스트리밍 응답 · 304 재검증 · HEAD
   public/              브라우저가 받는 것 전부 (디스크 배치 = URL)
-    index.html         대시보드 마크업
+    index.html         대시보드 마크업(실시간 관제)
+    recon/index.html   사고 현장 3D 기록 페이지 — /recon. 관제 상단 버튼으로 넘어간다
     assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
     assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
-                       scene3d.js(3D 실사 패널 — 스플랫 뷰어 · 마커 · 좌표 정합, ESM)
+                       scene3d.js(관제용 3D 패널 — 씬 설정 · 마커 · 좌표 정합, ESM)
+                       recon.js(사고 기록 화면 — 업로드 · 설정 · 진행 폴링 · 기록 조회)
+                       splat-view.js(URL 하나로 스플랫만 띄우는 얇은 뷰어)
     assets/splat/      스플랫 씬(git 제외 — README의 curl로 조달) + scene.json(씬·정합 설정, git 포함)
     vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
 
@@ -172,6 +196,7 @@ API 라우트(`/ingest` `/stream` `/map` `/clips` `/inject-fall` `/tags` `/event
 | 파일 | URL |
 |---|---|
 | `public/index.html` | `/` , `/index.html` |
+| `public/recon/index.html` | `/recon` , `/recon/` |
 | `public/login.html` | `/login` , `/login.html` |
 | `public/report/index.html` | `/report` , `/report/` |
 | `public/assets/js/dashboard.js` | `/assets/js/dashboard.js` |

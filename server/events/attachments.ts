@@ -28,6 +28,17 @@ export interface ReconState {
   error?: string;
   /** 산출물이 붙은 첨부의 id(kind=splat). 성공했을 때만 있다. */
   outputAttachmentId?: string;
+  /** 지금(또는 마지막으로) 돌던 단계 이름. 화면이 진행을 표시하는 근거다. */
+  step?: string;
+  /**
+   * 이 실행에 쓴 설정. 같은 영상을 설정만 바꿔 여러 번 돌리므로,
+   * **어떤 설정이 어떤 결과를 냈는지**가 기록에 남아야 다음 시도를 정할 수 있다.
+   */
+  tuning?: Record<string, unknown>;
+  /** 진행 지표. 실패 원인을 화면에서 바로 읽게 한다. */
+  frames?: number;
+  registeredImages?: number;
+  points?: number;
 }
 
 export interface Attachment {

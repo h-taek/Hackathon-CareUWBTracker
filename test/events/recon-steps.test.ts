@@ -9,6 +9,7 @@ import {
   projectDir,
   reconSteps,
   tuningFromEnv,
+  tuningFromParams,
 } from '../../server/events/recon/steps.ts';
 
 const paths = { video: '/data/evt-1/att-1.mp4', workDir: '/data/evt-1/recon/att-1' };
@@ -125,4 +126,34 @@ test('환경변수로 튜닝값을 바꾸고, 못 읽는 값은 기본값으로 
 test('단계마다 사람이 읽는 설명이 붙어 있다', () => {
   // 30분 뒤에 실패했을 때 어디서 막혔는지가 로그에 남아야 한다.
   for (const s of steps()) assert.ok(s.what.length > 0, `${s.name}에 설명이 없다`);
+});
+
+// ── 실행마다 받는 설정 (화면에서 넘어온다) ──
+
+test('질의 문자열에서 이번 실행 설정만 골라낸다', () => {
+  const picked = tuningFromParams(new URLSearchParams('fps=6&maxFrames=40&frameWidth=1200&iters=300'));
+  assert.deepEqual(picked, { fps: 6, maxFrames: 40, frameWidth: 1200, numIters: 300 });
+});
+
+test('안 준 값은 아예 빼서 돌려준다 — 호출부가 기본값 위에 덮는다', () => {
+  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=3')), { fps: 3 });
+  assert.deepEqual(tuningFromParams(new URLSearchParams()), {});
+  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=')), {}, '빈칸은 안 준 것과 같다');
+});
+
+test('못 읽는 값은 조용히 무시한다 — 빈칸 하나로 화면이 멈추면 안 된다', () => {
+  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=빠르게&maxFrames=0&frameWidth=-5&iters=abc')), {});
+});
+
+test('실행 파일 경로는 질의 문자열로 안 받는다', () => {
+  // 브라우저가 서버에서 실행할 바이너리를 정하게 두면 안 된다.
+  const picked = tuningFromParams(new URLSearchParams('openSplatBin=/bin/sh&colmapBin=/bin/sh&ffmpegBin=/bin/sh'));
+  assert.deepEqual(picked, {});
+});
+
+test('실행 설정이 서버 기본값 위에 덮인다', () => {
+  const merged = { ...RECON_DEFAULTS, ...tuningFromParams(new URLSearchParams('fps=6')) };
+  assert.equal(merged.fps, 6);
+  assert.equal(merged.numIters, RECON_DEFAULTS.numIters, '안 준 값은 기본값 그대로다');
+  assert.equal(merged.colmapBin, RECON_DEFAULTS.colmapBin);
 });

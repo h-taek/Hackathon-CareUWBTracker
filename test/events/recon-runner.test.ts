@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { createEventStore } from '../../server/events/store.ts';
 import { createAttachmentStore } from '../../server/events/attachments.ts';
 import { createReconRunner, MIN_FRAMES, type RunCommand } from '../../server/events/recon/runner.ts';
-import { framesDir, modelDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
+import { RECON_DEFAULTS, framesDir, modelDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
 import type { EventRecord } from '../../server/events/recorder.ts';
 
 function record(eventId: string): EventRecord {
@@ -296,4 +296,51 @@ test('큐가 비면 current는 null이다', async () => {
   await runner.idle();
   assert.equal(runner.current(), null);
   assert.equal(runner.size(), 0);
+});
+
+test('실행마다 넘긴 설정이 서버 기본값을 덮고 기록에 남는다', async () => {
+  // 같은 영상을 설정만 바꿔 여러 번 돌리므로, 어떤 설정이 어떤 결과를 냈는지가 남아야 한다.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'recon-'));
+  const store = createEventStore(path.join(root, 'events'));
+  const attachments = createAttachmentStore(store);
+  store.save(record('evt-1'));
+  const video = await attachments.receive('evt-1', { kind: 'video' }, Readable.from([Buffer.from('영상')]));
+
+  const seen: string[] = [];
+  const runner = createReconRunner({
+    store, attachments, onLog: () => {}, fps: 2, numIters: 2000,
+    run: async (step, workDir) => {
+      seen.push(step.args.join(' '));
+      if (step.name === 'frames') {
+        fs.mkdirSync(framesDir(workDir), { recursive: true });
+        for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(framesDir(workDir), `f${i}.jpg`), 'x');
+      }
+      if (step.name === 'colmap:map') writeModel(workDir, 20, 5000);
+      if (step.name === 'opensplat') fs.writeFileSync(outputPly(workDir), 'ply');
+      return { code: 0 };
+    },
+  });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId, tuning: { fps: 6, numIters: 300 } });
+  await runner.idle();
+
+  assert.ok(seen.some((a) => a.includes('fps=6')), '넘긴 fps가 ffmpeg 인자에 들어간다');
+  assert.ok(seen.some((a) => a.includes('-n 300')), '넘긴 학습 횟수가 opensplat 인자에 들어간다');
+  const recon = attachments.get('evt-1', video.attachmentId)?.recon;
+  assert.equal(recon?.tuning?.fps, 6);
+  assert.equal(recon?.tuning?.numIters, 300);
+  assert.equal(recon?.tuning?.maxFrames, RECON_DEFAULTS.maxFrames, '안 넘긴 값은 서버 기본값이다');
+});
+
+test('진행 단계와 지표가 기록에 실린다 — 화면이 이걸로 표시한다', async () => {
+  const { runner, attachments, video } = await setup({ frames: 100, registered: 90, points: 7000 });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  await runner.idle();
+
+  const recon = attachments.get('evt-1', video.attachmentId)!.recon!;
+  assert.equal(recon.frames, 100);
+  assert.equal(recon.registeredImages, 90);
+  assert.equal(recon.points, 7000);
+  assert.equal(recon.step, 'opensplat', '마지막으로 돌던 단계가 남는다');
 });

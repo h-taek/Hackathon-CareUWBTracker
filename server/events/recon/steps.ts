@@ -151,6 +151,28 @@ export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAUL
   ];
 }
 
+/** 화면이 실행마다 넘기는 값. 실행 파일 경로는 여기로 안 받는다 — 브라우저가 정할 일이 아니다. */
+export const TUNABLE_BY_REQUEST = ['fps', 'maxFrames', 'frameWidth', 'numIters'] as const;
+
+/**
+ * 질의 문자열 → 이 실행에만 쓸 설정. 없는 값은 빼고 돌려주므로 호출부가 기본값 위에 덮으면 된다.
+ * 환경변수는 기본값 자리로 남는다(서버 전체 기본), 여기 온 값이 그 위를 덮는다(이번 실행).
+ */
+export function tuningFromParams(params: URLSearchParams): Partial<ReconTuning> {
+  const picked: Partial<ReconTuning> = {};
+  const map: Record<(typeof TUNABLE_BY_REQUEST)[number], string> = {
+    fps: 'fps', maxFrames: 'maxFrames', frameWidth: 'frameWidth', numIters: 'iters',
+  };
+  for (const key of TUNABLE_BY_REQUEST) {
+    const raw = params.get(map[key]);
+    if (raw === null || raw === '') continue;
+    const value = Number(raw);
+    // 0이나 음수는 조용히 무시한다. 여기서 400을 내면 화면이 빈칸 하나로 못 돌아간다.
+    if (Number.isFinite(value) && value > 0) picked[key] = value;
+  }
+  return picked;
+}
+
 export function tuningFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): Partial<ReconTuning> {

@@ -28,6 +28,8 @@ import { judgeModel, readModelStats } from './model.ts';
 export interface ReconJob {
   eventId: string;
   attachmentId: string;
+  /** 이 실행에만 쓸 설정. 서버 기본값 위에 덮인다. 화면이 실행마다 넘긴다. */
+  tuning?: Partial<ReconTuning>;
 }
 
 export interface ReconRunnerOptions extends Partial<ReconTuning> {
@@ -108,13 +110,31 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     fs.mkdirSync(framesDir(workDir), { recursive: true });
     fs.mkdirSync(sparseDir(projectDir(workDir)), { recursive: true });
 
+    // 서버 기본값 위에 이번 실행 설정을 덮는다.
+    const jobTuning: ReconTuning = { ...tuning, ...(job.tuning ?? {}) };
+
     const startedAt = now();
     options.attachments.patchRecon(job.eventId, job.attachmentId, {
       status: 'running',
       startedAt,
+      // 다시 걸 때 앞선 시도의 결과가 남아 있으면 화면이 헷갈린다. 전부 지우고 시작한다.
       error: undefined,
+      finishedAt: undefined,
+      outputAttachmentId: undefined,
+      registeredImages: undefined,
+      points: undefined,
+      frames: undefined,
+      step: 'frames',
+      tuning: {
+        fps: jobTuning.fps,
+        maxFrames: jobTuning.maxFrames,
+        frameWidth: jobTuning.frameWidth,
+        numIters: jobTuning.numIters,
+      },
     });
     log(`[recon] 시작 ${job.eventId}/${job.attachmentId} → ${workDir}`);
+    log(`[recon] ${job.attachmentId} 설정 ${jobTuning.fps}fps · 최대 ${jobTuning.maxFrames}장`
+      + ` · 가로 ${jobTuning.frameWidth}px · 학습 ${jobTuning.numIters}회`);
 
     const appendLog = (chunk: string) => {
       try {
@@ -122,11 +142,12 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       } catch { /* 로그 못 쓴다고 재구성을 멈추지 않는다 */ }
     };
 
-    const steps = reconSteps({ video, workDir }, tuning);
+    const steps = reconSteps({ video, workDir }, jobTuning);
     let frameCount = 0;
     for (const [index, step] of steps.entries()) {
       appendLog(`\n=== [${index + 1}/${steps.length}] ${step.name} — ${step.what}\n$ ${step.command} ${step.args.join(' ')}\n`);
       log(`[recon] ${job.attachmentId} ${index + 1}/${steps.length} ${step.name} — ${step.what}`);
+      options.attachments.patchRecon(job.eventId, job.attachmentId, { step: step.name });
 
       let result: { code: number | null };
       try {
@@ -143,6 +164,7 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       if (step.name === 'frames') {
         frameCount = countFrames(workDir);
         appendLog(`프레임 ${frameCount}장\n`);
+        options.attachments.patchRecon(job.eventId, job.attachmentId, { frames: frameCount });
         if (frameCount < MIN_FRAMES) {
           return fail(job, step, `프레임이 ${frameCount}장뿐이다(최소 ${MIN_FRAMES}장). 영상이 너무 짧거나 fps가 낮다`, appendLog, startedAt);
         }
@@ -154,6 +176,10 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       if (step.name === 'colmap:map') {
         const verdict = judgeModel(readModelStats(modelDir(workDir)), frameCount);
         appendLog(`등록 ${verdict.registeredImages}/${frameCount}장 · 점 ${verdict.points}개\n`);
+        options.attachments.patchRecon(job.eventId, job.attachmentId, {
+          registeredImages: verdict.registeredImages,
+          points: verdict.points,
+        });
         if (!verdict.ok) return fail(job, step, verdict.reason, appendLog, startedAt);
         log(`[recon] ${job.attachmentId} 자세 ${verdict.registeredImages}/${frameCount}장 · 점 ${verdict.points}개`);
       }
