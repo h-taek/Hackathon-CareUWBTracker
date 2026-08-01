@@ -204,18 +204,40 @@ function setSteps(recon) {
     li.className = broke ? 'bad' : passed ? 'done' : running ? 'run' : '';
     li.append(el('span', 'mk', broke ? '×' : passed ? '✓' : running ? '●' : '○'));
     const name = el('span');
-    name.append(el('b', null, step.label));
+    name.append(el('b', null, `${index + 1}/${STEPS.length} ${step.label}`));
     name.append(el('span', 'what', ` ${step.what}`));
+    // 지금 도는 단계에만 막대를 붙인다. 전체 %로 합치지 않는 이유는 단계별 소요가
+    // 입력에 따라 뒤집혀(학습 30000회 vs 프레임 500장) 없는 가중치를 지어내게 되기 때문이다.
+    if (running && recon?.progress) {
+      const bar = el('div', 'bar');
+      const fill = el('div', 'fill');
+      const pct = recon.progress.percent;
+      fill.style.width = pct == null ? '100%' : `${pct}%`;
+      if (pct == null) fill.classList.add('unknown');
+      bar.append(fill);
+      name.append(bar);
+    }
     li.append(name);
-    li.append(el('span', 'd', detailFor(step.key, recon)));
+    li.append(el('span', 'd', running ? runningDetail(recon) : detailFor(step.key, recon)));
     list.append(li);
   }
   // 상태 낱말을 앞에 박는다. 사유만 있으면 성공인지 실패인지가 한눈에 안 들어온다.
+  // 번호는 **화면 기준**으로만 센다. 서버의 stepIndex는 도구 5단계 기준이라 화면의
+  // 6단계(업로드 포함)와 어긋난다 — 섞으면 3/6인지 4/6인지 알 수 없어진다.
+  const shown = at >= 0 ? at + 1 : 0;
   $('progressHint').textContent = failed ? `실패 — ${recon.error ?? '원인 불명'}`
     : done ? '완료'
-      : recon?.status === 'running' ? '진행 중…'
-        : recon?.status === 'pending' ? '대기 중…' : '';
+      : recon?.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
+        : recon?.status === 'running' ? '진행 중…'
+          : recon?.status === 'pending' ? '대기 중…' : '';
   $('progressHint').className = `hint${failed ? ' bad' : ''}`;
+}
+
+/** 지금 도는 단계의 오른쪽 숫자. 막대는 근사여도 이 값은 도구가 준 그대로다. */
+function runningDetail(recon) {
+  const p = recon?.progress;
+  if (!p) return '…';
+  return p.percent == null ? p.label : `${p.label} · ${p.percent}%`;
 }
 
 function detailFor(key, recon) {
@@ -241,10 +263,12 @@ async function poll() {
   } catch { /* 서버가 잠깐 안 받으면 다음 차례에 다시 본다 */ }
 
   setSteps(recon);
+  rememberWatching();
   await refreshLog();
 
   if (recon && (recon.status === 'done' || recon.status === 'failed')) {
     state.watching = null;
+    rememberWatching();
     await loadEvents();
     await loadRecords();
     if (recon.status === 'done' && recon.outputAttachmentId) {
@@ -259,6 +283,7 @@ async function refreshLog() {
   if (!state.watching) return;
   const { eventId, attachmentId } = state.watching;
   try {
+    // 로그는 첫 단계가 뭔가 쓰기 전까지 없다. 404는 정상이라 조용히 넘긴다.
     const res = await fetch(`/events/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=40`, { cache: 'no-store' });
     if (!res.ok) return;
     const text = await res.text();
@@ -388,9 +413,33 @@ async function openViewer(eventId, attachmentId) {
 }
 
 // ── 시작 ──
+/**
+ * 보고 있던 재구성을 주소에 남긴다. 15분짜리 작업 중에 새로고침하거나 창을 닫으면
+ * 진행 화면을 통째로 잃는데, 주소만 있으면 다시 붙는다.
+ */
+function rememberWatching() {
+  const url = new URL(location.href);
+  if (state.watching) {
+    url.searchParams.set('watch', `${state.watching.eventId}/${state.watching.attachmentId}`);
+  } else {
+    url.searchParams.delete('watch');
+  }
+  history.replaceState(null, '', url);
+}
+
+function restoreWatching() {
+  const raw = new URL(location.href).searchParams.get('watch');
+  if (!raw) return;
+  const slash = raw.lastIndexOf('/');
+  if (slash <= 0) return;
+  state.watching = { eventId: raw.slice(0, slash), attachmentId: raw.slice(slash + 1) };
+  poll();
+}
+
 bindFilePicker();
 $('go').onclick = startUpload;
 $('reload').onclick = () => { loadEvents(); loadRecords(); };
 setSteps(null);
 loadEvents();
 loadRecords();
+restoreWatching();

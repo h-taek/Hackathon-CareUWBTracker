@@ -131,3 +131,16 @@ a.btn.sm { text-decoration: none; }
 .steps li b { font-weight: 500; }
 .steps li .what { color: var(--faint); font-size: 11px; margin-left: 6px; }
 .grid label.hintcell { color: var(--faint); font-size: 11px; justify-content: flex-start; }
+
+/* 단계별 진행 막대. 전체 %가 아니라 그 단계 안의 진행이다. */
+.steps .bar {
+  height: 3px; margin-top: 6px; border-radius: 2px; background: var(--line); overflow: hidden;
+}
+.steps .bar .fill { height: 100%; background: var(--accent); transition: width .4s ease; }
+/* 총량을 모르는 단계(자세 계산)는 채우는 대신 흐르게 둔다 — 가짜 %를 보이지 않는다. */
+.steps .bar .fill.unknown {
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 40% 100%; background-repeat: no-repeat;
+  animation: flow 1.4s linear infinite;
+}
+@keyframes flow { from { background-position: -40% 0; } to { background-position: 140% 0; } }

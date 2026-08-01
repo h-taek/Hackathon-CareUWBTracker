@@ -171,6 +171,8 @@ export function reconSteps(
       command: tuning.ffmpegBin,
       args: [
         '-hide_banner', '-loglevel', 'error', '-y',
+        // 진행 표시용. 이걸 안 주면 ffmpeg가 조용해서 화면이 멈춘 것처럼 보인다.
+        '-progress', 'pipe:1',
         '-i', paths.video,
         '-vf', filters.join(','),
         '-frames:v', String(tuning.targetFrames),

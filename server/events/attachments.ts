@@ -35,6 +35,14 @@ export interface ReconState {
    * **어떤 설정이 어떤 결과를 냈는지**가 기록에 남아야 다음 시도를 정할 수 있다.
    */
   tuning?: Record<string, unknown>;
+  /** 지금 단계가 몇 번째인지. `3/5`로 보여준다. */
+  stepIndex?: number;
+  stepCount?: number;
+  /**
+   * 지금 단계 **안에서의** 진행. 전체 %로 합치지 않는다 — 단계별 소요가 입력에 따라
+   * 뒤집혀 없는 가중치를 지어내게 된다.
+   */
+  progress?: { done: number; total: number | null; percent: number | null; label: string };
   /** 진행 지표. 실패 원인을 화면에서 바로 읽게 한다. */
   frames?: number;
   registeredImages?: number;

@@ -26,6 +26,7 @@ import {
   type ReconTuning,
 } from './steps.ts';
 import { judgeModel, readModelStats } from './model.ts';
+import { parseProgress, type StepProgress } from './progress.ts';
 
 export interface ReconJob {
   eventId: string;
@@ -127,6 +128,9 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       points: undefined,
       frames: undefined,
       step: 'frames',
+      stepIndex: 1,
+      stepCount: 5,
+      progress: undefined,
       tuning: {
         targetFrames: jobTuning.targetFrames,
         frameWidth: jobTuning.frameWidth,
@@ -162,11 +166,37 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     for (const [index, step] of steps.entries()) {
       appendLog(`\n=== [${index + 1}/${steps.length}] ${step.name} — ${step.what}\n$ ${step.command} ${step.args.join(' ')}\n`);
       log(`[recon] ${job.attachmentId} ${index + 1}/${steps.length} ${step.name} — ${step.what}`);
-      options.attachments.patchRecon(job.eventId, job.attachmentId, { step: step.name });
+      options.attachments.patchRecon(job.eventId, job.attachmentId, {
+        step: step.name,
+        stepIndex: index + 1,
+        stepCount: steps.length,
+        progress: undefined,
+      });
+
+      // 도구가 진행을 찍는 대로 레코드에 반영하되, 초당 한 번으로 묶는다.
+      // OpenSplat은 30000회면 3000줄을 뱉는데 그때마다 record.json을 쓰면 디스크만 간다.
+      let lastWriteAt = 0;
+      let pending: StepProgress | null = null;
+      const onOutput = (chunk: string) => {
+        appendLog(chunk);
+        const parsed = parseProgress(step.name, chunk, {
+          targetFrames: jobTuning.targetFrames,
+          frameCount,
+          numIters: jobTuning.numIters,
+        });
+        if (!parsed) return;
+        pending = parsed;
+        const at = now();
+        if (at - lastWriteAt < PROGRESS_WRITE_INTERVAL_MS) return;
+        lastWriteAt = at;
+        options.attachments.patchRecon(job.eventId, job.attachmentId, { progress: pending });
+      };
 
       let result: { code: number | null };
       try {
-        result = await run(step, workDir, appendLog);
+        result = await run(step, workDir, onOutput);
+        // 마지막 값은 간격에 걸려 빠질 수 있다. 끝난 뒤 한 번 더 쓴다.
+        if (pending) options.attachments.patchRecon(job.eventId, job.attachmentId, { progress: pending });
       } catch (error: unknown) {
         return fail(job, step, `실행 실패: ${describe(error)}`, appendLog, startedAt);
       }
@@ -256,6 +286,9 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
 
 /** 이만큼도 안 나오면 COLMAP이 어차피 못 푼다. 미리 끊어 30분을 아낀다. */
 export const MIN_FRAMES = 10;
+
+/** 진행을 레코드에 쓰는 최소 간격(ms). 화면 폴링이 3초라 1초면 충분하다. */
+export const PROGRESS_WRITE_INTERVAL_MS = 1000;
 
 function countFrames(workDir: string): number {
   try {
