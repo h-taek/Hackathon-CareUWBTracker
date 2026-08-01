@@ -75,6 +75,27 @@ UWB 거리는 제자리에 서 있어도 수 cm씩 흔들린다. 이동평균만
 
 떨림이 여전히 심하면 **앵커 배치부터 본다.** `y = √(rA² − x²)`라 두 앵커를 잇는 선 가까이(y가 작은 곳)에서는 거리 5cm 흔들림이 y로 수십 cm가 된다(민감도 ≈ rA/y). 동선을 기준선에서 떼는 게 어떤 필터보다 효과가 크다.
 
+## 사고 기록 (R-1)
+
+경보를 SSE로 뿌리고 끝내지 않는다. `fall_detected` 하나마다 **그 전후 구간의 궤적·가속도를 묶어 파일 하나**로 남긴다. 스키마는 `../docs/spec/03_data-interface.md` §6.1이고, 여기 남은 `eventId`가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
+
+```bash
+curl localhost:8080/events                  # 최신순 목록(요약). ?limit= ?tagId=
+curl localhost:8080/events/<eventId>        # 전문 — 궤적·가속도·첨부까지
+```
+
+저장 위치는 기본 `server/data/events/<eventId>.json`이고 git에서 제외돼 있다. 이벤트 하나가 파일 하나이며, 임시 파일에 쓰고 이름을 바꾸는 방식이라 쓰는 중에 목록을 읽어도 반쪽짜리 JSON이 안 나온다.
+
+**기록은 경보 즉시 닫히지 않는다.** 사고 이후 구간이 필요하므로 `post` 창이 찰 때까지 기다린다. 프레임이 계속 오면 데이터로 닫고, 클립 재생이 끝나 ingest가 멎으면 벽시계 타이머가 있는 만큼으로 닫는다 — **둘 중 먼저 오는 쪽**이다.
+
+| 변수 | 기본 | 뜻 |
+| --- | --- | --- |
+| `EVENTS_DIR` | `server/data/events` | 기록 저장 폴더 |
+| `EVENT_PRE_MS` | 10000 | 경보 시각 이전으로 담을 구간(ms). 접근 동선이 보이는 길이 |
+| `EVENT_POST_MS` | 10000 | 경보 시각 이후로 담을 구간(ms). 넘어진 뒤 정지가 보이는 길이 |
+
+삼각측량이 보류된 프레임(accel-only)은 **가속도만 남고 궤적에는 안 들어간다.** 없는 위치를 지어내지 않기 때문이며, 그 구간은 화면에서도 비어 보이는 게 맞다.
+
 ## 테스트
 
 ```bash
@@ -111,6 +132,10 @@ server/                재사용 런타임
     injector.ts        클립 → ingest 프레임 재생(태그별 1개, 겹치면 나중 것만)
     clip.ts            클립 로드·검증·요약
     clips/*.json       커밋된 원신호 구간 + 출처 + 기대 판정(tools/cli.ts clip으로 재생성)
+  events/              사고 기록(R-1) — 경보를 뿌리고 끝내지 않고 전후 구간과 함께 남긴다
+    recorder.ts        태그별 링버퍼 + 경보 전후 창을 모아 레코드로 닫기(파일 안 만짐)
+    store.ts           레코드 1건 = 파일 1개. 저장·조회·목록 + eventId 경로 검증
+    routes.ts          GET /events · /events/<id> 응답 생성(순수 함수)
   detection/           낙상 감지
     fall.ts            고전 상태머신. 충격을 잡아 정점 뒤 1.5초에 fall_detected 1건 발행
     cascade.ts         고전 + LightGBM 2단계 캐스케이드(기본). 낙상 여부는 여기서만 정한다
@@ -133,14 +158,16 @@ tools/                 개발 전용 도구(서버 런타임과 무관) — 루�
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
-  detection/ ingest/ positioning/ lib/ config/ tools/  fixtures/
+  detection/ events/ ingest/ positioning/ lib/ config/ tools/  fixtures/
+
+data/events/           사고 기록 산출물(런타임 생성 · git 제외). EVENTS_DIR로 옮길 수 있다
 ```
 
-런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
+런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `events/`(사고 기록) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
 
 ## 페이지·에셋 추가
 
-API 라우트(`/ingest` `/stream` `/map` `/clips` `/inject-fall` `/tags`)를 먼저 처리하고, 나머지는 전부 `public/` 정적 서빙으로 떨어진다. **디스크 배치가 곧 URL이므로 페이지를 늘려도 서버 코드는 손대지 않는다.**
+API 라우트(`/ingest` `/stream` `/map` `/clips` `/inject-fall` `/tags` `/events`)를 먼저 처리하고, 나머지는 전부 `public/` 정적 서빙으로 떨어진다. **디스크 배치가 곧 URL이므로 페이지를 늘려도 서버 코드는 손대지 않는다.**
 
 | 파일 | URL |
 |---|---|

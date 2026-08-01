@@ -27,6 +27,9 @@ import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/
 import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
 import { createStaticHandler } from './static/handler.ts';
+import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS } from './events/recorder.ts';
+import { createEventStore } from './events/store.ts';
+import { routeEvents } from './events/routes.ts';
 
 const args = process.argv.slice(2);
 if (wantsHelp(args)) {
@@ -78,6 +81,28 @@ const smootherConfig = { ...SMOOTHER_DEFAULTS, ...smootherOptionsFromEnv() };
 const positionSmoother = createPositionSmoother(smootherConfig);
 const clients = new Set<ServerResponse>();
 
+// 사고 기록(R-1) — 경보를 SSE로 뿌리고 끝내지 않고 전후 궤적·가속도와 함께 파일로 남긴다.
+// 여기에 남은 eventId가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
+const recorderConfig = { ...RECORDER_DEFAULTS, ...recorderOptionsFromEnv() };
+const eventStore = createEventStore(
+  process.env.EVENTS_DIR || path.join(import.meta.dirname, 'data', 'events'),
+);
+const eventRecorder = createEventRecorder({
+  ...recorderConfig,
+  onRecord: (record) => {
+    eventStore.save(record);
+    console.log(
+      `[event] 기록 ${record.eventId} (${record.tagId})`
+      + ` 궤적 ${record.track.length}점 · 가속도 ${record.accel.length}표본 → ${eventStore.dir}`,
+    );
+  },
+  // 디스크가 차거나 권한이 없어도 관제는 계속 돌아야 한다. 기록만 잃고 경보는 이미 나갔다.
+  onError: (error, record) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[event] ⚠ ${record.eventId} 기록 실패 — 경보는 정상 발행됐습니다: ${message}`);
+  },
+});
+
 function broadcast(event: 'position' | 'alert', data: unknown): void {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const response of clients) response.write(frame);
@@ -126,6 +151,9 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
   noteSingleAnchorEstimate(rawPosition);
   const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
   if (position) broadcast('position', position);
+  // 경보보다 먼저 넣는다. 판정은 정점 뒤 1.5초에 나므로, 경보가 등록되는 시점에는
+  // 이 프레임까지가 이미 버퍼에 들어 있어야 한다.
+  eventRecorder.observe(payload, position);
   console.log(formatIngestLine(payload, position, {
     mainAnchorId: anchorConfig.mainAnchorId,
     subAnchorId: anchorConfig.subAnchorId,
@@ -143,6 +171,8 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
     const ai = event.aiScore != null ? ` ai=${event.aiScore}` : '';
     console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${event.zone ?? '-'}`);
     broadcast('alert', event);
+    // zone까지 채운 뒤에 넘긴다 — 레코드의 alert는 SSE로 나간 것과 같아야 한다.
+    eventRecorder.record(event);
   }
   return position;
 }
@@ -180,6 +210,9 @@ const injector = createInjector({
     sim.freeze(tagId);
     // 앞선 재생이 남긴 감지기 상태(COOLDOWN 등)를 지운다. 새 클립은 새 상황이다.
     fallDetector.reset(tagId);
+    // 기록 버퍼도 같이 비운다. 안 비우면 앞 클립의 파형이 다음 사고의 '사고 직전'으로 붙는다.
+    // 대기 중이던 기록은 있는 만큼으로 먼저 닫힌다.
+    eventRecorder.reset(tagId);
     console.log(`[inject] ${tagId} <- ${clip.id} (${clip.source.dataset} ${clip.source.activity}/${clip.source.trial}, ${clip.samples.ax.length}샘플)`);
   },
   onEnd: (tagId, clip, completed) => {
@@ -220,6 +253,8 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     request.on('close', () => clients.delete(response));
     return;
   }
+  const eventRoute = routeEvents(pathname, url.searchParams, eventStore);
+  if (eventRoute) return sendJson(response, eventRoute.body, eventRoute.status);
   if (pathname === '/map') return sendJson(response, map);
   if (pathname === '/clips') return sendJson(response, clips.map(clipSummary));
   if (pathname === '/inject-fall') {
@@ -261,6 +296,12 @@ server.listen(port, () => {
     + ` · 정지 ${smootherConfig.staticDeadbandM}m 고정 · 점프 ${smootherConfig.jumpBaseM}m↑ 컷 · 클램프 프레임 제외`
     + ' (POS_DEADBAND_M / POS_MAX_JUMP_M 로 조절)',
   );
+  console.log(
+    `  사고 기록  ${eventStore.dir}`
+    + ` · 경보 전 ${recorderConfig.preWindowMs / 1000}초 / 후 ${recorderConfig.postWindowMs / 1000}초`
+    + ' (EVENT_PRE_MS / EVENT_POST_MS 로 조절)',
+  );
+  console.log(`  이벤트 조회 GET http://localhost:${shown}/events · /events/<eventId>`);
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {

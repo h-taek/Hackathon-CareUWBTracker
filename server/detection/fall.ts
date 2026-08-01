@@ -38,8 +38,12 @@ const DEFAULTS = {
 };
 
 export interface FallEvent {
+  /** `evt-<tagId>-<충격ts>-<seq>`. 사고 기록(R-1)이 이 값으로 레코드를 연다. */
+  eventId: string;
   type: string;
   tagId: string;
+  /** 판정 시각이 아니라 충격이 일어난 시각(spec 03 §2). */
+  ts: number;
   peakAccel: number;
   freefall: boolean;
   aiScore?: number;
