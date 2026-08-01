@@ -18,6 +18,8 @@ import {
   modelDir,
   outputPly,
   projectDir,
+  parseDuration,
+  probeStep,
   reconSteps,
   sparseDir,
   type ReconStep,
@@ -126,17 +128,16 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       frames: undefined,
       step: 'frames',
       tuning: {
-        fps: jobTuning.fps,
-        maxFrames: jobTuning.maxFrames,
+        targetFrames: jobTuning.targetFrames,
         frameWidth: jobTuning.frameWidth,
         numIters: jobTuning.numIters,
         useGpu: jobTuning.useGpu,
       },
     });
     log(`[recon] 시작 ${job.eventId}/${job.attachmentId} → ${workDir}`);
-    log(`[recon] ${job.attachmentId} 설정 ${jobTuning.fps}fps · 최대 ${jobTuning.maxFrames}장`
-      + ` · 가로 ${jobTuning.frameWidth}px · 학습 ${jobTuning.numIters}회`
-      + ` · COLMAP ${jobTuning.useGpu ? 'GPU' : 'CPU'}`);
+    log(`[recon] ${job.attachmentId} 설정 ${jobTuning.targetFrames}장`
+      + ` · 가로 ${jobTuning.frameWidth > 0 ? `${jobTuning.frameWidth}px` : '원본'}`
+      + ` · 학습 ${jobTuning.numIters}회 · COLMAP ${jobTuning.useGpu ? 'GPU' : 'CPU'}`);
 
     const appendLog = (chunk: string) => {
       try {
@@ -144,7 +145,19 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       } catch { /* 로그 못 쓴다고 재구성을 멈추지 않는다 */ }
     };
 
-    const steps = reconSteps({ video, workDir }, jobTuning);
+    // 프레임을 영상 전체에 고르게 펴려면 길이를 먼저 알아야 한다.
+    // 실패해도 멈추지 않는다 — 폴백 fps로 뽑고 그 사실을 로그에 남긴다.
+    const probe = probeStep({ video, workDir }, jobTuning);
+    let durationSec: number | null = null;
+    appendLog(`\n=== [0/5] ${probe.name} — ${probe.what}\n$ ${probe.command} ${probe.args.join(' ')}\n`);
+    try {
+      let probed = '';
+      const result = await run(probe, workDir, (chunk) => { probed += chunk; appendLog(chunk); });
+      if (result.code === 0) durationSec = parseDuration(probed);
+    } catch { /* ffprobe가 없어도 재구성 자체는 돌아야 한다 */ }
+    appendLog(durationSec ? `영상 길이 ${durationSec.toFixed(1)}초\n` : '길이를 못 쟀다 — 폴백 간격으로 뽑는다\n');
+
+    const steps = reconSteps({ video, workDir }, jobTuning, durationSec);
     let frameCount = 0;
     for (const [index, step] of steps.entries()) {
       appendLog(`\n=== [${index + 1}/${steps.length}] ${step.name} — ${step.what}\n$ ${step.command} ${step.args.join(' ')}\n`);
@@ -275,7 +288,10 @@ function spawnCommand(
 }
 
 function stripUndefined(options: ReconRunnerOptions): Partial<ReconTuning> {
-  const keys = ['fps', 'maxFrames', 'frameWidth', 'numIters', 'useGpu', 'openSplatBin', 'colmapBin', 'ffmpegBin'] as const;
+  const keys = [
+    'targetFrames', 'frameWidth', 'numIters', 'useGpu',
+    'openSplatBin', 'colmapBin', 'ffmpegBin', 'ffprobeBin',
+  ] as const;
   const picked: Record<string, unknown> = {};
   for (const key of keys) {
     if (options[key] !== undefined) picked[key] = options[key];

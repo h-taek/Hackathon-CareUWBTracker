@@ -5,8 +5,12 @@ import * as path from 'node:path';
 
 import {
   BUNDLED_OPENSPLAT,
+  FALLBACK_SAMPLE_FPS,
   RECON_DEFAULTS,
+  parseDuration,
+  probeStep,
   resolveOpenSplatBin,
+  sampleFps,
   framesDir,
   outputPly,
   projectDir,
@@ -30,18 +34,47 @@ test('단계는 프레임 → 특징 → 매칭 → 매핑 → 학습 순이다'
   );
 });
 
-test('ffmpeg는 지정한 fps·장수·가로폭으로 프레임을 뽑는다', () => {
+test('상류 기본값은 원본 해상도라 scale 필터를 안 건다', () => {
+  // Nerfstudio는 COLMAP에 원본을 넘기고, COLMAP 4.x의 max_image_size도 -1(무제한)이다.
   const frames = step('frames');
   assert.equal(frames.command, 'ffmpeg');
-  assert.equal(argOf('frames', '-vf'), `fps=${RECON_DEFAULTS.fps},scale=${RECON_DEFAULTS.frameWidth}:-2`);
-  assert.equal(argOf('frames', '-frames:v'), String(RECON_DEFAULTS.maxFrames));
   assert.equal(argOf('frames', '-i'), paths.video);
+  assert.equal(argOf('frames', '-vf').includes('scale='), false);
+  assert.equal(argOf('frames', '-frames:v'), String(RECON_DEFAULTS.targetFrames));
   assert.equal(frames.args.at(-1), path.join(framesDir(paths.workDir), 'f%04d.jpg'));
 });
 
-test('세로는 -2로 둬서 짝수로 자동 계산된다', () => {
+test('가로를 지정하면 scale 필터가 붙고 세로는 -2로 자동 계산된다', () => {
   // 홀수 높이는 인코더가 거부한다. 가로만 정하고 세로는 맡기는 게 맞다.
-  assert.match(argOf('frames', '-vf'), /scale=\d+:-2$/);
+  const scaled = reconSteps(paths, { ...RECON_DEFAULTS, frameWidth: 1600 }, 60);
+  const vf = scaled.find((s) => s.name === 'frames')!.args;
+  assert.match(vf[vf.indexOf('-vf') + 1], /,scale=1600:-2$/);
+});
+
+test('프레임은 영상 전체에 고르게 편다 — 앞부분만 자르지 않는다', () => {
+  // fps로 잡으면 119초 영상의 앞 75초만 남는 일이 실제로 있었다.
+  assert.equal(sampleFps(300, 60), 5, '60초에 300장이면 5fps');
+  assert.equal(sampleFps(300, 120), 2.5, '120초면 2.5fps');
+  assert.equal(sampleFps(300, 600), 0.5, '10분이면 0.5fps');
+  const long = reconSteps(paths, RECON_DEFAULTS, 119);
+  assert.match(long.find((s) => s.name === 'frames')!.args.join(' '), /fps=2\.521/);
+});
+
+test('길이를 못 재면 폴백 간격으로 뽑고 그 사실이 설명에 남는다', () => {
+  assert.equal(sampleFps(300, null), FALLBACK_SAMPLE_FPS);
+  assert.equal(sampleFps(300, 0), FALLBACK_SAMPLE_FPS);
+  assert.match(step('frames').what, /길이를 못 재/);
+});
+
+test('ffprobe로 길이를 재고 출력에서 초를 뽑는다', () => {
+  const probe = probeStep(paths);
+  assert.equal(probe.command, 'ffprobe');
+  assert.equal(probe.args.at(-1), paths.video);
+  assert.ok(probe.args.includes('format=duration'));
+  assert.equal(parseDuration('64.000000\n'), 64);
+  assert.equal(parseDuration('  119.5  '), 119.5);
+  assert.equal(parseDuration('N/A'), null);
+  assert.equal(parseDuration(''), null);
 });
 
 test('GPU 스위치 이름이 COLMAP 4.x 것이어야 한다', () => {
@@ -128,7 +161,7 @@ test('실행 파일을 환경변수로 갈아끼운다', () => {
     ffmpegBin: '/opt/ffmpeg',
     colmapBin: '/opt/colmap',
     openSplatBin: '/opt/opensplat',
-  });
+  }, 60);
   assert.deepEqual(
     custom.map((s) => s.command),
     ['/opt/ffmpeg', '/opt/colmap', '/opt/colmap', '/opt/colmap', '/opt/opensplat'],
@@ -141,13 +174,11 @@ test('환경변수가 없으면 기본값이다', () => {
 
 test('환경변수로 튜닝값을 바꾸고, 못 읽는 값은 기본값으로 둔다', () => {
   const tuning = tuningFromEnv({
-    RECON_FPS: '4',
-    RECON_MAX_FRAMES: '0',
+    RECON_FRAMES: '120',
     RECON_ITERS: '느리게',
     OPENSPLAT_BIN: '/x/opensplat',
   });
-  assert.equal(tuning.fps, 4);
-  assert.equal(tuning.maxFrames, RECON_DEFAULTS.maxFrames, '0은 안 받는다');
+  assert.equal(tuning.targetFrames, 120);
   assert.equal(tuning.numIters, RECON_DEFAULTS.numIters);
   assert.equal(tuning.openSplatBin, '/x/opensplat');
 });
@@ -160,18 +191,23 @@ test('단계마다 사람이 읽는 설명이 붙어 있다', () => {
 // ── 실행마다 받는 설정 (화면에서 넘어온다) ──
 
 test('질의 문자열에서 이번 실행 설정만 골라낸다', () => {
-  const picked = tuningFromParams(new URLSearchParams('fps=6&maxFrames=40&frameWidth=1200&iters=300'));
-  assert.deepEqual(picked, { fps: 6, maxFrames: 40, frameWidth: 1200, numIters: 300 });
+  const picked = tuningFromParams(new URLSearchParams('frames=120&frameWidth=1200&iters=300'));
+  assert.deepEqual(picked, { targetFrames: 120, frameWidth: 1200, numIters: 300 });
 });
 
 test('안 준 값은 아예 빼서 돌려준다 — 호출부가 기본값 위에 덮는다', () => {
-  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=3')), { fps: 3 });
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=120')), { targetFrames: 120 });
   assert.deepEqual(tuningFromParams(new URLSearchParams()), {});
-  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=')), {}, '빈칸은 안 준 것과 같다');
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=')), {}, '빈칸은 안 준 것과 같다');
+});
+
+test('가로 0은 받는다 — 0이 원본 그대로라는 뜻이다', () => {
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frameWidth=0')), { frameWidth: 0 });
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=0')), {}, '장수 0은 뜻이 없다');
 });
 
 test('못 읽는 값은 조용히 무시한다 — 빈칸 하나로 화면이 멈추면 안 된다', () => {
-  assert.deepEqual(tuningFromParams(new URLSearchParams('fps=빠르게&maxFrames=0&frameWidth=-5&iters=abc')), {});
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=많이&frameWidth=-5&iters=abc')), {});
 });
 
 test('실행 파일 경로는 질의 문자열로 안 받는다', () => {
@@ -181,8 +217,8 @@ test('실행 파일 경로는 질의 문자열로 안 받는다', () => {
 });
 
 test('실행 설정이 서버 기본값 위에 덮인다', () => {
-  const merged = { ...RECON_DEFAULTS, ...tuningFromParams(new URLSearchParams('fps=6')) };
-  assert.equal(merged.fps, 6);
+  const merged = { ...RECON_DEFAULTS, ...tuningFromParams(new URLSearchParams('frames=120')) };
+  assert.equal(merged.targetFrames, 120);
   assert.equal(merged.numIters, RECON_DEFAULTS.numIters, '안 준 값은 기본값 그대로다');
   assert.equal(merged.colmapBin, RECON_DEFAULTS.colmapBin);
 });
@@ -220,8 +256,7 @@ test('화면 폼 기본값과 서버 기본값이 같다', () => {
     const m = new RegExp(`id="${id}"[^>]*value="([0-9.]+)"`).exec(html);
     return m ? Number(m[1]) : null;
   };
-  assert.equal(formValue('fps'), RECON_DEFAULTS.fps);
-  assert.equal(formValue('maxFrames'), RECON_DEFAULTS.maxFrames);
+  assert.equal(formValue('frames'), RECON_DEFAULTS.targetFrames);
   assert.equal(formValue('frameWidth'), RECON_DEFAULTS.frameWidth);
   assert.equal(formValue('iters'), RECON_DEFAULTS.numIters);
   assert.match(html, /id="gpu"[^>]*checked/, 'GPU 기본 켬도 같아야 한다');

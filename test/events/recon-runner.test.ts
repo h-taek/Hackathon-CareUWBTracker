@@ -52,6 +52,9 @@ function fakeRun(options: {
     if (options.throwAt === step.name) throw new Error('실행 파일이 없다');
     if (options.failAt === step.name) return { code: 1 };
 
+    // ffprobe는 길이(초)를 표준출력으로 낸다. 실행기가 이걸 파싱해 추출 간격을 정한다.
+    if (step.name === 'probe') { onOutput('60.0\n'); return { code: 0 }; }
+
     if (step.name === 'frames') {
       fs.mkdirSync(framesDir(workDir), { recursive: true });
       for (let i = 0; i < frameCount; i += 1) {
@@ -88,7 +91,7 @@ test('업로드된 영상을 재구성해 .ply를 첨부로 붙인다', async ()
   runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
   await runner.idle();
 
-  assert.deepEqual(calls, ['frames', 'colmap:extract', 'colmap:match', 'colmap:map', 'opensplat']);
+  assert.deepEqual(calls, ['probe', 'frames', 'colmap:extract', 'colmap:match', 'colmap:map', 'opensplat']);
 
   const source = attachments.get('evt-1', video.attachmentId)!;
   assert.equal(source.recon?.status, 'done');
@@ -109,6 +112,7 @@ test('돌기 시작하면 running으로 바뀐다', async () => {
     attachments,
     onLog: () => {},
     run: async (step, workDir) => {
+      if (step.name === 'probe') { return { code: 0 }; }
       seen.push(attachments.get('evt-1', video.attachmentId)?.recon?.status ?? '?');
       if (step.name === 'frames') {
         fs.mkdirSync(framesDir(workDir), { recursive: true });
@@ -156,7 +160,7 @@ test('프레임이 너무 적으면 COLMAP을 돌리기 전에 끊는다', async
   runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
   await runner.idle();
 
-  assert.deepEqual(calls, ['frames']);
+  assert.deepEqual(calls, ['probe', 'frames']);
   const source = attachments.get('evt-1', video.attachmentId)!;
   assert.equal(source.recon?.status, 'failed');
   assert.match(source.recon?.error ?? '', /3장/);
@@ -308,7 +312,7 @@ test('실행마다 넘긴 설정이 서버 기본값을 덮고 기록에 남는�
 
   const seen: string[] = [];
   const runner = createReconRunner({
-    store, attachments, onLog: () => {}, fps: 2, numIters: 2000,
+    store, attachments, onLog: () => {}, targetFrames: 300, numIters: 2000,
     run: async (step, workDir) => {
       seen.push(step.args.join(' '));
       if (step.name === 'frames') {
@@ -321,15 +325,15 @@ test('실행마다 넘긴 설정이 서버 기본값을 덮고 기록에 남는�
     },
   });
 
-  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId, tuning: { fps: 6, numIters: 300 } });
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId, tuning: { targetFrames: 120, numIters: 300 } });
   await runner.idle();
 
-  assert.ok(seen.some((a) => a.includes('fps=6')), '넘긴 fps가 ffmpeg 인자에 들어간다');
+  assert.ok(seen.some((a) => a.includes('-frames:v 120')), '넘긴 장수가 ffmpeg 인자에 들어간다');
   assert.ok(seen.some((a) => a.includes('-n 300')), '넘긴 학습 횟수가 opensplat 인자에 들어간다');
   const recon = attachments.get('evt-1', video.attachmentId)?.recon;
-  assert.equal(recon?.tuning?.fps, 6);
+  assert.equal(recon?.tuning?.targetFrames, 120);
   assert.equal(recon?.tuning?.numIters, 300);
-  assert.equal(recon?.tuning?.maxFrames, RECON_DEFAULTS.maxFrames, '안 넘긴 값은 서버 기본값이다');
+  assert.equal(recon?.tuning?.frameWidth, RECON_DEFAULTS.frameWidth, '안 넘긴 값은 서버 기본값이다');
 });
 
 test('진행 단계와 지표가 기록에 실린다 — 화면이 이걸로 표시한다', async () => {

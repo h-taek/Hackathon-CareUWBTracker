@@ -12,12 +12,12 @@ const $ = (id) => document.getElementById(id);
 
 /** 파이프라인 단계. 서버 recon.step 이름과 짝이 맞아야 한다(server/events/recon/steps.ts). */
 const STEPS = [
-  { key: 'upload', label: '영상 업로드' },
-  { key: 'frames', label: '프레임 추출' },
-  { key: 'colmap:extract', label: '특징 추출' },
-  { key: 'colmap:match', label: '프레임 매칭' },
-  { key: 'colmap:map', label: '자세 계산' },
-  { key: 'opensplat', label: '3DGS 학습' },
+  { key: 'upload', label: '영상 업로드', what: '영상 파일을 서버로 보낸다' },
+  { key: 'frames', label: '프레임 추출', what: '영상을 사진 여러 장으로 고르게 자른다' },
+  { key: 'colmap:extract', label: '특징 추출', what: '사진마다 알아볼 수 있는 점을 찾는다' },
+  { key: 'colmap:match', label: '프레임 매칭', what: '사진끼리 같은 점을 짝짓는다' },
+  { key: 'colmap:map', label: '자세 계산', what: '촬영자가 어디서 찍었는지를 역산한다' },
+  { key: 'opensplat', label: '3DGS 학습', what: '그 위치들에서 본 모습이 되도록 3D를 맞춰간다' },
 ];
 
 const state = {
@@ -137,9 +137,9 @@ async function loadEvents() {
 // ── 3. 설정 → 업로드 ──
 function tuningQuery() {
   const params = new URLSearchParams({ kind: 'video' });
-  for (const [id, key] of [['fps', 'fps'], ['maxFrames', 'maxFrames'], ['frameWidth', 'frameWidth'], ['iters', 'iters']]) {
+  for (const [id, key] of [['frames', 'frames'], ['frameWidth', 'frameWidth'], ['iters', 'iters']]) {
     const value = $(id).value.trim();
-    if (value) params.set(key, value);
+    if (value !== '') params.set(key, value);
   }
   // 라벨과 실측치는 둘 다 있을 때만 보낸다 — 하나만 가면 서버가 400으로 막는다.
   params.set('gpu', $('gpu').checked ? '1' : '0');
@@ -203,7 +203,10 @@ function setSteps(recon) {
     const broke = failed && index === at;
     li.className = broke ? 'bad' : passed ? 'done' : running ? 'run' : '';
     li.append(el('span', 'mk', broke ? '×' : passed ? '✓' : running ? '●' : '○'));
-    li.append(el('span', null, step.label));
+    const name = el('span');
+    name.append(el('b', null, step.label));
+    name.append(el('span', 'what', ` ${step.what}`));
+    li.append(name);
     li.append(el('span', 'd', detailFor(step.key, recon)));
     list.append(li);
   }
@@ -218,6 +221,7 @@ function setSteps(recon) {
 function detailFor(key, recon) {
   if (!recon) return '';
   if (key === 'frames' && recon.frames) return `${recon.frames}장`;
+  if (key === 'colmap:map' && recon.registeredImages == null && recon.tuning?.targetFrames) return '';
   if (key === 'colmap:map' && recon.registeredImages != null) {
     return `등록 ${recon.registeredImages}장 · 점 ${recon.points ?? 0}`;
   }

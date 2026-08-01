@@ -52,14 +52,14 @@
     <h2><span class="lbl"><span class="n">3</span> 변환 설정</span> <span class="hint">이 실행에만 적용된다</span></h2>
     <div class="body">
       <div class="grid">
-        <label>프레임 추출<input type="number" id="fps" value="3" min="0.1" step="0.5" /><span class="u">fps</span></label>
-        <label>최대 장수<input type="number" id="maxFrames" value="180" min="10" /><span class="u">장</span></label>
-        <label>프레임 가로<input type="number" id="frameWidth" value="2000" min="640" step="100" /><span class="u">px</span></label>
-        <label>학습 반복<input type="number" id="iters" value="15000" min="100" step="500" /><span class="u">회</span></label>
+        <label>목표 프레임<input type="number" id="frames" value="300" min="10" step="10" /><span class="u">장</span></label>
+        <label>프레임 가로<input type="number" id="frameWidth" value="0" min="0" step="100" /><span class="u">px</span></label>
+        <label>학습 반복<input type="number" id="iters" value="30000" min="100" step="1000" /><span class="u">회</span></label>
+        <label class="hintcell">0이면 원본 해상도 그대로</label>
         <label class="wide">기준물체<input type="text" id="scaleLabel" placeholder="예: A4 긴 변" /><input type="number" id="scaleMm" class="mm" placeholder="297" /><span class="u">mm</span></label>
         <label class="wide check"><input type="checkbox" id="gpu" checked /> COLMAP에 GPU 사용 <span class="sub">빠르지만 특징점을 덜 찾는다. 자세를 못 풀면 꺼본다</span></label>
       </div>
-      <p class="note">자세를 못 풀면 <b>fps</b>와 <b>프레임 가로</b>를 올린다. 이웃 프레임이 60% 이상 겹쳐야 COLMAP이 푼다.</p>
+      <p class="note"><b>기본값은 전부 상류(Nerfstudio·OpenSplat·COLMAP) 그대로다.</b> 이 장비에서는 1건에 10~15분쯤 걸린다 — 급하면 목표 프레임과 학습 반복을 낮춘다. 자세를 못 풀면 목표 프레임을 올리고 GPU를 꺼본다.</p>
       <button class="btn go" id="go" disabled>영상을 먼저 고른다</button>
     </div>
   </section>

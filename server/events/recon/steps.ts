@@ -18,11 +18,17 @@ export interface ReconPaths {
 }
 
 export interface ReconTuning {
-  /** 초당 뽑을 프레임 수. 너무 높이면 COLMAP 매칭이 폭발하고, 낮으면 겹침이 모자라 실패한다 */
-  fps: number;
-  /** 프레임 장수 상한. 넘으면 COLMAP 매칭 시간이 장수의 제곱으로 는다 */
-  maxFrames: number;
-  /** 프레임 가로 픽셀. COLMAP 특징 추출이 CPU라 4K 원본을 그대로 넣으면 몇 시간이 된다 */
+  /**
+   * 목표 프레임 수. **영상 길이에 맞춰 균등 추출한다** — fps로 잡으면 긴 영상에서
+   * 앞부분만 남고 뒤가 통째로 잘린다(119초 영상의 앞 75초만 쓰고 있었다).
+   * Nerfstudio `ns-process-data video`의 `num_frames_target`과 같은 개념이다.
+   */
+  targetFrames: number;
+  /**
+   * 프레임 가로 픽셀. **0이면 원본 그대로.** Nerfstudio는 COLMAP에 원본을 넘기고,
+   * COLMAP 4.x도 `FeatureExtraction.max_image_size = -1`이라 줄이지 않는다.
+   * 4K가 느리면 여기서 줄인다.
+   */
   frameWidth: number;
   /** 3DGS 학습 반복 수 */
   numIters: number;
@@ -43,31 +49,35 @@ export interface ReconTuning {
   colmapBin: string;
   /** ffmpeg 실행 파일 */
   ffmpegBin: string;
+  /** ffprobe 실행 파일 — 영상 길이를 재서 균등 추출 간격을 정한다 */
+  ffprobeBin: string;
 }
 
 /**
- * 권장 기본값. **화면 폼과 같은 값이어야 한다** — 두 벌이 다르면 "기본으로 돌렸다"가
- * 어느 쪽인지 알 수 없어진다.
+ * **전부 상류 기본값이다.** 우리가 고른 값이 아니다.
  *
- * 근거(M5 Max 실측, 1600px 128장): COLMAP 추출 GPU 10초 · 매칭 29초 ·
- * **매핑 80초(CPU 전용, 여기가 병목)** · 학습 1500회 12초.
- * 아래 값이면 전체 6분 안팎이다.
+ * | 값 | 출처 |
+ * |---|---|
+ * | `targetFrames 300` | Nerfstudio `ns-process-data video`의 `num_frames_target` |
+ * | `frameWidth 0`(원본) | Nerfstudio는 COLMAP에 원본을 넘긴다. COLMAP 4.x의 `max_image_size`도 -1 |
+ * | `numIters 30000` | OpenSplat `--num-iters` |
+ * | `useGpu true` | COLMAP `FeatureExtraction.use_gpu` / `FeatureMatching.use_gpu` |
  *
- * - `fps 3` — 1~2분 촬영이면 300~400장이 나온다. 이웃 프레임 겹침을 벌기 위한 값
- * - `maxFrames 180` — 매핑이 CPU 전용이고 장수에 급히 는다. 여기가 시간을 정한다
- * - `frameWidth 2000` — 특징점 수가 여기에 가장 민감하다. 4K 원본을 그대로 넣으면 몇 시간
- * - `numIters 15000` — 상류 기본은 30000. 1500회는 눈에 띄게 뿌옇다(실측).
- *   **15000은 그 사이에서 고른 값이고 품질을 재보진 않았다**
+ * **이 장비에서는 느리다.** COLMAP 매핑이 CPU 전용이고 프레임 장수에 급히 늘어난다
+ * (1600px 128장에 80초 실측). 1건에 10~15분을 예상한다.
+ *
+ * 그래도 깎지 않는 이유: **근거 없는 중간값이 기준 행세를 하면 안 된다.** 급하면
+ * 화면에서 낮춘다 — 거기서 낮춘 값은 "이번에 이렇게 돌렸다"로 기록에 남는다.
  */
 export const RECON_DEFAULTS: ReconTuning = {
-  fps: 3,
-  maxFrames: 180,
-  frameWidth: 2000,
-  numIters: 15000,
+  targetFrames: 300,
+  frameWidth: 0,
+  numIters: 30000,
   useGpu: true,
   openSplatBin: 'opensplat',
   colmapBin: 'colmap',
   ffmpegBin: 'ffmpeg',
+  ffprobeBin: 'ffprobe',
 };
 
 export interface ReconStep {
@@ -101,7 +111,45 @@ export function outputPly(workDir: string): string {
   return path.join(workDir, 'scene.ply');
 }
 
-export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAULTS): ReconStep[] {
+/** 영상 길이(초)를 재는 명령. 균등 추출 간격이 여기서 나온다. */
+export function probeStep(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAULTS): ReconStep {
+  return {
+    name: 'probe',
+    what: '영상 길이를 재서 프레임을 고르게 뽑을 간격을 정한다',
+    command: tuning.ffprobeBin,
+    args: [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=nw=1:nk=1',
+      paths.video,
+    ],
+  };
+}
+
+/** ffprobe 출력에서 길이(초)를 뽑는다. 못 읽으면 null. */
+export function parseDuration(output: string): number | null {
+  const value = Number(String(output).trim().split('\n').pop());
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * 목표 장수를 영상 전체에 고르게 펴는 추출 fps.
+ * 길이를 못 잰 경우를 대비해 폴백을 둔다 — 여기서 멈추면 아무것도 못 한다.
+ */
+export function sampleFps(targetFrames: number, durationSec: number | null): number {
+  if (!durationSec || durationSec <= 0) return FALLBACK_SAMPLE_FPS;
+  // 소수 셋째 자리까지. 너무 자르면 긴 영상에서 목표 장수를 못 채운다.
+  return Math.max(0.001, Math.round((targetFrames / durationSec) * 1000) / 1000);
+}
+
+/** 길이를 못 쟀을 때 쓰는 값. 1~2분 촬영에서 300장 근처가 나온다. */
+export const FALLBACK_SAMPLE_FPS = 3;
+
+export function reconSteps(
+  paths: ReconPaths,
+  tuning: ReconTuning = RECON_DEFAULTS,
+  durationSec: number | null = null,
+): ReconStep[] {
   const { workDir } = paths;
   const frames = framesDir(workDir);
   const project = projectDir(workDir);
@@ -109,17 +157,23 @@ export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAUL
   const images = path.join(project, 'images');
   const sparse = path.join(project, 'sparse');
 
+  const fps = sampleFps(tuning.targetFrames, durationSec);
+  // scale의 -2는 가로에 맞춰 세로를 짝수로 자동 계산하라는 뜻이다. 홀수면 인코더가 거부한다.
+  const filters = [`fps=${fps}`];
+  if (tuning.frameWidth > 0) filters.push(`scale=${tuning.frameWidth}:-2`);
+
   return [
     {
       name: 'frames',
-      what: `영상에서 초당 ${tuning.fps}장, 최대 ${tuning.maxFrames}장을 뽑는다`,
+      what: durationSec
+        ? `${Math.round(durationSec)}초 영상에서 ${tuning.targetFrames}장을 고르게 뽑는다(${fps}fps)`
+        : `영상 길이를 못 재 ${fps}fps로 뽑는다(최대 ${tuning.targetFrames}장)`,
       command: tuning.ffmpegBin,
       args: [
         '-hide_banner', '-loglevel', 'error', '-y',
         '-i', paths.video,
-        // scale의 -2는 가로에 맞춰 세로를 짝수로 자동 계산하라는 뜻이다. 홀수면 인코더가 거부한다.
-        '-vf', `fps=${tuning.fps},scale=${tuning.frameWidth}:-2`,
-        '-frames:v', String(tuning.maxFrames),
+        '-vf', filters.join(','),
+        '-frames:v', String(tuning.targetFrames),
         '-q:v', '2',
         path.join(frames, 'f%04d.jpg'),
       ],
@@ -196,7 +250,7 @@ export function resolveOpenSplatBin(
 }
 
 /** 화면이 실행마다 넘기는 값. 실행 파일 경로는 여기로 안 받는다 — 브라우저가 정할 일이 아니다. */
-export const TUNABLE_BY_REQUEST = ['fps', 'maxFrames', 'frameWidth', 'numIters'] as const;
+export const TUNABLE_BY_REQUEST = ['targetFrames', 'frameWidth', 'numIters'] as const;
 
 /**
  * 질의 문자열 → 이 실행에만 쓸 설정. 없는 값은 빼고 돌려주므로 호출부가 기본값 위에 덮으면 된다.
@@ -205,14 +259,16 @@ export const TUNABLE_BY_REQUEST = ['fps', 'maxFrames', 'frameWidth', 'numIters']
 export function tuningFromParams(params: URLSearchParams): Partial<ReconTuning> {
   const picked: Partial<ReconTuning> = {};
   const map: Record<(typeof TUNABLE_BY_REQUEST)[number], string> = {
-    fps: 'fps', maxFrames: 'maxFrames', frameWidth: 'frameWidth', numIters: 'iters',
+    targetFrames: 'frames', frameWidth: 'frameWidth', numIters: 'iters',
   };
   for (const key of TUNABLE_BY_REQUEST) {
     const raw = params.get(map[key]);
     if (raw === null || raw === '') continue;
     const value = Number(raw);
-    // 0이나 음수는 조용히 무시한다. 여기서 400을 내면 화면이 빈칸 하나로 못 돌아간다.
-    if (Number.isFinite(value) && value > 0) picked[key] = value;
+    // 음수는 조용히 무시한다. 여기서 400을 내면 화면이 빈칸 하나로 못 돌아간다.
+    // frameWidth만 0을 받는다 — 0이 "원본 그대로"라는 뜻이다.
+    const floor = key === 'frameWidth' ? 0 : 1;
+    if (Number.isFinite(value) && value >= floor) picked[key] = value;
   }
   const gpu = params.get('gpu');
   if (gpu === '0' || gpu === '1') picked.useGpu = gpu === '1';
@@ -223,18 +279,23 @@ export function tuningFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): Partial<ReconTuning> {
   return {
-    fps: num(env, 'RECON_FPS', RECON_DEFAULTS.fps),
-    maxFrames: num(env, 'RECON_MAX_FRAMES', RECON_DEFAULTS.maxFrames),
-    frameWidth: num(env, 'RECON_FRAME_WIDTH', RECON_DEFAULTS.frameWidth),
+    targetFrames: num(env, 'RECON_FRAMES', RECON_DEFAULTS.targetFrames),
+    frameWidth: num(env, 'RECON_FRAME_WIDTH', RECON_DEFAULTS.frameWidth, 0),
     numIters: num(env, 'RECON_ITERS', RECON_DEFAULTS.numIters),
     useGpu: env.RECON_GPU !== '0',
     openSplatBin: env.OPENSPLAT_BIN || RECON_DEFAULTS.openSplatBin,
     colmapBin: env.COLMAP_BIN || RECON_DEFAULTS.colmapBin,
     ffmpegBin: env.FFMPEG_BIN || RECON_DEFAULTS.ffmpegBin,
+    ffprobeBin: env.FFPROBE_BIN || RECON_DEFAULTS.ffprobeBin,
   };
 }
 
-function num(env: Record<string, string | undefined>, key: string, fallback: number): number {
+function num(
+  env: Record<string, string | undefined>,
+  key: string,
+  fallback: number,
+  floor = 1,
+): number {
   const parsed = Number(env[key]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed >= floor ? parsed : fallback;
 }

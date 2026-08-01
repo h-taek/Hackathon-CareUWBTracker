@@ -127,3 +127,7 @@ a.btn.sm { text-decoration: none; }
 .grid label.check { gap: 7px; color: var(--ink); }
 .grid label.check input[type=checkbox] { width: auto; margin: 0; accent-color: var(--accent); }
 .grid label.check .sub { margin-left: auto; }
+
+.steps li b { font-weight: 500; }
+.steps li .what { color: var(--faint); font-size: 11px; margin-left: 6px; }
+.grid label.hintcell { color: var(--faint); font-size: 11px; justify-content: flex-start; }
