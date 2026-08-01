@@ -26,6 +26,17 @@ export interface ReconTuning {
   frameWidth: number;
   /** 3DGS 학습 반복 수 */
   numIters: number;
+  /**
+   * COLMAP 특징 추출·매칭에 GPU를 쓸지. **CUDA가 아니라 OpenGL(SiftGPU) 경로**라
+   * brew의 `without CUDA` 빌드에서도 돈다.
+   *
+   * 실측(1600×1200 40장, M5 Max): 추출 13.2초 → 3.1초, 매칭 12.4초 → 9.2초.
+   * 대신 **특징점을 17% 덜 찾는다**(평균 13,157 → 10,952). 자세를 못 푸는 장면에서는
+   * 끄는 쪽이 유리할 수 있어 실행마다 고를 수 있게 뒀다.
+   *
+   * 화면 세션이 없는 환경(SSH 등)에서는 OpenGL 컨텍스트를 못 잡아 실패할 수 있다.
+   */
+  useGpu: boolean;
   /** opensplat 실행 파일 */
   openSplatBin: string;
   /** colmap 실행 파일 */
@@ -39,6 +50,7 @@ export const RECON_DEFAULTS: ReconTuning = {
   maxFrames: 150,
   frameWidth: 1600,
   numIters: 2000,
+  useGpu: true,
   openSplatBin: 'opensplat',
   colmapBin: 'colmap',
   ffmpegBin: 'ffmpeg',
@@ -109,11 +121,9 @@ export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAUL
         // 폰 영상은 한 대로 찍은 것이라 카메라 내부 파라미터를 공유시켜야 해가 잘 잡힌다.
         '--ImageReader.single_camera', '1',
         '--ImageReader.camera_model', 'OPENCV',
-        // brew colmap이 CUDA 없이 빌드돼 있고, GPU SIFT 경로는 헤드리스에서 화면 컨텍스트를
-        // 잡으려다 죽는다. CPU로 못박는다.
         // **COLMAP 4.x 옵션 이름이다.** 3.x는 `--SiftExtraction.use_gpu`였고, 4.x에서
         // 이 값만 FeatureExtraction 쪽으로 옮겨갔다(나머지 SiftExtraction.* 는 그대로다).
-        '--FeatureExtraction.use_gpu', '0',
+        '--FeatureExtraction.use_gpu', tuning.useGpu ? '1' : '0',
       ],
     },
     {
@@ -123,8 +133,8 @@ export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAUL
       args: [
         'sequential_matcher',
         '--database_path', database,
-        // 3.x는 `--SiftMatching.use_gpu`였다. 위와 같은 이유·같은 개편이다.
-        '--FeatureMatching.use_gpu', '0',
+        // 3.x는 `--SiftMatching.use_gpu`였다. 위와 같은 개편이다.
+        '--FeatureMatching.use_gpu', tuning.useGpu ? '1' : '0',
       ],
     },
     {
@@ -190,6 +200,8 @@ export function tuningFromParams(params: URLSearchParams): Partial<ReconTuning> 
     // 0이나 음수는 조용히 무시한다. 여기서 400을 내면 화면이 빈칸 하나로 못 돌아간다.
     if (Number.isFinite(value) && value > 0) picked[key] = value;
   }
+  const gpu = params.get('gpu');
+  if (gpu === '0' || gpu === '1') picked.useGpu = gpu === '1';
   return picked;
 }
 
@@ -201,6 +213,7 @@ export function tuningFromEnv(
     maxFrames: num(env, 'RECON_MAX_FRAMES', RECON_DEFAULTS.maxFrames),
     frameWidth: num(env, 'RECON_FRAME_WIDTH', RECON_DEFAULTS.frameWidth),
     numIters: num(env, 'RECON_ITERS', RECON_DEFAULTS.numIters),
+    useGpu: env.RECON_GPU !== '0',
     openSplatBin: env.OPENSPLAT_BIN || RECON_DEFAULTS.openSplatBin,
     colmapBin: env.COLMAP_BIN || RECON_DEFAULTS.colmapBin,
     ffmpegBin: env.FFMPEG_BIN || RECON_DEFAULTS.ffmpegBin,

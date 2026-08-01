@@ -123,3 +123,7 @@ a.btn.sm { text-decoration: none; }
 /* base.css의 .card > h2는 space-between이라 제목 텍스트를 낱개로 두면 가운데로 밀린다.
    왼쪽 묶음을 한 덩어리로 싼다. */
 .step > h2 .lbl { display: inline-flex; align-items: center; color: var(--ink); font-size: 13px; }
+
+.grid label.check { gap: 7px; color: var(--ink); }
+.grid label.check input[type=checkbox] { width: auto; margin: 0; accent-color: var(--accent); }
+.grid label.check .sub { margin-left: auto; }

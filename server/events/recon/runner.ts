@@ -130,11 +130,13 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
         maxFrames: jobTuning.maxFrames,
         frameWidth: jobTuning.frameWidth,
         numIters: jobTuning.numIters,
+        useGpu: jobTuning.useGpu,
       },
     });
     log(`[recon] 시작 ${job.eventId}/${job.attachmentId} → ${workDir}`);
     log(`[recon] ${job.attachmentId} 설정 ${jobTuning.fps}fps · 최대 ${jobTuning.maxFrames}장`
-      + ` · 가로 ${jobTuning.frameWidth}px · 학습 ${jobTuning.numIters}회`);
+      + ` · 가로 ${jobTuning.frameWidth}px · 학습 ${jobTuning.numIters}회`
+      + ` · COLMAP ${jobTuning.useGpu ? 'GPU' : 'CPU'}`);
 
     const appendLog = (chunk: string) => {
       try {
@@ -273,7 +275,7 @@ function spawnCommand(
 }
 
 function stripUndefined(options: ReconRunnerOptions): Partial<ReconTuning> {
-  const keys = ['fps', 'maxFrames', 'frameWidth', 'numIters', 'openSplatBin', 'colmapBin', 'ffmpegBin'] as const;
+  const keys = ['fps', 'maxFrames', 'frameWidth', 'numIters', 'useGpu', 'openSplatBin', 'colmapBin', 'ffmpegBin'] as const;
   const picked: Record<string, unknown> = {};
   for (const key of keys) {
     if (options[key] !== undefined) picked[key] = options[key];

@@ -43,13 +43,39 @@ test('세로는 -2로 둬서 짝수로 자동 계산된다', () => {
   assert.match(argOf('frames', '-vf'), /scale=\d+:-2$/);
 });
 
-test('COLMAP은 GPU를 쓰지 않는다 — brew colmap이 CUDA 없이 빌드돼 있다', () => {
-  // 이름이 COLMAP 4.x 것이어야 한다. 3.x의 SiftExtraction/SiftMatching을 쓰면
-  // "unrecognised option"으로 죽는다 — 실제로 한 번 밟았다.
-  assert.equal(argOf('colmap:extract', '--FeatureExtraction.use_gpu'), '0');
-  assert.equal(argOf('colmap:match', '--FeatureMatching.use_gpu'), '0');
+test('GPU 스위치 이름이 COLMAP 4.x 것이어야 한다', () => {
+  // 3.x의 SiftExtraction/SiftMatching을 쓰면 "unrecognised option"으로 죽는다 —
+  // 실제로 한 번 밟았다.
   assert.equal(step('colmap:extract').args.includes('--SiftExtraction.use_gpu'), false);
   assert.equal(step('colmap:match').args.includes('--SiftMatching.use_gpu'), false);
+  assert.ok(step('colmap:extract').args.includes('--FeatureExtraction.use_gpu'));
+  assert.ok(step('colmap:match').args.includes('--FeatureMatching.use_gpu'));
+});
+
+test('COLMAP은 기본으로 GPU를 쓴다 — CUDA가 아니라 OpenGL 경로라 brew 빌드에서도 돈다', () => {
+  // 실측(1600×1200 40장, M5 Max): 추출 13.2초 → 3.1초, 매칭 12.4초 → 9.2초.
+  assert.equal(RECON_DEFAULTS.useGpu, true);
+  assert.equal(argOf('colmap:extract', '--FeatureExtraction.use_gpu'), '1');
+  assert.equal(argOf('colmap:match', '--FeatureMatching.use_gpu'), '1');
+});
+
+test('GPU를 끄면 두 단계 모두 CPU로 내려간다', () => {
+  // GPU가 특징점을 17% 덜 찾아, 자세를 못 푸는 장면에서는 끄는 쪽이 유리할 수 있다.
+  const cpu = reconSteps(paths, { ...RECON_DEFAULTS, useGpu: false });
+  const argIn = (name: string, flag: string) => {
+    const a = cpu.find((s) => s.name === name)!.args;
+    return a[a.indexOf(flag) + 1];
+  };
+  assert.equal(argIn('colmap:extract', '--FeatureExtraction.use_gpu'), '0');
+  assert.equal(argIn('colmap:match', '--FeatureMatching.use_gpu'), '0');
+});
+
+test('GPU 사용 여부를 질의 문자열과 환경변수로 바꾼다', () => {
+  assert.equal(tuningFromParams(new URLSearchParams('gpu=0')).useGpu, false);
+  assert.equal(tuningFromParams(new URLSearchParams('gpu=1')).useGpu, true);
+  assert.equal(tuningFromParams(new URLSearchParams('gpu=아무거나')).useGpu, undefined, '안 준 것과 같다');
+  assert.equal(tuningFromEnv({ RECON_GPU: '0' }).useGpu, false);
+  assert.equal(tuningFromEnv({}).useGpu, true);
 });
 
 test('폰 영상이라 카메라 하나를 공유하게 잡는다', () => {

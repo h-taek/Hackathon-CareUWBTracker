@@ -76,7 +76,32 @@ node server/server.ts \
 | `RECON_MAX_FRAMES` | 150 | 프레임 장수 상한. COLMAP 매칭 시간이 장수를 따라 급히 는다 |
 | `RECON_FRAME_WIDTH` | 1600 | 프레임 가로 픽셀. **COLMAP 특징 추출이 CPU라** 4K 원본은 몇 시간이 된다 |
 | `RECON_ITERS` | 2000 | 3DGS 학습 반복 수 |
+| `RECON_GPU` | `1` | COLMAP 특징 추출·매칭에 GPU 사용. `0`이면 CPU |
 | `ATTACHMENT_LIMIT_MB` | 2048 | 업로드 한도. **아이폰 4K 30fps가 분당 약 310MB**다 |
+
+## 어디에 CPU를 쓰고 어디에 GPU를 쓰나
+
+| 단계 | 장치 | 비고 |
+|---|---|---|
+| ffmpeg 프레임 추출 | CPU | 몇 초라 문제 안 된다 |
+| COLMAP 특징 추출 | **GPU** (`RECON_GPU=0`이면 CPU) | OpenGL(SiftGPU) 경로 |
+| COLMAP 매칭 | **GPU** (같은 스위치) | |
+| **COLMAP 매핑(자세 계산)** | **CPU 전용** | **여기가 병목이다.** GPU 경로가 아예 없다 |
+| OpenSplat 학습 | **GPU (Metal/MPS)** | `-DGPU_RUNTIME=MPS` 빌드 |
+
+**COLMAP의 GPU는 CUDA가 아니라 OpenGL이다.** brew의 `without CUDA` 빌드에서도 돈다. 실측(1600×1200 40장, M5 Max):
+
+| | CPU | GPU |
+|---|---|---|
+| 특징 추출 | 13.2초 | **3.1초** |
+| 매칭 | 12.4초 | **9.2초** |
+| 찾은 특징점 평균 | **13,157** | 10,952 (−17%) |
+
+GPU가 빠른 대신 **특징점을 덜 찾는다**. 자세를 못 푸는 장면에서는 꺼보는 게 방법이다(화면의 `COLMAP에 GPU 사용` 체크 해제).
+
+**화면 세션이 없는 환경(SSH 등)에서는 GPU 경로가 OpenGL 컨텍스트를 못 잡아 실패할 수 있다.** 그때는 `RECON_GPU=0`으로 띄운다.
+
+**매핑 단계는 GPU로 못 내린다.** COLMAP의 증분 매핑은 번들 조정(Ceres)이라 CPU 전용이고, 지금 파이프라인에서 가장 오래 걸리는 곳이다. 줄이려면 프레임 장수를 줄이는 수밖에 없다.
 
 ## 촬영 지침
 

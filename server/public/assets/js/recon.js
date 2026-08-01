@@ -142,6 +142,7 @@ function tuningQuery() {
     if (value) params.set(key, value);
   }
   // 라벨과 실측치는 둘 다 있을 때만 보낸다 — 하나만 가면 서버가 400으로 막는다.
+  params.set('gpu', $('gpu').checked ? '1' : '0');
   const label = $('scaleLabel').value.trim();
   const mm = $('scaleMm').value.trim();
   if (label && mm) { params.set('scaleLabel', label); params.set('scaleMm', mm); }
@@ -221,6 +222,7 @@ function detailFor(key, recon) {
     return `등록 ${recon.registeredImages}장 · 점 ${recon.points ?? 0}`;
   }
   if (key === 'opensplat' && recon.tuning?.numIters) return `${recon.tuning.numIters}회`;
+  if (key === 'colmap:extract' && recon.tuning?.useGpu != null) return recon.tuning.useGpu ? 'GPU' : 'CPU';
   return '';
 }
 
