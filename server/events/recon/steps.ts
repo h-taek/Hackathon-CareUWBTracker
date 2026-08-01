@@ -151,6 +151,26 @@ export function reconSteps(paths: ReconPaths, tuning: ReconTuning = RECON_DEFAUL
   ];
 }
 
+/** 빌드 절차가 만드는 자리(tools/recon/README.md). 서버 폴더 기준 상대 경로다. */
+export const BUNDLED_OPENSPLAT = '../tools/recon/OpenSplat/build/opensplat';
+
+/**
+ * 쓸 `opensplat`을 정한다. 순서는 환경변수 → 프로젝트 안 빌드본 → PATH.
+ *
+ * **빌드본을 자동으로 찾는 이유:** 이걸 안 하면 `OPENSPLAT_BIN`을 빼먹었을 때
+ * COLMAP을 몇 분 돌린 **끝에** 마지막 단계에서 죽는다. 실패까지 가장 비싼 실수라
+ * 서버가 대신 찾아준다. `exists`는 테스트가 갈아끼운다.
+ */
+export function resolveOpenSplatBin(
+  serverDir: string,
+  env: Record<string, string | undefined>,
+  exists: (file: string) => boolean,
+): string {
+  if (env.OPENSPLAT_BIN) return env.OPENSPLAT_BIN;
+  const bundled = path.resolve(serverDir, BUNDLED_OPENSPLAT);
+  return exists(bundled) ? bundled : RECON_DEFAULTS.openSplatBin;
+}
+
 /** 화면이 실행마다 넘기는 값. 실행 파일 경로는 여기로 안 받는다 — 브라우저가 정할 일이 아니다. */
 export const TUNABLE_BY_REQUEST = ['fps', 'maxFrames', 'frameWidth', 'numIters'] as const;
 

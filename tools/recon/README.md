@@ -56,11 +56,17 @@ make -j$(sysctl -n hw.logicalcpu)
 
 ## 서버에 물리기
 
-기본값은 `PATH`의 `opensplat`·`colmap`·`ffmpeg`다. 빌드한 자리를 직접 가리키려면:
+**서버가 알아서 찾는다.** `tools/recon/OpenSplat/build/opensplat`이 있으면 그것을 쓰고, 없으면 `PATH`의 `opensplat`으로 떨어진다. `colmap`·`ffmpeg`는 brew로 깔려 `PATH`에 있다. 그래서 평소에는 앵커 인자만 주면 된다.
 
 ```bash
-OPENSPLAT_BIN="$PWD/tools/recon/OpenSplat/build/opensplat" node server/server.ts …
+node server/server.ts \
+  --main-anchor-id phoneMain --sub-anchor-id phoneSub \
+  --anchor-distance 4 --half-plane positive
 ```
+
+시작 배너가 실제로 고른 경로를 찍고, 못 찾으면 그 자리에서 경고한다 — **재구성을 걸고 나서 알면 COLMAP을 몇 분 돌린 뒤다.** 다른 자리에 빌드했으면 `OPENSPLAT_BIN`으로 지정한다.
+
+**재구성 설정(fps·장수·가로·학습 횟수)은 화면에서 실행마다 넣는다**(`/recon`). 아래 환경변수는 서버 기본값 자리로만 남는다.
 
 | 변수 | 기본 | 뜻 |
 | --- | --- | --- |

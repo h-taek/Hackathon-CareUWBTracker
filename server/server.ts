@@ -39,7 +39,12 @@ import {
   serveAttachment,
 } from './events/download.ts';
 import { createReconRunner } from './events/recon/runner.ts';
-import { tuningFromEnv, tuningFromParams, RECON_DEFAULTS } from './events/recon/steps.ts';
+import {
+  resolveOpenSplatBin,
+  tuningFromEnv,
+  tuningFromParams,
+  RECON_DEFAULTS,
+} from './events/recon/steps.ts';
 
 const args = process.argv.slice(2);
 if (wantsHelp(args)) {
@@ -119,7 +124,13 @@ const eventAttachments = createAttachmentStore(eventStore, { limitBytes: attachm
 // 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
 // 실패 기록만 쌓인다. 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 건다.
 const reconAuto = process.env.RECON_AUTO !== '0';
-const reconTuning = { ...RECON_DEFAULTS, ...tuningFromEnv() };
+const reconTuning = {
+  ...RECON_DEFAULTS,
+  ...tuningFromEnv(),
+  // 빌드해 둔 opensplat을 서버가 알아서 찾는다. 안 그러면 OPENSPLAT_BIN을 빼먹었을 때
+  // COLMAP을 몇 분 돌린 끝에 마지막 단계에서 죽는다.
+  openSplatBin: resolveOpenSplatBin(import.meta.dirname, process.env, fs.existsSync),
+};
 const reconRunner = createReconRunner({
   ...reconTuning,
   store: eventStore,
@@ -381,9 +392,16 @@ server.listen(port, () => {
   );
   console.log(
     `  재구성     ${reconTuning.ffmpegBin} → ${reconTuning.colmapBin} → ${reconTuning.openSplatBin}`
-    + ` · ${reconTuning.fps}fps 최대 ${reconTuning.maxFrames}장 · ${reconTuning.numIters}회 학습`
-    + ' (RECON_FPS / RECON_MAX_FRAMES / RECON_ITERS / OPENSPLAT_BIN)',
+    + ` · 기본 ${reconTuning.fps}fps 최대 ${reconTuning.maxFrames}장 · ${reconTuning.numIters}회 학습`
+    + ' (화면에서 실행마다 바꾼다)',
   );
+  // 도구가 없으면 지금 알려준다. 재구성을 걸고 나서 알면 COLMAP을 몇 분 돌린 뒤다.
+  if (!reconTuning.openSplatBin.includes('/') || !fs.existsSync(reconTuning.openSplatBin)) {
+    console.warn(
+      `  ⚠ opensplat을 못 찾았습니다(${reconTuning.openSplatBin}).`
+      + ' 빌드는 tools/recon/README.md, 다른 자리면 OPENSPLAT_BIN으로 지정하세요.',
+    );
+  }
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {

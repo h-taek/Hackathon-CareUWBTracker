@@ -3,7 +3,9 @@ import test from 'node:test';
 import * as path from 'node:path';
 
 import {
+  BUNDLED_OPENSPLAT,
   RECON_DEFAULTS,
+  resolveOpenSplatBin,
   framesDir,
   outputPly,
   projectDir,
@@ -156,4 +158,30 @@ test('실행 설정이 서버 기본값 위에 덮인다', () => {
   assert.equal(merged.fps, 6);
   assert.equal(merged.numIters, RECON_DEFAULTS.numIters, '안 준 값은 기본값 그대로다');
   assert.equal(merged.colmapBin, RECON_DEFAULTS.colmapBin);
+});
+
+test('opensplat은 환경변수 → 프로젝트 빌드본 → PATH 순으로 고른다', () => {
+  // 빼먹었을 때 COLMAP을 몇 분 돌린 끝에 죽는 게 가장 비싼 실수라, 서버가 대신 찾는다.
+  const bundled = path.resolve('/proj/server', BUNDLED_OPENSPLAT);
+
+  assert.equal(
+    resolveOpenSplatBin('/proj/server', { OPENSPLAT_BIN: '/custom/opensplat' }, () => true),
+    '/custom/opensplat',
+    '환경변수가 가장 세다',
+  );
+  assert.equal(
+    resolveOpenSplatBin('/proj/server', {}, (f) => f === bundled),
+    bundled,
+    '빌드본이 있으면 그것을 쓴다',
+  );
+  assert.equal(
+    resolveOpenSplatBin('/proj/server', {}, () => false),
+    'opensplat',
+    '없으면 PATH에 맡긴다',
+  );
+});
+
+test('빌드본 경로는 빌드 절차가 만드는 자리와 같다', () => {
+  // tools/recon/README.md의 cmake 산출 위치. 둘이 어긋나면 자동 탐색이 조용히 실패한다.
+  assert.equal(path.resolve('/proj/server', BUNDLED_OPENSPLAT), '/proj/tools/recon/OpenSplat/build/opensplat');
 });
