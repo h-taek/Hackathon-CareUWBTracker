@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { createEventStore } from '../../server/events/store.ts';
 import { createAttachmentStore } from '../../server/events/attachments.ts';
 import { createReconRunner, MIN_FRAMES, type RunCommand } from '../../server/events/recon/runner.ts';
-import { framesDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
+import { framesDir, modelDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
 import type { EventRecord } from '../../server/events/recorder.ts';
 
 function record(eventId: string): EventRecord {
@@ -23,14 +23,29 @@ function record(eventId: string): EventRecord {
   };
 }
 
+/** COLMAP 이진 파일 흉내 — 머리 8바이트가 항목 수(uint64 LE)다. */
+function writeModel(workDir: string, images: number, points: number): void {
+  const dir = modelDir(workDir);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [file, count] of [['images.bin', images], ['points3D.bin', points]] as const) {
+    const buffer = Buffer.alloc(64);
+    buffer.writeBigUInt64LE(BigInt(count), 0);
+    fs.writeFileSync(path.join(dir, file), buffer);
+  }
+}
+
 /** 도구를 부르는 대신 시켰던 일을 흉내내는 실행기. 실제 ffmpeg·COLMAP·OpenSplat이 없어도 흐름을 다 본다. */
 function fakeRun(options: {
   frames?: number;
   failAt?: string;
   producePly?: boolean;
   throwAt?: string;
+  /** COLMAP이 자세를 푼 장수. 기본은 뽑은 프레임 전부 */
+  registered?: number;
+  points?: number;
 } = {}): { run: RunCommand; calls: string[] } {
   const calls: string[] = [];
+  const frameCount = options.frames ?? MIN_FRAMES + 5;
   const run: RunCommand = async (step: ReconStep, workDir, onOutput) => {
     calls.push(step.name);
     onOutput(`${step.name} 실행\n`);
@@ -38,11 +53,13 @@ function fakeRun(options: {
     if (options.failAt === step.name) return { code: 1 };
 
     if (step.name === 'frames') {
-      const count = options.frames ?? MIN_FRAMES + 5;
       fs.mkdirSync(framesDir(workDir), { recursive: true });
-      for (let i = 0; i < count; i += 1) {
+      for (let i = 0; i < frameCount; i += 1) {
         fs.writeFileSync(path.join(framesDir(workDir), `f${String(i).padStart(4, '0')}.jpg`), 'jpg');
       }
+    }
+    if (step.name === 'colmap:map') {
+      writeModel(workDir, options.registered ?? frameCount, options.points ?? 5000);
     }
     if (step.name === 'opensplat' && options.producePly !== false) {
       fs.writeFileSync(outputPly(workDir), 'ply본문');
@@ -97,6 +114,7 @@ test('돌기 시작하면 running으로 바뀐다', async () => {
         fs.mkdirSync(framesDir(workDir), { recursive: true });
         for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(framesDir(workDir), `f${i}.jpg`), 'x');
       }
+      if (step.name === 'colmap:map') writeModel(workDir, 20, 5000);
       if (step.name === 'opensplat') fs.writeFileSync(outputPly(workDir), 'ply');
       return { code: 0 };
     },
@@ -142,6 +160,33 @@ test('프레임이 너무 적으면 COLMAP을 돌리기 전에 끊는다', async
   const source = attachments.get('evt-1', video.attachmentId)!;
   assert.equal(source.recon?.status, 'failed');
   assert.match(source.recon?.error ?? '', /3장/);
+});
+
+test('COLMAP이 자세를 거의 못 풀면 학습을 시작하지 않는다', async () => {
+  // 실측(2026-08-01): 178장 중 2장만 등록됐는데 COLMAP이 종료코드 0으로 끝나,
+  // OpenSplat이 카메라 2대짜리로 "성공"하고 쓸모없는 .ply가 status=done으로 남았다.
+  const { runner, attachments, video, calls } = await setup({ frames: 178, registered: 2, points: 46 });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  await runner.idle();
+
+  assert.equal(calls.includes('opensplat'), false, '못 쓸 모델로 학습을 돌리지 않는다');
+  const source = attachments.get('evt-1', video.attachmentId)!;
+  assert.equal(source.recon?.status, 'failed');
+  assert.match(source.recon?.error ?? '', /자세를 거의 못 풀었다/);
+  assert.equal(source.recon?.outputAttachmentId, undefined);
+});
+
+test('등록 장수와 점 수가 로그에 남는다', async () => {
+  const { runner, store, video } = await setup({ frames: 100, registered: 90, points: 7000 });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  await runner.idle();
+
+  const text = fs.readFileSync(
+    path.join(store.eventDir('evt-1'), 'recon', video.attachmentId, 'recon.log'), 'utf8',
+  );
+  assert.match(text, /등록 90\/100장 · 점 7000개/);
 });
 
 test('opensplat이 0으로 끝났는데 .ply가 없으면 성공으로 치지 않는다', async () => {
@@ -202,6 +247,7 @@ test('여러 건은 한 번에 하나씩만 돈다', async () => {
         fs.mkdirSync(framesDir(workDir), { recursive: true });
         for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(framesDir(workDir), `f${i}.jpg`), 'x');
       }
+      if (step.name === 'colmap:map') writeModel(workDir, 20, 5000);
       if (step.name === 'opensplat') fs.writeFileSync(outputPly(workDir), 'ply');
       concurrent -= 1;
       return { code: 0 };

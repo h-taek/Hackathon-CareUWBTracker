@@ -75,8 +75,58 @@ OPENSPLAT_BIN="$PWD/tools/recon/OpenSplat/build/opensplat" node server/server.ts
 ## 촬영 지침
 
 - **치수를 실측한 물건을 화면에 반드시 넣는다.** 없으면 결과의 절대 크기를 못 믿는다. 업로드할 때 `scaleLabel`·`scaleMm`로 같이 올린다
-- 한 바퀴 돌면서 천천히. 겹침이 모자라면 COLMAP이 자세를 못 푼다
+- 한 바퀴 돌면서 **천천히**. 겹침이 모자라면 COLMAP이 자세를 못 푼다. 이웃 프레임이 60% 이상 겹치는 속도로 움직인다
+- **무늬 없는 면을 오래 비추지 않는다.** 흰 벽·천장·유리는 특징점이 안 나온다. 항상 가구나 물건이 화면에 걸치게 둔다
+- 한 물건을 중심으로 원을 그리며 도는 것이 좋다. 제자리에서 카메라만 휙휙 돌리면 시차가 없어 못 푼다
+
+**URL에 한글을 그대로 넣지 않는다.** `name=현장영상.MOV` 같은 값은 Node의 HTTP 파서가 요청 줄에서 거부해 **본문 없는 400**으로 끝난다(우리 코드는 실행조차 안 된다). `name`은 생략하거나 퍼센트 인코딩한다.
 - **바닥 물기와 얇은 매트는 범위 밖이다.** 반사면에서 재구성이 실패한다(`docs/research/06_3dgs-incident-documentation.md`)
+
+## 산출 .ply를 보는 법
+
+**일반 3D 뷰어로 열면 안 된다.** Xcode Quick Look·Preview·메시랩 같은 도구는 이 파일을 평범한 점군으로 읽는데, 3DGS `.ply`는 점마다 불투명도·크기·회전·구면조화(SH) 색을 따로 담는 다른 물건이다. 헤더를 보면 바로 안다.
+
+```
+element vertex 15010
+property float x / y / z
+property float f_dc_0 / f_dc_1 / f_dc_2      ← 색이 RGB가 아니라 SH 계수다
+property float f_rest_0 … f_rest_44          ← 방향별 색
+property float opacity, scale_0..2, rot_0..3 ← 일반 뷰어가 통째로 무시한다
+```
+
+일반 뷰어는 `x/y/z`만 집어 **색도 크기도 없는 희끄무레한 점 덩어리**를 보여준다. 렌더가 이상한 게 아니라 읽는 방식이 다른 것이다.
+
+**동봉 뷰어로 본다.** 재구성 산출물은 이 뷰어에 얹으려고 만든 것이고, 성능 게이트도 이걸로 통과했다.
+
+```bash
+cp server/data/events/<eventId>/recon/<attachmentId>/scene.ply \
+   server/public/assets/splat/check.ply
+# server/public/assets/splat/scene.json 의 "url"을 "/assets/splat/check.ply"로 바꾼다
+```
+
+브라우저에서 대시보드를 열면 뜬다. 씬 교체 절차 전문은 `../../server/public/assets/splat/README.md`.
+
+바깥 도구로 보고 싶으면 3DGS를 아는 것을 쓴다 — [SuperSplat 웹 에디터](https://superspl.at/editor)(브라우저에서 파일을 열기만 하면 된다), PlayCanvas, Postshot.
+
+## 결과가 이상할 때 — 먼저 등록 장수를 본다
+
+`.ply`가 나왔다고 잘 된 게 아니다. **COLMAP이 몇 장을 풀었는지**가 품질을 정한다.
+
+```bash
+colmap model_analyzer --path server/data/events/<eventId>/recon/<attachmentId>/project/sparse/0
+```
+
+`Images:`가 뽑은 프레임 수에 한참 못 미치면 그 결과는 못 쓴다. 파이프라인이 이 값을 자동으로 보고 모자라면 `failed`로 끊지만(등록 8장 미만, 30% 미만, 점 300개 미만), 통과한 뒤에도 낮으면 흐릿하게 나온다. 등록 장수와 점 수는 `recon.log`에도 남는다.
+
+**COLMAP이 못 푸는 촬영 세 가지.**
+
+| 원인 | 화면에서 보이는 것 | 대응 |
+|---|---|---|
+| 무늬 없는 면 | 흰 벽·천장·유리가 화면을 채움 | 가구·물건이 걸치게 찍는다. 벽만 훑지 않는다 |
+| 흔들림 | 프레임이 뭉개져 있음 | **천천히** 걷는다. 4K 30fps라도 빨리 돌리면 뭉갠다 |
+| 겹침 부족 | 프레임마다 완전히 다른 곳 | `RECON_FPS`를 올린다. 이웃 프레임이 60% 이상 겹쳐야 한다 |
+
+`recon.log`의 `Features: NN (SIFT)`가 프레임당 특징점 수다. **수백 대면 이미 위험하고 수천은 돼야 한다.**
 
 ## 실패했을 때
 

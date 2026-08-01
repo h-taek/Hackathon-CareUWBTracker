@@ -15,6 +15,7 @@ import type { EventStore } from '../store.ts';
 import {
   RECON_DEFAULTS,
   framesDir,
+  modelDir,
   outputPly,
   projectDir,
   reconSteps,
@@ -22,6 +23,7 @@ import {
   type ReconStep,
   type ReconTuning,
 } from './steps.ts';
+import { judgeModel, readModelStats } from './model.ts';
 
 export interface ReconJob {
   eventId: string;
@@ -121,6 +123,7 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     };
 
     const steps = reconSteps({ video, workDir }, tuning);
+    let frameCount = 0;
     for (const [index, step] of steps.entries()) {
       appendLog(`\n=== [${index + 1}/${steps.length}] ${step.name} — ${step.what}\n$ ${step.command} ${step.args.join(' ')}\n`);
       log(`[recon] ${job.attachmentId} ${index + 1}/${steps.length} ${step.name} — ${step.what}`);
@@ -138,12 +141,21 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       // ffmpeg는 프레임을 frames/에 떨구는데 COLMAP은 project/images/를 본다.
       // 복사 대신 심볼릭 링크로 잇는다 — 수백 MB를 두 벌 갖고 있을 이유가 없다.
       if (step.name === 'frames') {
-        const count = countFrames(workDir);
-        appendLog(`프레임 ${count}장\n`);
-        if (count < MIN_FRAMES) {
-          return fail(job, step, `프레임이 ${count}장뿐이다(최소 ${MIN_FRAMES}장). 영상이 너무 짧거나 fps가 낮다`, appendLog, startedAt);
+        frameCount = countFrames(workDir);
+        appendLog(`프레임 ${frameCount}장\n`);
+        if (frameCount < MIN_FRAMES) {
+          return fail(job, step, `프레임이 ${frameCount}장뿐이다(최소 ${MIN_FRAMES}장). 영상이 너무 짧거나 fps가 낮다`, appendLog, startedAt);
         }
         linkImages(workDir);
+      }
+
+      // COLMAP은 자세를 거의 못 풀어도 종료코드 0으로 끝난다. 여기서 안 막으면
+      // 카메라 2대짜리 모델로 학습이 "성공"하고 쓸모없는 .ply가 나온다.
+      if (step.name === 'colmap:map') {
+        const verdict = judgeModel(readModelStats(modelDir(workDir)), frameCount);
+        appendLog(`등록 ${verdict.registeredImages}/${frameCount}장 · 점 ${verdict.points}개\n`);
+        if (!verdict.ok) return fail(job, step, verdict.reason, appendLog, startedAt);
+        log(`[recon] ${job.attachmentId} 자세 ${verdict.registeredImages}/${frameCount}장 · 점 ${verdict.points}개`);
       }
     }
 

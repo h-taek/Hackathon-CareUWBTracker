@@ -66,6 +66,11 @@ export function projectDir(workDir: string): string {
   return path.join(workDir, 'project');
 }
 
+/** COLMAP이 자세를 푼 모델. OpenSplat은 `0`만 읽는다. */
+export function modelDir(workDir: string): string {
+  return path.join(projectDir(workDir), 'sparse', '0');
+}
+
 export function outputPly(workDir: string): string {
   return path.join(workDir, 'scene.ply');
 }
