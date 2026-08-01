@@ -42,6 +42,11 @@ server/data/
 # 재구성 도구 소스·빌드(서드파티, 수 GB). 조달·빌드 절차는 tools/recon/README.md
 tools/recon/OpenSplat/
 
+# 재구성 테스트용 촬영 원본(수백 MB). 4K 1분이 약 310MB다.
+*.MOV
+*.mov
+*.mp4
+
 # 가우시안 스플랫 에셋(수십~수백 MB, git 제외·iCloud 유지). 재조달은 server/public/assets/splat/README.md
 server/public/assets/splat/*.splat
 server/public/assets/splat/*.ply

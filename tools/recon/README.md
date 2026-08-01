@@ -70,6 +70,7 @@ OPENSPLAT_BIN="$PWD/tools/recon/OpenSplat/build/opensplat" node server/server.ts
 | `RECON_MAX_FRAMES` | 150 | 프레임 장수 상한. COLMAP 매칭 시간이 장수를 따라 급히 는다 |
 | `RECON_FRAME_WIDTH` | 1600 | 프레임 가로 픽셀. **COLMAP 특징 추출이 CPU라** 4K 원본은 몇 시간이 된다 |
 | `RECON_ITERS` | 2000 | 3DGS 학습 반복 수 |
+| `ATTACHMENT_LIMIT_MB` | 2048 | 업로드 한도. **아이폰 4K 30fps가 분당 약 310MB**다 |
 
 ## 촬영 지침
 

@@ -30,7 +30,7 @@ import { createStaticHandler } from './static/handler.ts';
 import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS } from './events/recorder.ts';
 import { createEventStore } from './events/store.ts';
 import { routeEvents } from './events/routes.ts';
-import { createAttachmentStore } from './events/attachments.ts';
+import { attachmentLimitFromEnv, createAttachmentStore } from './events/attachments.ts';
 import { handleAttachmentUpload, parseAttachmentPath, parseReconTriggerPath } from './events/upload.ts';
 import { parseAttachmentFilePath, serveAttachment } from './events/download.ts';
 import { createReconRunner } from './events/recon/runner.ts';
@@ -109,7 +109,8 @@ const eventRecorder = createEventRecorder({
 });
 
 // 현장 영상 첨부(R-2)와 재구성 파이프라인(R-3·R-4).
-const eventAttachments = createAttachmentStore(eventStore);
+const attachmentLimitBytes = attachmentLimitFromEnv();
+const eventAttachments = createAttachmentStore(eventStore, { limitBytes: attachmentLimitBytes });
 // 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
 // 실패 기록만 쌓인다. 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 건다.
 const reconAuto = process.env.RECON_AUTO !== '0';
@@ -357,6 +358,7 @@ server.listen(port, () => {
   console.log(`  이벤트 조회 GET http://localhost:${shown}/events · /events/<eventId>`);
   console.log(
     `  현장 영상  POST /events/<eventId>/attachments?kind=video (본문=파일 바이트)`
+    + ` · 최대 ${Math.round(attachmentLimitBytes / 1024 / 1024)}MB (ATTACHMENT_LIMIT_MB)`
     + ` · 재구성 ${reconAuto ? '업로드 시 자동' : '수동(RECON_AUTO=0)'}`,
   );
   console.log(

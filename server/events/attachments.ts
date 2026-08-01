@@ -60,8 +60,19 @@ const DEFAULT_EXTENSION: Record<AttachmentKind, string> = {
   splat: 'ply',
 };
 
-/** 60초 4K 폰 영상이 300MB 안팎이다. 그 두 배까지 받는다. */
-export const DEFAULT_ATTACHMENT_LIMIT_BYTES = 600 * 1024 * 1024;
+/**
+ * 실측: 아이폰 4K 30fps 촬영이 **분당 약 310MB**다(119초 = 624MB). 주 용도가 1~2분
+ * 현장 촬영이라 처음 잡았던 600MB로는 2분짜리가 그대로 거절됐다. 6분치까지 받는다.
+ * `ATTACHMENT_LIMIT_MB`로 조절한다.
+ */
+export const DEFAULT_ATTACHMENT_LIMIT_BYTES = 2048 * 1024 * 1024;
+
+export function attachmentLimitFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const mb = Number(env.ATTACHMENT_LIMIT_MB);
+  return Number.isFinite(mb) && mb > 0 ? Math.floor(mb) * 1024 * 1024 : DEFAULT_ATTACHMENT_LIMIT_BYTES;
+}
 
 export class AttachmentError extends Error {
   statusCode: number;

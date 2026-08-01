@@ -8,7 +8,9 @@ import { Readable } from 'node:stream';
 import { createEventStore } from '../../server/events/store.ts';
 import {
   AttachmentError,
+  DEFAULT_ATTACHMENT_LIMIT_BYTES,
   RECON_PIPELINE,
+  attachmentLimitFromEnv,
   attachmentsOf,
   createAttachmentStore,
   isAttachmentKind,
@@ -148,6 +150,21 @@ test('한도를 넘으면 413이고 받다 만 파일은 지운다', async () =>
     (error: unknown) => error instanceof AttachmentError && error.statusCode === 413,
   );
   assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')), ['record.json']);
+});
+
+test('기본 한도가 2분짜리 4K 폰 영상을 받는다', () => {
+  // 실측: 아이폰 4K 30fps가 분당 약 310MB. 처음 잡았던 600MB로는 119초짜리(624MB)가
+  // 그대로 거절됐다 — 주 용도가 1~2분 현장 촬영인데 기본값이 그걸 막고 있었다.
+  const twoMinutes4K = 654_762_624;
+  assert.ok(DEFAULT_ATTACHMENT_LIMIT_BYTES > twoMinutes4K);
+});
+
+test('한도를 환경변수로 바꾼다', () => {
+  assert.equal(attachmentLimitFromEnv({ ATTACHMENT_LIMIT_MB: '100' }), 100 * 1024 * 1024);
+  assert.equal(attachmentLimitFromEnv({}), DEFAULT_ATTACHMENT_LIMIT_BYTES);
+  for (const bad of ['0', '-5', '많이']) {
+    assert.equal(attachmentLimitFromEnv({ ATTACHMENT_LIMIT_MB: bad }), DEFAULT_ATTACHMENT_LIMIT_BYTES, bad);
+  }
 });
 
 test('알 수 없는 kind는 400이다', async () => {
