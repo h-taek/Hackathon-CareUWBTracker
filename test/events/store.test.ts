@@ -32,12 +32,13 @@ test('저장한 레코드를 그대로 다시 읽는다', () => {
   assert.deepEqual(store.read('evt-1'), saved);
 });
 
-test('폴더가 없어도 첫 저장에서 만든다', () => {
+test('폴더가 없어도 첫 저장에서 만든다 — 이벤트 1건 = 폴더 1개', () => {
   const { store } = tempStore();
   assert.equal(fs.existsSync(store.dir), false);
 
   store.save(record('evt-1', 5000));
-  assert.equal(fs.existsSync(path.join(store.dir, 'evt-1.json')), true);
+  assert.equal(fs.existsSync(path.join(store.dir, 'evt-1', 'record.json')), true);
+  assert.equal(store.eventDir('evt-1'), path.join(store.dir, 'evt-1'));
 });
 
 test('이벤트가 없으면 목록은 빈 배열이다 (폴더가 없는 게 정상)', () => {
@@ -81,15 +82,17 @@ test('limit은 최신 것부터 자른다', () => {
   assert.deepEqual(store.list(2).map((s) => s.eventId), ['evt-5', 'evt-4']);
 });
 
-test('깨진 파일 하나가 목록 전체를 못 쓰게 만들지 않는다', () => {
+test('깨진 레코드 하나가 목록 전체를 못 쓰게 만들지 않는다', () => {
   const { store } = tempStore();
   store.save(record('evt-1', 1000));
-  fs.writeFileSync(path.join(store.dir, 'evt-broken.json'), '{ 잘린 json', 'utf8');
+  fs.mkdirSync(path.join(store.dir, 'evt-broken'), { recursive: true });
+  fs.writeFileSync(path.join(store.dir, 'evt-broken', 'record.json'), '{ 잘린 json', 'utf8');
 
   assert.deepEqual(store.list().map((s) => s.eventId), ['evt-1']);
+  assert.equal(store.read('evt-broken'), null);
 });
 
-test('json이 아닌 파일은 목록에서 무시한다', () => {
+test('이벤트 폴더가 아닌 것은 목록에서 무시한다', () => {
   const { store } = tempStore();
   store.save(record('evt-1', 1000));
   fs.writeFileSync(path.join(store.dir, 'README.txt'), '메모', 'utf8');
@@ -101,7 +104,26 @@ test('저장은 임시 파일을 거쳐 원자적으로 바꾼다 — .tmp가 �
   const { store } = tempStore();
   store.save(record('evt-1', 1000));
 
-  assert.deepEqual(fs.readdirSync(store.dir), ['evt-1.json']);
+  assert.deepEqual(fs.readdirSync(store.dir), ['evt-1']);
+  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')), ['record.json']);
+});
+
+test('첨부가 들어와도 목록은 record.json만 이벤트로 센다', () => {
+  const { store } = tempStore();
+  store.save(record('evt-1', 1000));
+  fs.writeFileSync(path.join(store.eventDir('evt-1'), 'att-1.mp4'), 'video', 'utf8');
+  fs.mkdirSync(path.join(store.eventDir('evt-1'), 'recon'), { recursive: true });
+
+  assert.deepEqual(store.list().map((s) => s.eventId), ['evt-1']);
+});
+
+test('record.json이 없는 폴더는 목록에서 무시한다', () => {
+  // 업로드가 먼저 와서 폴더만 생겼거나, 지우다 만 경우다.
+  const { store } = tempStore();
+  store.save(record('evt-1', 1000));
+  fs.mkdirSync(path.join(store.dir, 'evt-orphan'), { recursive: true });
+
+  assert.deepEqual(store.list().map((s) => s.eventId), ['evt-1']);
 });
 
 test('eventId가 파일 경로를 벗어나면 막는다', () => {

@@ -23,6 +23,7 @@ function fakeStore(records: EventRecord[]): EventStore & { limits: number[] } {
   return {
     dir: '/tmp/none',
     limits,
+    eventDir: (eventId) => `/tmp/none/${eventId}`,
     save: () => {},
     read: (eventId) => records.find((r) => r.eventId === eventId) ?? null,
     list: (limit = 100) => {

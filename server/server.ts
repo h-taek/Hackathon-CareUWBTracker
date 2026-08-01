@@ -30,6 +30,11 @@ import { createStaticHandler } from './static/handler.ts';
 import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS } from './events/recorder.ts';
 import { createEventStore } from './events/store.ts';
 import { routeEvents } from './events/routes.ts';
+import { createAttachmentStore } from './events/attachments.ts';
+import { handleAttachmentUpload, parseAttachmentPath, parseReconTriggerPath } from './events/upload.ts';
+import { parseAttachmentFilePath, serveAttachment } from './events/download.ts';
+import { createReconRunner } from './events/recon/runner.ts';
+import { tuningFromEnv, RECON_DEFAULTS } from './events/recon/steps.ts';
 
 const args = process.argv.slice(2);
 if (wantsHelp(args)) {
@@ -101,6 +106,18 @@ const eventRecorder = createEventRecorder({
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[event] ⚠ ${record.eventId} 기록 실패 — 경보는 정상 발행됐습니다: ${message}`);
   },
+});
+
+// 현장 영상 첨부(R-2)와 재구성 파이프라인(R-3·R-4).
+const eventAttachments = createAttachmentStore(eventStore);
+// 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
+// 실패 기록만 쌓인다. 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 건다.
+const reconAuto = process.env.RECON_AUTO !== '0';
+const reconTuning = { ...RECON_DEFAULTS, ...tuningFromEnv() };
+const reconRunner = createReconRunner({
+  ...reconTuning,
+  store: eventStore,
+  attachments: eventAttachments,
 });
 
 function broadcast(event: 'position' | 'alert', data: unknown): void {
@@ -253,6 +270,42 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     request.on('close', () => clients.delete(response));
     return;
   }
+  // 첨부는 네 갈래다. 재구성 걸기(POST) → 업로드(POST) → 파일 내려주기(GET) → JSON 조회.
+  const reconTarget = parseReconTriggerPath(pathname);
+  if (reconTarget) {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    const attachment = eventAttachments.get(reconTarget.eventId, reconTarget.attachmentId);
+    if (!attachment) return sendJson(response, { ok: false, error: '없는 첨부' }, 404);
+    if (attachment.kind !== 'video') {
+      return sendJson(response, { ok: false, error: `재구성 대상은 영상뿐입니다: kind=${attachment.kind}` }, 400);
+    }
+    const queued = reconRunner.enqueue(reconTarget);
+    return sendJson(response, {
+      ok: true,
+      queued,
+      // 이미 대기·진행 중이면 새로 넣지 않는다. 두 번 눌렀다고 두 번 돌면 GPU만 낭비된다.
+      note: queued ? '대기열에 넣었습니다' : '이미 대기 또는 진행 중입니다',
+      pending: reconRunner.size(),
+    });
+  }
+
+  const uploadTarget = parseAttachmentPath(pathname);
+  if (uploadTarget !== null) {
+    handleAttachmentUpload(request, uploadTarget, url.searchParams, eventAttachments, (attachment) => {
+      // 영상이 붙으면 그 자리에서 재구성 대기열로 보낸다. 실제 실행은 응답 밖에서 돈다.
+      if (attachment.kind !== 'video' || !reconAuto) return;
+      reconRunner.enqueue({ eventId: attachment.eventId, attachmentId: attachment.attachmentId });
+    })
+      .then((result) => sendJson(response, result.body, result.status))
+      .catch((error: unknown) => {
+        console.error('[event] 첨부 처리 실패', error);
+        sendJson(response, { ok: false, error: 'internal_error' }, 500);
+      });
+    return;
+  }
+  const fileTarget = parseAttachmentFilePath(pathname);
+  if (fileTarget && serveAttachment(request, response, fileTarget, eventAttachments)) return;
+
   const eventRoute = routeEvents(pathname, url.searchParams, eventStore);
   if (eventRoute) return sendJson(response, eventRoute.body, eventRoute.status);
   if (pathname === '/map') return sendJson(response, map);
@@ -302,6 +355,15 @@ server.listen(port, () => {
     + ' (EVENT_PRE_MS / EVENT_POST_MS 로 조절)',
   );
   console.log(`  이벤트 조회 GET http://localhost:${shown}/events · /events/<eventId>`);
+  console.log(
+    `  현장 영상  POST /events/<eventId>/attachments?kind=video (본문=파일 바이트)`
+    + ` · 재구성 ${reconAuto ? '업로드 시 자동' : '수동(RECON_AUTO=0)'}`,
+  );
+  console.log(
+    `  재구성     ${reconTuning.ffmpegBin} → ${reconTuning.colmapBin} → ${reconTuning.openSplatBin}`
+    + ` · ${reconTuning.fps}fps 최대 ${reconTuning.maxFrames}장 · ${reconTuning.numIters}회 학습`
+    + ' (RECON_FPS / RECON_MAX_FRAMES / RECON_ITERS / OPENSPLAT_BIN)',
+  );
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {

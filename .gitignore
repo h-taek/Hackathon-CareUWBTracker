@@ -39,6 +39,9 @@ ml/datasets/
 # 사고 기록(런타임 산출물). 실기기·주입 재생마다 쌓이고 재현 가능하다. 스키마는 docs/spec/03 §6.1
 server/data/
 
+# 재구성 도구 소스·빌드(서드파티, 수 GB). 조달·빌드 절차는 tools/recon/README.md
+tools/recon/OpenSplat/
+
 # 가우시안 스플랫 에셋(수십~수백 MB, git 제외·iCloud 유지). 재조달은 server/public/assets/splat/README.md
 server/public/assets/splat/*.splat
 server/public/assets/splat/*.ply

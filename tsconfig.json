@@ -8,5 +8,8 @@
     "strict": true,
     "target": "ES2022"
   },
-  "include": ["server/**/*.ts", "tools/**/*.ts", "test/**/*.ts"]
+  "include": ["server/**/*.ts", "tools/**/*.ts", "test/**/*.ts"],
+  // tools/recon/은 서드파티 재구성 도구(OpenSplat) 소스·빌드 트리다. CMake가 만드는
+  // compiler_depend.ts는 타임스탬프 파일이지 TypeScript가 아니라, 안 빼면 tsc가 집어간다.
+  "exclude": ["node_modules", "tools/recon"]
 }
