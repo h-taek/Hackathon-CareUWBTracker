@@ -77,24 +77,9 @@ import {
     const C = CSS_VAR;
     ctx.clearRect(0, 0, W, H);
     ctx.lineWidth = 1;
-    const fs = isSmall() ? 9 : 12;
 
-    for (const z of map.zones || []) {
-      const [rx, ry, rw, rh] = z.rect;
-      ctx.strokeStyle = C.mapLine;
-      ctx.fillStyle = 'rgba(88,120,170,0.05)';
-      ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
-      ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
-      ctx.fillStyle = C.mapInk; ctx.font = fs + 'px sans-serif';
-      ctx.fillText(z.label, mx(rx) + 5, my(ry + rh) + fs + 3);
-    }
-    for (const h of map.hazards || []) {
-      const [rx, ry, rw, rh] = h.rect;
-      ctx.strokeStyle = 'rgba(210,153,34,0.75)';
-      ctx.fillStyle = 'rgba(210,153,34,0.10)';
-      ctx.fillRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
-      ctx.strokeRect(mx(rx), my(ry + rh), rw * scale, rh * scale);
-    }
+    // 웅진관 실사 도면이 방 구획과 라벨을 이미 담고 있다. map.json의 프록시 구역은
+    // zoneAt() 판정에는 계속 쓰되, 화면에 다시 그려 도면과 겹치지 않게 한다.
     for (const [id, t] of tags) {
       if (!t.pos) continue;
       const v = view.get(id) || t.pos;      // 서버 좌표가 아니라 보간 중인 화면 좌표를 그린다

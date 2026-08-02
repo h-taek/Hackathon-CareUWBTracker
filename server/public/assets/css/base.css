@@ -2,11 +2,11 @@
    디자인 시안 적용은 F5(8/02)에서 폴리시한다. */
 
 :root {
-  --bg: #0b0e14; --panel: #161b22; --panel-2: #1c222b; --line: #2a2f37;
-  --ink: #e6edf3; --muted: #8b949e; --faint: #5b636e;
-  --accent: #58a6ff;
-  --ok: #3fb950; --offline: #8b949e; --warning: #d29922; --alarm: #f85149; --sel: #58a6ff;
-  --map-bg: #f5f6f8; --map-line: #c4cad2; --map-ink: #3a414b;
+  --bg: #eef3f8; --panel: rgba(255,255,255,.92); --panel-2: #f7f9fc; --line: #dfe6ee;
+  --ink: #17212f; --muted: #657184; --faint: #98a2b1;
+  --accent: #2385e8;
+  --ok: #2fbd6b; --offline: #aab3bf; --warning: #e9a832; --alarm: #f04444; --sel: #2587e8;
+  --map-bg: #fff; --map-line: rgba(91,109,132,.22); --map-ink: #526174;
   --hazard: #d29922;
   --r: 9px;
 }
@@ -29,7 +29,7 @@ body {
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 패널 카드 */
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+.card { background: var(--panel); border: 1px solid rgba(214,224,235,.9); border-radius: 16px; box-shadow: 0 12px 34px rgba(42,62,84,.09); backdrop-filter: blur(18px); }
 .card > h2 {
   margin: 0; padding: 11px 13px; font-size: 12px; font-weight: 600; color: var(--muted);
   letter-spacing: .03em; border-bottom: 1px solid var(--line);

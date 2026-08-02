@@ -22,8 +22,8 @@
 
 <div class="topbar">
   <button class="navtoggle" id="navToggle" aria-label="사이드바 접기/펼치기">▐</button>
-  <div class="brand"><span class="av"></span> @관리자 <span class="sep">|</span></div>
-  <div class="title">f1 <small id="floorRange">· 실시간 관제</small></div>
+  <div class="brand"><span class="av" aria-hidden="true"></span><span class="brandcopy">Care<span>UWB</span><small>UWB 기반 낙상 감지 시스템</small></span></div>
+  <div class="title">웅진관 2층 <small id="floorRange">· 실시간 관제</small></div>
   <div class="legend">
     <span><i class="sw" style="background:var(--ok)"></i>정상</span>
     <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
@@ -81,7 +81,7 @@
   <!-- 중앙: 뷰포트 -->
   <div class="col col-center">
     <div class="card mapcard">
-      <h2>실시간 뷰 <span id="viewMode" style="color:var(--faint);font-weight:400">2D 개요</span></h2>
+      <h2><span>실시간 위치 <b>(2D 평면도)</b></span><span id="viewMode" style="color:var(--faint);font-weight:400">2D 개요</span></h2>
       <div class="viewport" id="viewport">
         <div class="v3d">
           <!-- 스플랫 캔버스가 여기에 붙는다(assets/js/scene3d.js) -->
