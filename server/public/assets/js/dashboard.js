@@ -54,6 +54,7 @@ import {
   // ── 2D 캔버스 ──
   const cv = $('map');
   const ctx = cv.getContext('2d');
+  const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let scale = 1, W = 0, H = 0, PAD = 24;
 
   function resize() {
@@ -72,7 +73,7 @@ import {
   const my = (y) => H - PAD - y * scale;
   const isSmall = () => W < 380;
 
-  function paint() {
+  function paint(now = performance.now()) {
     if (!map) return;
     const C = CSS_VAR;
     ctx.clearRect(0, 0, W, H);
@@ -85,15 +86,40 @@ import {
       const v = view.get(id) || t.pos;      // 서버 좌표가 아니라 보간 중인 화면 좌표를 그린다
       const px = mx(v.x), py = my(v.y);
       const st = stateOf(id), c = C[st], rd = isSmall() ? 5 : 7;
+
+      // 오차 반경은 채움과 실선 경계를 함께 써서 마커 본체와 분리한다.
       ctx.beginPath(); ctx.arc(px, py, errOf(t) * scale, 0, Math.PI * 2);
       const isAlert = st === 'alert';
-      ctx.fillStyle = rgba(c, isAlert ? 0.20 : 0.16); ctx.fill();
+      ctx.fillStyle = rgba(c, isAlert ? 0.16 : 0.10); ctx.fill();
+      ctx.strokeStyle = rgba(c, isAlert ? 0.62 : 0.34); ctx.lineWidth = 1; ctx.stroke();
+
+      if (isAlert && !REDUCED_MOTION) {
+        const pulse = (Math.sin(now / 230) + 1) / 2;
+        ctx.beginPath(); ctx.arc(px, py, rd + 6 + pulse * 8, 0, Math.PI * 2);
+        ctx.strokeStyle = rgba(c, 0.54 - pulse * 0.34); ctx.lineWidth = 2; ctx.stroke();
+      }
+
       ctx.beginPath(); ctx.arc(px, py, rd, 0, Math.PI * 2);
       ctx.fillStyle = c; ctx.fill();
-      if (isAlert) { ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.stroke(); }
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+
+      // 색을 보지 못해도 형태로 상태를 구분한다: 선택=이중 원, 오프라인=빗금, 경보=느낌표.
+      if (st === 'sel') {
+        ctx.beginPath(); ctx.arc(px, py, rd + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.stroke();
+      } else if (st === 'offline') {
+        ctx.beginPath(); ctx.moveTo(px - 3, py + 3); ctx.lineTo(px + 3, py - 3);
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.8; ctx.stroke();
+      } else if (isAlert) {
+        ctx.fillStyle = '#fff'; ctx.font = '800 ' + (isSmall() ? 8 : 10) + 'px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('!', px, py + .5);
+      }
       if (!isSmall()) {
-        ctx.fillStyle = C.mapInk; ctx.font = 'bold 12px sans-serif';
-        ctx.fillText(nameOf(id), px + 11, py + 4);
+        const label = nameOf(id);
+        ctx.font = '700 12px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        const labelW = Math.ceil(ctx.measureText(label).width);
+        ctx.fillStyle = 'rgba(255,255,255,.90)'; ctx.fillRect(px + 11, py - 10, labelW + 10, 20);
+        ctx.fillStyle = isAlert ? c : C.mapInk; ctx.fillText(label, px + 16, py + 4);
       }
     }
   }
@@ -134,8 +160,9 @@ import {
   function tick(now) {
     const animating = stepView(now);
     lastFrameAt = now;
-    paint();
-    rafId = animating ? requestAnimationFrame(tick) : 0;
+    paint(now);
+    const pulsing = alertStore.view === 'alerting' && !REDUCED_MOTION;
+    rafId = (animating || pulsing) ? requestAnimationFrame(tick) : 0;
   }
 
   // 기존 호출부는 그대로 draw()를 쓴다. 즉시 한 번 그리고, 아직 움직일 게 남았으면 루프를 잇는다.
