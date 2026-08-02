@@ -151,16 +151,32 @@ import {
     if (tags.size === 0) { box.innerHTML = '<span class="empty">태그 대기 중…</span>'; return; }
     box.textContent = '';
     let online = 0;
-    for (const [id, t] of tags) {
+    const stateLabel = { alert: '낙상 감지', sel: '선택됨', offline: '오프라인', ok: '정상' };
+    const stateRank = { alert: 0, sel: 1, ok: 2, offline: 3 };
+    const entries = Array.from(tags.entries()).sort(([a], [b]) => {
+      const rank = stateRank[stateOf(a)] - stateRank[stateOf(b)];
+      return rank || nameOf(a).localeCompare(nameOf(b), 'ko');
+    });
+    for (const [id, t] of entries) {
       const st = stateOf(id);
       if (st !== 'offline') online++;
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'room';
+      const selected = id === selectedTag;
+      b.type = 'button';
+      b.className = 'room state-' + st + (selected ? ' selected' : '');
+      b.setAttribute('aria-pressed', String(selected));
+      b.setAttribute('aria-label', nameOf(id) + ', ' + stateLabel[st]);
       const dot = document.createElement('i');
       dot.className = 'rdot'; dot.style.background = COLOR()[st];
+      dot.setAttribute('aria-hidden', 'true');
       b.appendChild(dot);
       const zone = t.pos && map ? zoneAt(t.pos.x, t.pos.y) : '—';
-      b.appendChild(document.createTextNode(nameOf(id) + ' · ' + zone));
+      const main = document.createElement('span'); main.className = 'room-main';
+      const who = document.createElement('span'); who.className = 'room-name'; who.textContent = nameOf(id);
+      const where = document.createElement('span'); where.className = 'room-zone'; where.textContent = zone;
+      main.appendChild(who); main.appendChild(where);
+      const status = document.createElement('span'); status.className = 'room-state'; status.textContent = stateLabel[st];
+      b.appendChild(main); b.appendChild(status);
       b.onclick = () => { selectedTag = (selectedTag === id ? null : id); renderRooms(); draw(); };
       box.appendChild(b);
     }
