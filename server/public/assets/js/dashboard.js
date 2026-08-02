@@ -418,7 +418,15 @@ import {
     const collapsed = $('shell').classList.toggle('nav-collapsed');
     document.body.classList.toggle('nav-collapsed', collapsed);
     $('navToggle').setAttribute('aria-expanded', String(!collapsed));
-    $('navToggle').setAttribute('aria-label', collapsed ? '사이드바 펼치기' : '사이드바 접기');
+    $('navToggle').setAttribute('aria-label', collapsed ? '왼쪽 패널 펼치기' : '왼쪽 패널 접기');
+    $('navToggle').textContent = collapsed ? '›' : '‹';
+    requestAnimationFrame(resize);
+  };
+  $('logToggle').onclick = () => {
+    const collapsed = document.body.classList.toggle('right-panel-collapsed');
+    $('logToggle').setAttribute('aria-expanded', String(!collapsed));
+    $('logToggle').setAttribute('aria-label', collapsed ? '알림 패널 펼치기' : '알림 패널 접기');
+    $('logToggle').textContent = collapsed ? '‹' : '›';
     requestAnimationFrame(resize);
   };
   document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
