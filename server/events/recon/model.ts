@@ -53,6 +53,76 @@ export function readModelStats(modelDir: string): ModelStats {
   };
 }
 
+export interface ModelChoice extends ModelStats {
+  /** 고른 서브모델 폴더 이름(`sparse/` 아래). 쓸 만한 게 하나도 없으면 null */
+  name: string | null;
+  /** 본 후보 전부. 뭘 버렸는지 로그에 남기려고 들고 있는다 */
+  candidates: Array<{ name: string } & ModelStats>;
+}
+
+/** OpenSplat이 읽는 자리. `<project>/sparse/0/cameras.bin`만 본다(OpenSplat colmap.cpp:15). */
+export const PRIMARY_MODEL_DIR = '0';
+
+/**
+ * COLMAP이 만든 서브모델 중 제일 큰 것을 고른다.
+ *
+ * **왜 필요한가.** 자세가 한 덩어리로 안 풀리면 COLMAP은 서브모델을 여러 개 만들고
+ * `sparse/0`, `sparse/1`… 로 **완성 순서대로** 번호를 매긴다. 크기순이 아니다.
+ *
+ * 실측(2026-08-02, att-6): `0`에 2장짜리 찌꺼기가, `1`에 진짜 결과 259장(관측 30만,
+ * 재투영 오차 0.60px)이 들어 있었다. `0`만 읽던 탓에 **성공한 재구성이 6번 연속
+ * "자세를 못 풀었다"로 기록**됐다. 촬영을 아무리 바꿔도 결과가 같았던 이유다.
+ */
+export function pickBestModel(sparseRoot: string): ModelChoice {
+  let names: string[];
+  try {
+    names = fs.readdirSync(sparseRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    // sparse 폴더 자체가 없는 경우다. 여기서 던지면 판정 문구 없이 죽는다.
+    names = [];
+  }
+
+  const candidates = names
+    .map((name) => ({ name, ...readModelStats(path.join(sparseRoot, name)) }))
+    .filter((entry) => entry.registeredImages > 0)
+    // 등록 장수가 먼저다. 같으면 점이 많은 쪽 — 3DGS 초기화가 그만큼 촘촘해진다.
+    .sort((a, b) => b.registeredImages - a.registeredImages || b.points - a.points);
+
+  const best = candidates[0];
+  if (!best) return { name: null, registeredImages: 0, points: 0, candidates };
+  return {
+    name: best.name,
+    registeredImages: best.registeredImages,
+    points: best.points,
+    candidates,
+  };
+}
+
+/**
+ * 고른 모델을 `sparse/0`으로 올린다. OpenSplat이 거기만 읽기 때문이다.
+ *
+ * 원래 `0`에 있던 것은 지우지 않고 고른 모델 자리로 맞바꿔 남긴다 — 실패를 파고들 때
+ * COLMAP 로그와 대조할 수 있어야 한다.
+ */
+export function promoteModel(sparseRoot: string, name: string): void {
+  if (name === PRIMARY_MODEL_DIR) return;
+
+  const primary = path.join(sparseRoot, PRIMARY_MODEL_DIR);
+  const chosen = path.join(sparseRoot, name);
+  if (!fs.existsSync(primary)) {
+    fs.renameSync(chosen, primary);
+    return;
+  }
+
+  const parked = path.join(sparseRoot, `swap-${name}`);
+  fs.rmSync(parked, { recursive: true, force: true });
+  fs.renameSync(primary, parked);
+  fs.renameSync(chosen, primary);
+  fs.renameSync(parked, chosen);
+}
+
 /**
  * 이 모델로 3DGS를 돌릴 값어치가 있는지. `frameCount`는 ffmpeg가 뽑은 장수다.
  * 사유 문구에 원인 후보를 같이 담는다 — 로그를 열어보기 전에 다음 촬영을 고칠 수 있게.
@@ -61,8 +131,10 @@ export function judgeModel(stats: ModelStats, frameCount: number): ModelVerdict 
   const { registeredImages, points } = stats;
   const ratio = frameCount > 0 ? registeredImages / frameCount : 0;
   const shot = `${frameCount}장 중 ${registeredImages}장 등록(${Math.round(ratio * 100)}%), 점 ${points}개`;
-  const hint = '벽·천장처럼 무늬 없는 면이 많거나, 빨리 움직여 흔들렸거나, 프레임 간격이 넓어 겹침이 모자란 경우다.'
-    + ' RECON_FPS를 올리고 RECON_FRAME_WIDTH를 키운 뒤 다시 걸어본다.';
+  // 장수를 늘리라는 안내는 하지 않는다. 실측(2026-08-02)에서 300장→1500장은
+  // 102분을 더 쓰고 결과가 같았다. 자세가 안 풀리는 원인은 장수가 아니라 동선이다.
+  const hint = '제자리에서 돌지 말고 벽을 따라 걸으며 찍어야 한다 — 카메라가 움직여야 거리가 계산된다.'
+    + ' 무늬 없는 흰 벽·천장이 화면을 채우는 구간과 흔들린 구간을 줄이고, 40~60초를 겹치게 담는다.';
 
   if (registeredImages < MIN_REGISTERED_IMAGES) {
     return { ...stats, ok: false, reason: `COLMAP이 카메라 자세를 거의 못 풀었다 — ${shot}. ${hint}` };

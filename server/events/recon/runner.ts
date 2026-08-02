@@ -25,7 +25,7 @@ import {
   type ReconStep,
   type ReconTuning,
 } from './steps.ts';
-import { judgeModel, readModelStats } from './model.ts';
+import { judgeModel, pickBestModel, promoteModel, readModelStats } from './model.ts';
 import { parseProgress, type StepProgress } from './progress.ts';
 
 export interface ReconJob {
@@ -219,6 +219,16 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       // COLMAP은 자세를 거의 못 풀어도 종료코드 0으로 끝난다. 여기서 안 막으면
       // 카메라 2대짜리 모델로 학습이 "성공"하고 쓸모없는 .ply가 나온다.
       if (step.name === 'colmap:map') {
+        // COLMAP은 자세가 한 덩어리로 안 풀리면 서브모델을 여러 개 만들고 **완성 순서로**
+        // 번호를 매긴다. `0`이 제일 큰 모델이라는 보장이 없다 — 제일 큰 것을 골라 0으로 올린다.
+        const sparse = sparseDir(projectDir(workDir));
+        const choice = pickBestModel(sparse);
+        if (choice.candidates.length > 1) {
+          const seen = choice.candidates.map((c) => `${c.name}:${c.registeredImages}장`).join(' ');
+          appendLog(`서브모델 ${choice.candidates.length}개(${seen}) → ${choice.name} 채택\n`);
+        }
+        if (choice.name) promoteModel(sparse, choice.name);
+
         const verdict = judgeModel(readModelStats(modelDir(workDir)), frameCount);
         appendLog(`등록 ${verdict.registeredImages}/${frameCount}장 · 점 ${verdict.points}개\n`);
         options.attachments.patchRecon(job.eventId, job.attachmentId, {
