@@ -413,7 +413,14 @@ import {
     bannerHidden = true;
     viewport.classList.add('banner-off');
   };
-  $('navToggle').onclick = () => { $('shell').classList.toggle('nav-collapsed'); requestAnimationFrame(resize); };
+  $('navToggle').setAttribute('aria-expanded', 'true');
+  $('navToggle').onclick = () => {
+    const collapsed = $('shell').classList.toggle('nav-collapsed');
+    document.body.classList.toggle('nav-collapsed', collapsed);
+    $('navToggle').setAttribute('aria-expanded', String(!collapsed));
+    $('navToggle').setAttribute('aria-label', collapsed ? '사이드바 펼치기' : '사이드바 접기');
+    requestAnimationFrame(resize);
+  };
   document.querySelectorAll('.floor .fhead').forEach((h) => h.addEventListener('click', () => {
     const f = h.closest('.floor');
     if (!f.classList.contains('pending')) f.toggleAttribute('open');
