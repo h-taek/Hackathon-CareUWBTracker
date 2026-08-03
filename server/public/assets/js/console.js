@@ -708,10 +708,12 @@ const span = (samples) => (samples.length < 2
  * 7m가 화면을 가득 채운 곡선으로 보여서, 무엇을 본 것인지 알 수 없게 된다.
  */
 function trackSvg(track) {
-  // 정사각형이다. 가로로 납작한 상자에 넣으면 같은 1m가 가로세로로 다르게 보인다.
+  // **뷰박스 자체가 4:3이다.** 상자만 4:3으로 만들고 뷰박스를 정사각으로 두면 `meet`이
+  // 남는 폭을 여백으로 흘려보내 그림이 가운데 작게 박힌다. 비율 왜곡을 막는 것은
+  // 아래 균일 배율(k)이므로, 뷰박스 모양은 상자와 맞추는 것이 맞다.
   const W = 100;
-  const H = 100;
-  const PAD = 8;
+  const H = 75;
+  const PAD = 6;
   const xs = track.map((p) => p.x);
   const ys = track.map((p) => p.y);
   const [x0, x1] = [Math.min(...xs), Math.max(...xs)];

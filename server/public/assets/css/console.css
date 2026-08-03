@@ -501,9 +501,10 @@ body {
   background: #f1f1f2;
   overflow: hidden;
 }
-/* 이동 경로는 정사각형이다. 납작한 상자에 넣으면 같은 1m가 가로세로로 다르게 보인다.
-   좌우 여백은 아래 파형과 같게 — 폭을 꽉 채우고 높이가 폭을 따라간다. */
-.scene-graph.is-map { width: 100%; height: auto; aspect-ratio: 1; }
+/* 이동 경로는 4:3이다. 복도 동선은 가로로 길어서 정사각형이면 위아래가 크게 빈다.
+   **상자 비율과 무관하게 경로 자체는 안 뒤틀린다** — 뷰박스도 4:3이고 그 안에서
+   가로세로 같은 배율로 그리기 때문이다(console.js의 trackSvg). */
+.scene-graph.is-map { width: 100%; height: auto; aspect-ratio: 4 / 3; }
 .scene-graph svg { display: block; width: 100%; height: 100%; }
 .scene-none { font-size: 11.5px; color: var(--color-neutral-500); }
 /* 상세의 끝. 다음 사고와 경계를 긋는다 — 펼친 목록이 길어 어디까지가 한 건인지 흐려진다. */
