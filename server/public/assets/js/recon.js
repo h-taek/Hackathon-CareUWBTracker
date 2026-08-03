@@ -86,7 +86,7 @@ async function loadEvents() {
   list.innerHTML = '';
   let events = [];
   try {
-    events = (await getJson('/events?limit=100')).events;
+    events = (await getJson('/incidents?limit=100')).incidents;
   } catch {
     list.append(el('div', 'empty', '이벤트를 못 불러왔다'));
     return;
@@ -95,7 +95,7 @@ async function loadEvents() {
   $('eventCount').textContent = `${events.length}건`;
 
   if (!events.length) {
-    list.append(el('div', 'empty', '낙상 기록이 없다. 관제 화면에서 클립을 주입해 하나 만든다'));
+    list.append(el('div', 'empty', '확인된 사고가 없다. 관제 화면에서 경보를 낙상으로 판정하면 여기 뜬다'));
     return updateGo();
   }
 
@@ -158,7 +158,7 @@ function updateGo() {
   go.disabled = !ready || go.dataset.busy === '1';
   go.textContent = go.dataset.busy === '1' ? '업로드 중…'
     : !state.file ? '영상을 먼저 고른다'
-      : !state.eventId ? '낙상 기록을 고른다'
+      : !state.eventId ? '사고를 고른다'
         : '업로드하고 변환 시작';
 }
 
@@ -170,7 +170,7 @@ async function startUpload() {
   $('progressHint').textContent = `${mb(state.file.size)} 전송 중…`;
 
   try {
-    const res = await fetch(`/events/${encodeURIComponent(state.eventId)}/attachments?${tuningQuery()}`, {
+    const res = await fetch(`/incidents/${encodeURIComponent(state.eventId)}/attachments?${tuningQuery()}`, {
       method: 'POST',
       headers: { 'Content-Type': state.file.type || 'application/octet-stream' },
       body: state.file,
@@ -258,7 +258,7 @@ async function poll() {
   const { eventId, attachmentId } = state.watching;
   let recon = null;
   try {
-    const record = await getJson(`/events/${encodeURIComponent(eventId)}`);
+    const record = await getJson(`/incidents/${encodeURIComponent(eventId)}`);
     recon = (record.attachments || []).find((a) => a.attachmentId === attachmentId)?.recon ?? null;
   } catch { /* 서버가 잠깐 안 받으면 다음 차례에 다시 본다 */ }
 
@@ -284,7 +284,7 @@ async function refreshLog() {
   const { eventId, attachmentId } = state.watching;
   try {
     // 로그는 첫 단계가 뭔가 쓰기 전까지 없다. 404는 정상이라 조용히 넘긴다.
-    const res = await fetch(`/events/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=40`, { cache: 'no-store' });
+    const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=40`, { cache: 'no-store' });
     if (!res.ok) return;
     const text = await res.text();
     const box = $('log');
@@ -299,7 +299,7 @@ async function loadRecords() {
   body.innerHTML = '';
   let events = [];
   try {
-    events = (await getJson('/events?limit=100')).events;
+    events = (await getJson('/incidents?limit=100')).incidents;
   } catch {
     return;
   }
@@ -308,7 +308,7 @@ async function loadRecords() {
   const rows = await Promise.all(events.map(async (event) => {
     if (!event.attachmentCount) return { event, attachments: [] };
     try {
-      const record = await getJson(`/events/${encodeURIComponent(event.eventId)}`);
+      const record = await getJson(`/incidents/${encodeURIComponent(event.eventId)}`);
       return { event, attachments: record.attachments || [] };
     } catch {
       return { event, attachments: [] };
@@ -351,7 +351,7 @@ async function loadRecords() {
       const view = el('button', 'btn sm', '3D 보기');
       view.onclick = () => openViewer(event.eventId, splat.attachmentId);
       const get = el('a', 'btn sm', '받기');
-      get.href = `/events/${encodeURIComponent(event.eventId)}/attachments/${encodeURIComponent(splat.attachmentId)}`;
+      get.href = `/incidents/${encodeURIComponent(event.eventId)}/attachments/${encodeURIComponent(splat.attachmentId)}`;
       get.download = '';
       act.append(view, get);
     }
@@ -375,7 +375,7 @@ async function retryRecon(eventId, attachmentId) {
   params.delete('kind');
   params.delete('name');
   try {
-    const res = await fetch(`/events/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/recon?${params}`, { method: 'POST' });
+    const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/recon?${params}`, { method: 'POST' });
     const body = await res.json();
     if (!body.ok) throw new Error(body.error);
     state.watching = { eventId, attachmentId };
@@ -388,7 +388,7 @@ async function retryRecon(eventId, attachmentId) {
 }
 
 async function showLog(eventId, attachmentId) {
-  const res = await fetch(`/events/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=200`, { cache: 'no-store' });
+  const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=200`, { cache: 'no-store' });
   $('log').textContent = res.ok ? await res.text() : '로그가 없다';
   $('logWrap').open = true;
   $('progress').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -396,7 +396,7 @@ async function showLog(eventId, attachmentId) {
 
 // ── 뷰어 ──
 async function openViewer(eventId, attachmentId) {
-  const url = `/events/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}`;
+  const url = `/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}`;
   const note = $('stagenote');
   $('viewerHint').textContent = clock(state.events.find((e) => e.eventId === eventId)?.ts ?? Date.now());
   note.textContent = '3D 현장 불러오는 중…';

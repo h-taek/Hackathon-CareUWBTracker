@@ -1,13 +1,14 @@
 <!doctype html>
 <html lang="ko">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>돌봄시설 실시간 위치 관제</title>
-<link rel="stylesheet" href="/assets/css/base.css" />
-<link rel="stylesheet" href="/assets/css/dashboard.css" />
-<!-- 3D 패널이 쓰는 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다(plan/07).
-     임포트 맵은 첫 모듈 스크립트보다 반드시 앞서야 한다. -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>실시간 낙상 관제 — 한마음요양원</title>
+<link rel="stylesheet" href="/_ds/styles.css">
+<link rel="stylesheet" href="/assets/css/console.css">
+<!-- 3D 뷰어 모듈 해석표. vendor/는 정적 동봉이라 설치·번들 단계가 없다.
+     **첫 모듈 스크립트보다 앞서야 한다** — 뒤에 두면 splat-view.js의 bare import가 못 풀린다.
+     1.4MB 라이브러리 자체는 사고 현장 3D 탭에서 볼 때 처음 받는다(동적 import). -->
 <script type="importmap">
 {
   "imports": {
@@ -16,139 +17,353 @@
   }
 }
 </script>
-<script src="/assets/js/dashboard.js" type="module"></script>
+<script src="/assets/js/console.js" type="module"></script>
 </head>
 <body>
 
-<div class="topbar">
-  <button class="navtoggle" id="navToggle" aria-label="사이드바 접기/펼치기">▐</button>
-  <div class="brand"><span class="av"></span> @관리자 <span class="sep">|</span></div>
-  <div class="title">f1 <small id="floorRange">· 실시간 관제</small></div>
-  <div class="legend">
-    <span><i class="sw" style="background:var(--ok)"></i>정상</span>
-    <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
-    <span><i class="sw" style="background:var(--alarm)"></i>이상 감지</span>
-    <span><i class="sw" style="background:var(--sel)"></i>선택한 환자</span>
-  </div>
-  <span class="spacer"></span>
-  <span class="conn" id="conn"><span class="dot"></span><span id="connText">연결 중…</span></span>
-  <span class="state-pill" id="statePill">idle (2D)</span>
-  <!-- 사고 기록은 관제와 별개 화면이다. 경보 흐름에 3D를 끼우지 않는다(plan/07 §4). -->
-  <a class="btn" href="/recon" style="text-decoration:none">사고 현장 3D 기록</a>
-  <button class="btn exit">나가기</button>
-</div>
+<div class="app" id="app">
 
-<div class="shell" id="shell">
-  <!-- 좌: 필터 + 층 목록 -->
-  <div class="col col-left">
-    <div class="card">
-      <div class="chips">
-        <span class="chip"><i class="sw" style="background:var(--ok)"></i>연결 <b id="cntOk">0</b></span>
-        <span class="chip"><i class="sw" style="background:var(--offline)"></i>끊김 <b id="cntOff">0</b></span>
-        <span class="chip"><i class="sw" style="background:var(--alarm)"></i>이벤트 <b id="cntEvt">0</b></span>
-      </div>
+  <!-- ══ 배경 전면: 2D 도면 ══ -->
+  <div class="planwrap" id="planwrap">
+    <div class="plan" id="plan">
+
+      <svg class="floorplan" viewBox="0 0 3200 2000">
+        <defs>
+          <pattern id="uwbPriv" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="14" stroke="#9a9a9d" stroke-width="2" opacity="0.5"></line>
+          </pattern>
+          <pattern id="uwbHaz" width="18" height="18" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+            <line x1="0" y1="0" x2="0" y2="18" stroke="#98989b" stroke-width="1.8" opacity="0.28"></line>
+          </pattern>
+          <filter id="uwbPaper" x="-3%" y="-3%" width="106%" height="106%">
+            <feDropShadow dx="0" dy="8" stdDeviation="18" flood-color="#2b2b2d" flood-opacity="0.15"></feDropShadow>
+          </filter>
+        </defs>
+
+        <rect x="45" y="45" width="3110" height="1910" fill="#f7f7f8" filter="url(#uwbPaper)"></rect>
+
+        <!-- 바닥 마감: 중앙 라운지 + 이를 두르는 회유 복도 -->
+        <g>
+          <rect x="60" y="526" width="3080" height="200" fill="#efefef"></rect>
+          <rect x="60" y="1276" width="3080" height="200" fill="#efefef"></rect>
+          <rect x="390" y="726" width="336" height="550" fill="#efefef"></rect>
+          <rect x="2350" y="726" width="250" height="550" fill="#efefef"></rect>
+          <rect x="726" y="726" width="1624" height="550" fill="#f7f7f8"></rect>
+          <rect x="60" y="60" width="466" height="466" fill="url(#uwbHaz)"></rect>
+          <rect x="60" y="726" width="330" height="550" fill="#eaeaeb"></rect>
+          <rect x="60" y="726" width="330" height="550" fill="url(#uwbPriv)"></rect>
+        </g>
+
+        <!-- 벽체 -->
+        <g fill="none" stroke="#6f6f72" stroke-width="7" stroke-linecap="square">
+          <rect x="60" y="60" width="3080" height="1880"></rect>
+        </g>
+        <g fill="none" stroke="#8a8a8d" stroke-width="5" stroke-linecap="square">
+          <path d="M60 526H3140 M60 726H3140 M60 1276H3140 M60 1476H3140"></path>
+          <path d="M390 726V1276 M726 726V1276 M2350 726V1276 M2600 726V1276"></path>
+          <path d="M60 1000H390 M2600 1000H3140"></path>
+          <path d="M526 60V526 M1117 60V526 M1700 60V526 M2283 60V526 M2866 60V526"></path>
+          <path d="M526 1476V1940 M1117 1476V1940 M1700 1476V1940 M2283 1476V1940 M2866 1476V1940"></path>
+        </g>
+
+        <!-- 개구부 -->
+        <g stroke-width="6" stroke-linecap="butt">
+          <path stroke="#efefef" d="M210 526H300 M780 526H870 M1360 526H1450 M1950 526H2040 M2530 526H2620 M2950 526H3040"></path>
+          <path stroke="#efefef" d="M210 1476H300 M780 1476H870 M1360 1476H1450 M1950 1476H2040 M2530 1476H2620 M2950 1476H3040"></path>
+          <path stroke="#eaeaeb" d="M390 800V890 M390 1100V1190"></path>
+          <path stroke="#efefef" d="M390 726H726 M390 1276H726 M2350 726H2600 M2350 1276H2600"></path>
+          <path stroke="#f7f7f8" d="M2600 800V890 M2600 1100V1190"></path>
+          <path stroke="#f7f7f8" d="M1000 726H1240 M1900 726H2140 M1450 1276H1750"></path>
+        </g>
+
+        <!-- 실명 -->
+        <g font-family="Barlow Condensed, sans-serif" font-size="30" fill="#424244" letter-spacing="0.03em">
+          <text x="105" y="495">계단실</text>
+          <text x="553" y="495">301호</text><text x="1144" y="495">302호</text>
+          <text x="1727" y="495">303호</text><text x="2310" y="495">304호</text><text x="2893" y="495">창고</text>
+          <text x="80" y="975" font-size="24">화장실(여)</text><text x="80" y="1250" font-size="24">화장실(남)</text>
+          <text x="2620" y="975" font-size="24">간호사실</text>
+          <text x="2620" y="1250" font-size="24">상담실</text>
+          <text x="105" y="1905">주방 · 식당</text>
+          <text x="553" y="1905">305호</text><text x="1144" y="1905">306호</text>
+          <text x="1727" y="1905">307호</text><text x="2310" y="1905">308호</text><text x="2893" y="1905">세탁실</text>
+          <text x="755" y="1240" font-size="34">라운지 · 거실</text>
+        </g>
+        <g font-family="Barlow, sans-serif" font-size="17" fill="#8a8a8d">
+          <text x="228" y="495">위험구역</text>
+          <text x="651" y="495">4인실</text><text x="1242" y="495">4인실</text>
+          <text x="1825" y="495">2인실</text><text x="2408" y="495">2인실</text>
+          <text x="651" y="1905">4인실</text><text x="1242" y="1905">4인실</text>
+          <text x="1825" y="1905">2인실</text><text x="2408" y="1905">2인실</text>
+          <text x="80" y="1222">사생활 구역</text><text x="410" y="1222">사생활 구역</text>
+          <text x="1010" y="1250">공용 생활공간 · 96.1㎡</text>
+        </g>
+      </svg>
+
+      <!-- 사생활 구역 낙상 강조 (A-P5) — 마커가 없으므로 구역 전체를 강조한다 -->
+      <div class="zone-alert" id="zoneAlert" hidden></div>
+
+      <!-- 대상 마커가 여기 들어간다 -->
+      <div class="markers" id="markers"></div>
     </div>
-    <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:0;">
-      <h2>층별 목록</h2>
-      <div class="floors" id="floors">
-        <div class="floor" open id="floor1">
-          <button class="fhead" type="button">
-            <span class="fnum">f1</span>
-            <span class="fmeta"><span class="t" id="f1Range">—</span><span class="s" id="f1Count">환자 0명</span></span>
-            <span class="badge" id="f1Badge">연결 0명</span>
+  </div>
+
+  <!-- ══ 지도 확대/축소 ══ -->
+  <div class="zoombar">
+    <button type="button" class="icon-btn" id="zoomIn" aria-label="확대">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#424244" stroke-width="1.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+    </button>
+    <div class="zoom-label" id="zoomLabel">100%</div>
+    <button type="button" class="icon-btn" id="zoomOut" aria-label="축소">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#424244" stroke-width="1.6" stroke-linecap="round"><path d="M5 12h14"></path></svg>
+    </button>
+    <div class="zoom-sep"></div>
+    <button type="button" class="icon-btn locate" id="locate" aria-label="선택 인원 위치로 이동" title="선택 인원 위치로 이동">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3M19 12h3M12 2v3M12 19v3"></path><circle cx="12" cy="12" r="7"></circle><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"></circle></svg>
+    </button>
+  </div>
+
+  <!-- ══ 상단바 ══ -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-title">실시간 낙상 관제</span>
+      <span class="brand-sub">UWB × IMU</span>
+    </div>
+    <div class="vsep"></div>
+    <div class="site">
+      <span class="floor-badge">F1</span>
+      <span class="site-name">한마음요양원 · 1층</span>
+    </div>
+    <span class="spacer"></span>
+    <div class="conn" id="conn"><span class="conn-dot"></span><span id="connLabel">연결 중…</span></div>
+    <div class="source" id="sourceLabel">—</div>
+    <div class="clock" id="clock">--:--:--</div>
+  </header>
+
+  <!-- ══ 좌: 대상 리스트 ══ -->
+  <section class="panel panel-left" id="panelLeft">
+    <div class="panel-head">
+      <span class="panel-label">모니터링</span>
+      <button type="button" class="icon-btn" id="toggleLeft" aria-label="좌측 패널 최소화">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M9 3v18"></path></svg>
+      </button>
+    </div>
+    <div class="panel-body">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab is-active" id="tabTags" role="tab" aria-selected="true" aria-controls="paneTags">태그 목록</button>
+        <button type="button" class="tab" id="tabScene" role="tab" aria-selected="false" aria-controls="paneScene">사고 현장 3D</button>
+      </div>
+
+      <div class="tabpane" id="paneScene" role="tabpanel" hidden>
+        <!-- 뷰어는 stage 안을 통째로 갈아엎는다. 안내·진행 문구를 그 안에 두면 같이 지워지므로
+             형제로 띄워 겹친다 -->
+        <div class="scene-frame" id="sceneFrame">
+          <div class="scene-stage" id="sceneStage"></div>
+          <!-- 전체화면. 브라우저 전체화면이 아니라 화면 가운데로 키운 팝업이다 —
+               경보가 뜨면 자동으로 접혀야 하는데 브라우저 전체화면은 그 제어가 안 된다 -->
+          <button type="button" class="scene-fs" id="sceneFs" aria-label="전체화면" title="전체화면">
+            <svg class="ico-in" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3"></path></svg>
+            <svg class="ico-out" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3m8 0v-3a2 2 0 0 1 2-2h3"></path></svg>
           </button>
-          <div class="rooms" id="f1Rooms"><span class="empty">태그 대기 중…</span></div>
-        </div>
-        <div class="floor pending">
-          <button class="fhead" type="button"><span class="fnum">f2</span>
-            <span class="fmeta"><span class="t">2층</span><span class="s">단층 맵</span></span>
-            <span class="pending-tag">데이터 대기</span></button>
-        </div>
-        <div class="floor pending">
-          <button class="fhead" type="button"><span class="fnum">f3</span>
-            <span class="fmeta"><span class="t">3층</span><span class="s">단층 맵</span></span>
-            <span class="pending-tag">데이터 대기</span></button>
-        </div>
-        <div class="floor pending">
-          <button class="fhead" type="button"><span class="fnum">f4</span>
-            <span class="fmeta"><span class="t">4층</span><span class="s">단층 맵</span></span>
-            <span class="pending-tag">데이터 대기</span></button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 중앙: 뷰포트 -->
-  <div class="col col-center">
-    <div class="card mapcard">
-      <h2>실시간 뷰 <span id="viewMode" style="color:var(--faint);font-weight:400">2D 개요</span></h2>
-      <div class="viewport" id="viewport">
-        <div class="v3d">
-          <!-- 스플랫 캔버스가 여기에 붙는다(assets/js/scene3d.js) -->
-          <div class="v3d-stage" id="scene3dStage"></div>
-          <div class="scene-tag">
-            <span class="badge3d">3D 실사 뷰</span>
-            <span class="badge3d" id="scene3dWho" style="background:rgba(248,81,73,.18);color:#ffc7c3">—</span>
+          <div class="scene-empty" id="sceneEmpty">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7Z"></path><path d="m3 7 9 5 9-5M12 12v10"></path></svg>
+            <div id="sceneStatus">3DGS · 영상 뷰어</div>
+            <div class="dim" id="sceneHint"></div>
           </div>
-          <!-- 스텁 안내문·DOM 마커는 폐기: F3에서 실제 뷰어가 들어와 마커도 씬 안에서 그린다 -->
-          <div class="scene-note" id="scene3dStatus"></div>
         </div>
-        <div class="v2d" id="v2d">
-          <span class="pip-label">2D 개요</span>
-          <canvas id="map"></canvas>
+        <!-- 전체화면일 때 뷰어가 body로 옮겨간다(패널의 backdrop-filter가 fixed 기준점을
+             만들어 패널 안에서는 화면 전체를 못 덮는다). 그동안 목록이 위로 튀지 않게 자리를 잡아 둔다 -->
+        <div class="scene-frame-hold" id="sceneHold" hidden></div>
+        <div class="section-head">
+          <span class="section-title">확인된 사고</span>
+          <span class="section-meta" id="sceneCount">—</span>
         </div>
-        <div class="banner">
-          <div class="bell">🔔</div>
-          <div class="k" id="bannerTitle">—<small id="bannerSub">—</small></div>
-          <button class="bx" id="bannerClose" aria-label="배너 접기">✕</button>
-        </div>
+        <div class="scene-list" id="sceneList"></div>
       </div>
-      <div class="maplegend">
-        <span><i class="sw" style="background:var(--ok)"></i>정상</span>
-        <span><i class="sw" style="background:var(--alarm)"></i>경보</span>
-        <span><i class="sw" style="background:var(--sel)"></i>선택</span>
-        <span><i class="sw" style="background:var(--offline)"></i>오프라인</span>
-        <span><i class="sw" style="background:var(--hazard);border-radius:2px"></i>위험구역</span>
-        <span>원 = 오차 반경(err.xy)</span>
-      </div>
-      <!-- 데모 주입: 데이터셋 클립을 실제 ingest 경로로 흘린다. 경보는 감지기가 낸다. -->
-      <div class="demobar" id="demobar">
-        <span class="hint">클립 주입:</span>
-        <!-- 클립 목록은 /clips 응답으로, 태그 버튼은 /tags 응답으로 dashboard.js가 채운다 -->
-        <select id="clipPick" aria-label="주입할 데이터셋 클립"></select>
-      </div>
-      <div class="demostatus" id="clipStatus" role="status" aria-live="polite"></div>
-    </div>
-  </div>
 
-  <!-- 우: 알림 로그 -->
-  <div class="col col-right">
-    <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:0;">
-      <h2>알림 로그 <span id="logCount" style="color:var(--faint);font-weight:400"></span></h2>
-      <div class="log" id="log"><span class="empty">아직 경보 없음</span></div>
+      <div class="tabpane" id="paneTags" role="tabpanel">
+        <div class="floorpick">
+          <button type="button" class="floorpick-btn" id="floorToggle" aria-expanded="false">
+            <span class="floor-badge lg" id="floorId">F1</span>
+            <span class="floorpick-text">
+              <span class="floorpick-name" id="floorName">1층 · 요양생활실</span>
+              <span class="floorpick-meta" id="floorMeta">—</span>
+            </span>
+            <svg class="caret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5d5d60" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+          </button>
+          <div class="floormenu" id="floorMenu" hidden></div>
+        </div>
+
+        <div class="section-head">
+          <span class="section-title">태그 목록</span>
+          <span class="section-meta" id="countLabel">—</span>
+        </div>
+
+        <div class="counts">
+          <span class="count"><span class="count-num" id="cOnline">0</span><span class="count-label">연결</span></span>
+          <span class="count is-muted"><span class="count-num" id="cOffline">0</span><span class="count-label">끊김</span></span>
+          <span class="count" id="cEventWrap"><span class="count-num" id="cEvent">0</span><span class="count-label">경보</span></span>
+        </div>
+
+        <div class="divider"></div>
+        <div class="roster" id="roster">
+          <div class="empty" id="rosterEmpty">스트림 연결을 기다리는 중…</div>
+        </div>
+      </div>
     </div>
+  </section>
+
+  <!-- ══ 우: 경보 · 이벤트 로그 ══ -->
+  <section class="panel panel-right" id="panelRight">
+    <div class="panel-head">
+      <button type="button" class="icon-btn" id="toggleRight" aria-label="우측 패널 최소화">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M15 3v18"></path></svg>
+      </button>
+      <span class="spacer"></span>
+      <span class="panel-count" id="eventCountLabel">0건</span>
+    </div>
+    <div class="panel-body">
+      <h1 class="panel-title">이벤트</h1>
+
+      <!-- 진행 중 경보 -->
+      <div class="alert-card" id="alertCard" role="alert" aria-live="assertive" hidden>
+        <div class="alert-top">
+          <span class="alert-icon">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+          </span>
+          <span class="alert-kicker">낙상 감지 · 확인 요청</span>
+          <span class="spacer"></span>
+          <span class="alert-time" id="alertTime"></span>
+          <!-- 판정 없이 경보만 끈다. 이 건은 24시간 뒤 미판정이 된다(spec operation 02 §3) -->
+          <button type="button" class="alert-x" id="alertDismiss" aria-label="판정 없이 경보 끄기" title="판정 없이 경보 끄기"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+        </div>
+        <div class="alert-head" id="alertHead"></div>
+        <div class="alert-facts">
+          <div><div class="alert-key">위치</div><span id="alertWhere"></span></div>
+          <div><div class="alert-key">충격</div><span id="alertPeak"></span></div>
+        </div>
+        <!-- 판정 없이 끄는 길은 없다. 이 선택이 기록의 보관기간과 사건 목록을 가른다(spec 11 §3) -->
+        <div class="alert-judge">
+          <button type="button" class="alert-resolve is-confirm" id="resolveConfirm">낙상</button>
+          <button type="button" class="alert-resolve" id="resolveFalse">오보</button>
+        </div>
+      </div>
+
+      <div class="section-title pad">이벤트 로그</div>
+      <!-- 판정이 밀린 건을 골라 보는 자리. '미판정'이 관제사의 할 일 목록이 된다 -->
+      <div class="seg" id="eventFilter" role="tablist" aria-label="이벤트 로그 필터">
+        <button type="button" class="seg-btn is-active" role="tab" aria-selected="true" data-filter="all">전체</button>
+        <button type="button" class="seg-btn" role="tab" aria-selected="false" data-filter="judged">판정</button>
+        <button type="button" class="seg-btn" role="tab" aria-selected="false" data-filter="pending">미판정</button>
+      </div>
+      <div class="eventlog" id="eventLog"></div>
+    </div>
+  </section>
+
+  <!-- ══ 하단: 범례 + 데모 조작 ══ -->
+  <footer class="footbar">
+    <span class="legend"><i class="swatch is-ok"></i>정상</span>
+    <span class="legend"><i class="swatch is-alarm"></i>낙상</span>
+    <span class="legend"><i class="swatch is-off"></i>끊김</span>
+    <span class="legend"><i class="swatch is-err"></i>오차 반경</span>
+    <span class="legend"><i class="swatch is-priv"></i>사생활 구역 — 마커 없음이 정상</span>
+    <span class="legend-gap"></span>
+    <span class="demo-label">DEMO</span>
+    <button type="button" class="demo-btn" id="injectFall">복도 낙상 주입</button>
+    <button type="button" class="demo-btn" id="injectPrivacy">화장실 낙상 주입</button>
+    <span class="demo-note" id="demoNote" role="status" aria-live="polite"></span>
+  </footer>
+
+  <!-- 경보 중 화면 가장자리가 붉게 뛴다. 투명도만 움직여 도면 성능에 영향이 없다 -->
+  <div class="alarm-flash" id="alarmFlash" aria-hidden="true"></div>
+
+</div>
+
+<!-- 전체화면 뷰어 뒤를 덮는 판. 뷰어가 여기 형제로 옮겨온다 -->
+<div class="scene-backdrop" id="sceneBackdrop" hidden></div>
+
+<!-- 판정과 삭제 확인이 같은 창을 쓴다. 내용과 버튼은 console.js가 채운다 -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <button type="button" class="modal-close" id="modalClose" aria-label="닫기">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+    </button>
+    <div class="modal-kicker" id="modalKicker"></div>
+    <div class="modal-head" id="modalTitle"></div>
+    <div class="modal-note" id="modalNote"></div>
+    <div class="modal-acts" id="modalActs"></div>
   </div>
 </div>
 
-<!-- 경보 팝업 -->
-<div class="overlay" id="overlay">
-  <div class="popup" id="popup" role="alert" aria-live="assertive">
-    <button class="close" id="popClose" aria-label="팝업 감추기 (경보는 유지)">✕</button>
-    <div class="top">
-      <div class="bell" id="popIcon" aria-hidden="true">🚨</div>
-      <div>
-        <div class="k" id="popKind">낙상 감지</div>
-        <div class="h" id="popWho">—</div>
-        <div class="w" id="popWhere">—</div>
-        <div class="time" id="popTime">—</div>
-      </div>
-    </div>
-    <div class="acts">
-      <button class="btn primary" id="popView3d">3D 실사 뷰 열기</button>
-      <button class="btn" id="popDismiss">경보 종료</button>
+<!-- 마커 틀. 자바스크립트가 이걸 복제해 쓴다 -->
+<template id="tplMarker">
+  <div class="marker">
+    <!-- 바깥은 도면 배율을 그대로 받아 위치를 잡고, 안쪽이 그 배율을 되감아 크기를 고정한다 -->
+    <div class="marker-fixed">
+      <div class="marker-err"></div>
+      <div class="marker-ping"></div>
+      <div class="marker-dot"></div>
+      <div class="marker-tag"><span class="marker-name"></span><span class="marker-state"></span></div>
     </div>
   </div>
-</div>
+</template>
+
+<template id="tplRoster">
+  <button type="button" class="roster-item">
+    <span class="dot"></span>
+    <span class="roster-text"><span class="roster-name"></span><span class="roster-detail"></span></span>
+    <span class="pill"></span>
+  </button>
+</template>
+
+<template id="tplEvent">
+  <!-- 카드 전체가 판정 창을 여는 버튼이고, 우상단 X만 따로 뗀다(버튼 안에 버튼을 못 넣는다) -->
+  <div class="event-wrap">
+  <button type="button" class="event">
+    <span class="event-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+    </span>
+    <span class="event-row">
+      <span class="event-title"></span>
+      <span class="event-time"></span>
+    </span>
+    <span class="event-row">
+      <span class="event-status"></span>
+      <span class="event-where"></span>
+      <span class="event-meta"></span>
+    </span>
+  </button>
+  <button type="button" class="event-x" aria-label="기록 삭제" title="기록 삭제"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+  </div>
+</template>
+
+<!-- 확인된 사고 한 줄. 3D가 있으면 누르면 뜨고, 없으면 변환 페이지로 보낸다 -->
+<template id="tplScene">
+  <div class="scene-item">
+    <div class="scene-row">
+      <button type="button" class="scene-open">
+        <span class="scene-text">
+          <span class="scene-name"></span>
+          <span class="scene-detail"></span>
+        </span>
+        <span class="pill scene-badge"></span>
+      </button>
+      <button type="button" class="scene-toggle" aria-expanded="false" aria-label="상세 보기">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+    </div>
+    <!-- 상세는 펼칠 때 전문을 받아 채운다. 궤적·가속도가 건당 50KB라 미리 안 받는다 -->
+    <div class="scene-body" hidden></div>
+  </div>
+</template>
+
+<template id="tplFloor">
+  <button type="button" class="floormenu-item">
+    <span class="floormenu-id"></span>
+    <span class="floormenu-name"></span>
+    <span class="floormenu-badge"></span>
+  </button>
+</template>
 
 </body>
 </html>

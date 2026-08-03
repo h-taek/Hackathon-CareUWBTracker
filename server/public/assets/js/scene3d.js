@@ -1,8 +1,9 @@
-// 대시보드 3D 실사 패널(F3). 가우시안 스플랫 씬을 띄우고 낙상 위치에 마커를 찍는다.
-// 별도 언리얼 창이 아니라 대시보드 안에서 렌더한다(plan/07). 성능 게이트는 2026-07-26 통과.
+// 가우시안 스플랫 씬을 띄우고 낙상 위치에 마커를 찍는다. 별도 언리얼 창이 아니라 웹에서
+// 렌더한다(plan/07). 성능 게이트는 2026-07-26 통과.
 //
-// dashboard.js(클래식 스크립트)가 동적 import로 불러 쓴다. 여기서만 ESM인 이유는
-// three·gaussian-splats-3d가 모듈이라서다 — 임포트 맵은 index.html에 있다.
+// 지금은 관제 화면에서 부르지 않는다 — 3D는 실시간 관제가 아니라 사고 이후 기록에만 쓴다(F8).
+// 쓰는 곳은 /recon(splat-view.js 경유)이고, 사고 상세 화면(R5)이 붙을 때 다시 여기로 온다.
+// ESM인 이유는 three·gaussian-splats-3d가 모듈이라서다 — 임포트 맵은 쓰는 쪽 페이지에 있다.
 
 import * as THREE from 'three';
 import * as GS from '@mkkellogg/gaussian-splats-3d';

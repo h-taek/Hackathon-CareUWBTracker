@@ -51,22 +51,49 @@ export class Simulator extends EventEmitter {
     this.timer = null;
     this.frozen = new Set();
 
-    // 가짜 입주자 태그. 각자 맵 안을 완만히 배회한다.
-    const [x0, x1] = this.bounds.x;
-    const [y0, y1] = this.bounds.y;
+    // 가짜 입주자 태그. 각자 통행 구역 안을 완만히 배회한다.
     this.tags = [
       { id: 'tag-101', name: '김OO' },
       { id: 'tag-102', name: '이OO' },
       { id: 'tag-103', name: '박OO' },
-    ].map((t) => ({
-      ...t,
-      x: rand(x0 + 1, x1 - 1),
-      y: rand(y0 + 1, y1 - 1),
-      // 목표 지점을 향해 걷다가 도착하면 새 목표를 뽑는 웨이포인트 방식.
-      tx: rand(x0 + 1, x1 - 1),
-      ty: rand(y0 + 1, y1 - 1),
-      speed: rand(0.4, 0.9), // m/s, 노인 보행 속도대
-    }));
+    ].map((t) => {
+      const start = this.waypoint();
+      return {
+        ...t,
+        x: start.x,
+        y: start.y,
+        // 목표 지점을 향해 걷다가 도착하면 새 목표를 뽑는 웨이포인트 방식.
+        ...this.waypointAsTarget(),
+        speed: rand(0.4, 0.9), // m/s, 노인 보행 속도대
+      };
+    });
+  }
+
+  /**
+   * 다음 목표 지점. 맵이 `walkable` 구역을 선언했으면 그 안에서만 뽑는다 —
+   * 도면이 실제 평면도가 된 뒤로는 경계 안이라고 걸어도 되는 게 아니다.
+   * 안 그러면 배경 태그가 벽을 통과해 창고나 사생활 구역으로 걸어 들어간다.
+   */
+  waypoint(): { x: number; y: number } {
+    const walkable = (this.map.zones || []).filter((z) => z.walkable);
+    if (walkable.length === 0) {
+      const [x0, x1] = this.bounds.x;
+      const [y0, y1] = this.bounds.y;
+      return { x: rand(x0 + 1, x1 - 1), y: rand(y0 + 1, y1 - 1) };
+    }
+    const z = walkable[Math.floor(Math.random() * walkable.length)]!;
+    const [rx, ry, rw, rh] = z.rect;
+    // 구역 안쪽으로 조금 물러나 뽑는다. 딱 경계면 벽선 위에 마커가 앉는다.
+    const inset = 0.35;
+    return {
+      x: rand(rx + Math.min(inset, rw / 3), rx + rw - Math.min(inset, rw / 3)),
+      y: rand(ry + Math.min(inset, rh / 3), ry + rh - Math.min(inset, rh / 3)),
+    };
+  }
+
+  private waypointAsTarget(): { tx: number; ty: number } {
+    const p = this.waypoint();
+    return { tx: p.x, ty: p.y };
   }
 
   /** 주입 중인 태그를 시뮬 대상에서 뺀다(좌표는 그 자리에 남는다). */
@@ -105,8 +132,9 @@ export class Simulator extends EventEmitter {
       const dist = Math.hypot(dx, dy);
       if (dist < 0.3) {
         // 도착 -> 새 목표.
-        tag.tx = rand(x0 + 1, x1 - 1);
-        tag.ty = rand(y0 + 1, y1 - 1);
+        const next = this.waypoint();
+        tag.tx = next.x;
+        tag.ty = next.y;
       } else {
         const stepLen = tag.speed * dt;
         tag.x += (dx / dist) * stepLen;
