@@ -105,7 +105,8 @@ test('저장은 임시 파일을 거쳐 원자적으로 바꾼다 — .tmp가 �
   store.save(record('evt-1', 1000));
 
   assert.deepEqual(fs.readdirSync(store.dir), ['evt-1']);
-  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')), ['record.json']);
+  // 레코드와 요약 캐시 둘뿐이다. .tmp가 남았다면 rename이 안 끝난 것이다.
+  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')).sort(), ['record.json', 'summary.json']);
 });
 
 test('첨부가 들어와도 목록은 record.json만 이벤트로 센다', () => {

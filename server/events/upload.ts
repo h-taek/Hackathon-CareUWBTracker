@@ -1,10 +1,10 @@
-// 현장 영상 업로드 수신(R-2). `POST /events/<eventId>/attachments`
+// 현장 영상 업로드 수신(R-2). `POST /incidents/<eventId>/attachments`
 //
 // multipart를 쓰지 않는다. 본문은 파일 바이트 그대로이고 메타는 질의 문자열로 받는다.
 // 영상이 수백 MB라 통째로 메모리에 올리면 안 되는데, 스트리밍 multipart 파서를 직접 쓰면
 // 경계 처리에서 실수하기 쉽다. 바이트를 그대로 흘리면 파서가 아예 필요 없다.
 //
-//   POST /events/<eventId>/attachments?kind=video&capturedAt=<ms>&name=<파일명>
+//   POST /incidents/<eventId>/attachments?kind=video&capturedAt=<ms>&name=<파일명>
 //        &scaleLabel=<기준물체>&scaleMm=<실측 mm>
 //   Content-Type: video/mp4   (본문 = 파일 바이트)
 
@@ -18,9 +18,9 @@ export interface UploadResult {
   body: unknown;
 }
 
-/** `/events/<eventId>/attachments`면 eventId를, 아니면 null. */
+/** `/incidents/<eventId>/attachments`면 eventId를, 아니면 null. */
 export function parseAttachmentPath(pathname: string): string | null {
-  const match = /^\/events\/([^/]+)\/attachments\/?$/.exec(pathname);
+  const match = /^\/incidents\/([^/]+)\/attachments\/?$/.exec(pathname);
   if (!match) return null;
   try {
     return decodeURIComponent(match[1]);
@@ -30,11 +30,11 @@ export function parseAttachmentPath(pathname: string): string | null {
 }
 
 /**
- * `POST /events/<eventId>/attachments/<attachmentId>/recon`이면 둘을, 아니면 null.
+ * `POST /incidents/<eventId>/attachments/<attachmentId>/recon`이면 둘을, 아니면 null.
  * 실패한 재구성을 다시 걸거나, 자동 착수를 꺼둔 자리에서 손수 거는 데 쓴다.
  */
 export function parseReconTriggerPath(pathname: string): { eventId: string; attachmentId: string } | null {
-  const match = /^\/events\/([^/]+)\/attachments\/([^/]+)\/recon\/?$/.exec(pathname);
+  const match = /^\/incidents\/([^/]+)\/attachments\/([^/]+)\/recon\/?$/.exec(pathname);
   if (!match) return null;
   const decode = (segment: string) => {
     try {

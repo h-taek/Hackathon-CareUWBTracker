@@ -10,6 +10,8 @@
 // 파일 쓰기는 하지 않는다. 닫힌 레코드를 onRecord로 넘길 뿐이고, 어디에 어떻게 남기는지는
 // store.ts가 쥔다.
 
+import type { OutcomeFields } from './outcome.ts';
+
 export interface TrackPoint {
   ts: number;
   x: number;
@@ -23,7 +25,7 @@ export interface AccelSample {
   z: number;
 }
 
-export interface EventRecord {
+export interface EventRecord extends OutcomeFields {
   eventId: string;
   tagId: string;
   /** 충격이 일어난 시각. 경보의 ts를 그대로 쓴다(spec 03 §2). */

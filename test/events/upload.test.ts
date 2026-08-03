@@ -20,23 +20,25 @@ import type { EventRecord } from '../../server/events/recorder.ts';
 const params = (query = '') => new URLSearchParams(query);
 
 test('업로드 경로만 골라낸다', () => {
-  assert.equal(parseAttachmentPath('/events/evt-1/attachments'), 'evt-1');
-  assert.equal(parseAttachmentPath('/events/evt-1/attachments/'), 'evt-1');
-  assert.equal(parseAttachmentPath('/events/evt-1'), null);
+  assert.equal(parseAttachmentPath('/incidents/evt-1/attachments'), 'evt-1');
+  assert.equal(parseAttachmentPath('/incidents/evt-1/attachments/'), 'evt-1');
+  assert.equal(parseAttachmentPath('/incidents/evt-1'), null);
   assert.equal(parseAttachmentPath('/events'), null);
-  assert.equal(parseAttachmentPath('/events/evt-1/attachments/att-1'), null, '파일 내려주기 경로다');
+  assert.equal(parseAttachmentPath('/incidents/evt-1/attachments/att-1'), null, '파일 내려주기 경로다');
+  // 첨부는 사건에만 붙는다. 감지 이벤트는 24시간이라 거기 붙이면 같이 사라진다.
+  assert.equal(parseAttachmentPath('/events/evt-1/attachments'), null, '이벤트에는 첨부가 없다');
 });
 
 test('파일 내려주기 경로와 재구성 걸기 경로를 구분한다', () => {
-  assert.deepEqual(parseAttachmentFilePath('/events/evt-1/attachments/att-1'), {
+  assert.deepEqual(parseAttachmentFilePath('/incidents/evt-1/attachments/att-1'), {
     eventId: 'evt-1', attachmentId: 'att-1',
   });
-  assert.equal(parseAttachmentFilePath('/events/evt-1/attachments/att-1/recon'), null);
+  assert.equal(parseAttachmentFilePath('/incidents/evt-1/attachments/att-1/recon'), null);
 
-  assert.deepEqual(parseReconTriggerPath('/events/evt-1/attachments/att-1/recon'), {
+  assert.deepEqual(parseReconTriggerPath('/incidents/evt-1/attachments/att-1/recon'), {
     eventId: 'evt-1', attachmentId: 'att-1',
   });
-  assert.equal(parseReconTriggerPath('/events/evt-1/attachments/att-1'), null);
+  assert.equal(parseReconTriggerPath('/incidents/evt-1/attachments/att-1'), null);
 });
 
 test('kind 기본값은 video다', () => {

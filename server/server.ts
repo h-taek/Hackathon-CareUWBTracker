@@ -27,9 +27,12 @@ import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/
 import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
 import { createStaticHandler } from './static/handler.ts';
-import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS } from './events/recorder.ts';
-import { createEventStore } from './events/store.ts';
-import { routeEvents } from './events/routes.ts';
+import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS, type EventRecord } from './events/recorder.ts';
+import { createEventStore, isValidEventId } from './events/store.ts';
+import { routeEvents, routeIncidents, parseOutcomePath, parsePurgeWorkdirPath } from './events/routes.ts';
+import { applyJudgment, isJudgment, outcomeOf, wantsIncident, type Judgment, type OutcomeFields } from './events/outcome.ts';
+import { createRetention, retentionOptionsFromEnv } from './events/retention.ts';
+import { createAuditLog, createCollectTracker } from './lib/audit.ts';
 import { attachmentLimitFromEnv, createAttachmentStore } from './events/attachments.ts';
 import { handleAttachmentUpload, parseAttachmentPath, parseReconTriggerPath } from './events/upload.ts';
 import {
@@ -99,16 +102,54 @@ const clients = new Set<ServerResponse>();
 // 사고 기록(R-1) — 경보를 SSE로 뿌리고 끝내지 않고 전후 궤적·가속도와 함께 파일로 남긴다.
 // 여기에 남은 eventId가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
 const recorderConfig = { ...RECORDER_DEFAULTS, ...recorderOptionsFromEnv() };
-const eventStore = createEventStore(
-  process.env.EVENTS_DIR || path.join(import.meta.dirname, 'data', 'events'),
-);
+const dataDir = process.env.DATA_DIR || path.join(import.meta.dirname, 'data');
+const eventStore = createEventStore(process.env.EVENTS_DIR || path.join(dataDir, 'events'));
+// 확인 사건. **감지 이벤트와 다른 폴더다**(spec operation 02 §2). 판정이 confirmed가 되면
+// 여기 사본이 생기고, 그 뒤로 둘의 삭제·보관기간은 서로 관계가 없다.
+const incidentStore = createEventStore(process.env.INCIDENTS_DIR || path.join(dataDir, 'incidents'));
+
+// 처리사실 확인자료·접속기록(spec 11 §4.6). 좌표는 지우고 이 기록은 남긴다 —
+// 위치정보법 제16조②는 보존을 요구하고, 미이행이 형사처벌 대상이다.
+const auditLog = createAuditLog(process.env.AUDIT_DIR || path.join(dataDir, 'audit'));
+const collectTracker = createCollectTracker(auditLog);
+
+/**
+ * 아직 파일로 안 닫힌 경보에 대한 판정.
+ *
+ * 기록은 후행 창(10초)이 찬 뒤에 닫히는데, 관제사가 그 전에 경보를 끄면 갱신할 레코드가
+ * 아직 없다. 판정을 여기 담아 뒀다가 레코드가 닫힐 때 같이 심는다.
+ */
+const pendingJudgments = new Map<string, OutcomeFields>();
+
+/**
+ * 아직 파일로 안 닫힌 경보의 원본. 기록이 닫히기 전에 판정이 들어와도 사건을 **바로**
+ * 만들려면 시각·구역·충격이 필요한데, 그것을 쥔 것이 이 경보 객체뿐이다.
+ * 궤적과 가속도는 나중에 기록이 닫힐 때 채워 넣는다.
+ */
+const liveAlerts = new Map<string, FallEvent>();
+
 const eventRecorder = createEventRecorder({
   ...recorderConfig,
   onRecord: (record) => {
-    eventStore.save(record);
+    // 관제사가 기록이 닫히기 전에 판정했으면 그것부터 얹는다. 안 그러면 판정이 사라진다.
+    const pending = pendingJudgments.get(record.eventId);
+    if (pending) pendingJudgments.delete(record.eventId);
+    const saved = pending ? { ...record, ...pending } : record;
+    eventStore.save(saved);
+    liveAlerts.delete(record.eventId);
+    // 판정이 먼저 들어와 사건을 이미 만들었으면, 이제 확정된 궤적·가속도를 채워 넣는다.
+    // 첨부는 건드리지 않는다 — 그 사이에 영상이 붙었을 수 있다.
+    if (incidentStore.read(record.eventId)) {
+      incidentStore.patch(record.eventId, { track: saved.track, accel: saved.accel, alert: saved.alert });
+      console.log(`[incident] ${record.eventId} 궤적 ${saved.track.length}점 · 가속도 ${saved.accel.length}표본 채움`);
+    } else if (pending?.outcome && isJudgment(pending.outcome)) {
+      // 경보 객체가 없어 사건을 못 만들었던 경우의 보루.
+      syncIncident(record.eventId, saved, pending.outcome, pending.resolvedBy ?? OPERATOR, pending.resolvedAt ?? Date.now());
+    }
     console.log(
       `[event] 기록 ${record.eventId} (${record.tagId})`
-      + ` 궤적 ${record.track.length}점 · 가속도 ${record.accel.length}표본 → ${eventStore.dir}`,
+      + ` 궤적 ${record.track.length}점 · 가속도 ${record.accel.length}표본`
+      + `${pending ? ` · 판정 ${pending.outcome}` : ''} → ${eventStore.dir}`,
     );
   },
   // 디스크가 차거나 권한이 없어도 관제는 계속 돌아야 한다. 기록만 잃고 경보는 이미 나갔다.
@@ -120,7 +161,8 @@ const eventRecorder = createEventRecorder({
 
 // 현장 영상 첨부(R-2)와 재구성 파이프라인(R-3·R-4).
 const attachmentLimitBytes = attachmentLimitFromEnv();
-const eventAttachments = createAttachmentStore(eventStore, { limitBytes: attachmentLimitBytes });
+// 영상·3D는 **사건에** 붙는다. 이벤트는 24시간이라 거기 붙이면 같이 사라진다.
+const eventAttachments = createAttachmentStore(incidentStore, { limitBytes: attachmentLimitBytes });
 // 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
 // 실패 기록만 쌓인다. 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 건다.
 const reconAuto = process.env.RECON_AUTO !== '0';
@@ -133,8 +175,24 @@ const reconTuning = {
 };
 const reconRunner = createReconRunner({
   ...reconTuning,
-  store: eventStore,
+  store: incidentStore,
   attachments: eventAttachments,
+  // 산출물이 나온 순간 중간물은 목적을 달성한다. 한 건에 471MB라 바로 거둔다(spec 11 §4.5).
+  onDone: (eventId) => {
+    for (const action of retention.purgeWorkdir(eventId)) {
+      console.log(`[retention] ${action.eventId} ${action.action} · ${action.reason}`
+        + ` (${(action.bytes / 1024 / 1024).toFixed(1)}MB)`);
+    }
+  },
+});
+
+// 보관기간 파기(spec 11 §7). 기동 시 한 번 훑고 그 뒤로 주기 실행이다.
+const retention = createRetention({
+  ...retentionOptionsFromEnv(),
+  store: eventStore,
+  incidents: incidentStore,
+  audit: auditLog,
+  facilityDir: process.env.FACILITY_DIR || path.join(dataDir, 'facility'),
 });
 
 function broadcast(event: 'position' | 'alert', data: unknown): void {
@@ -142,9 +200,132 @@ function broadcast(event: 'position' | 'alert', data: unknown): void {
   for (const response of clients) response.write(frame);
 }
 
+/**
+ * 좌표에 구역 라벨을 붙여 내보낸다. 화면은 마커와 대상 목록에 구역명을 쓰는데 측위 결과
+ * 자체에는 구역이 없다 — 맵을 쥐고 있는 건 서버뿐이라 여기서 채운다. 경보(alert)는
+ * 이미 같은 방식으로 zone을 달고 나가므로 둘의 라벨이 어긋나지 않는다.
+ *
+ * 표시용 보강이라 기록·로그 경로는 건드리지 않는다. 사생활 구역 필터를 여기에 두면 안 된다 —
+ * 방출 직전이라 그때는 이미 좌표가 레코드에 들어간 뒤다(계약 spec 03 §1.1).
+ */
+function broadcastPosition(position: unknown): void {
+  const pos = (position as { pos?: { x: number; y: number } | null } | null)?.pos;
+  if (!position || !pos) return broadcast('position', position);
+  broadcast('position', { ...(position as object), zone: zoneAt(map, pos.x, pos.y) });
+}
+
 const handlePositioning = createPositioningHandler({
   ...anchorConfig,
 });
+
+/**
+ * 낙상 경보가 걸린 채 아직 관제사가 끄지 않은 태그.
+ *
+ * 경보를 끝내는 경로는 관제사 조작 하나뿐이고(spec 03 §3), 서버는 그걸 알 방법이 없었다 —
+ * `경보 종료`가 화면 안에서만 일어났기 때문이다. 그래서 클립 재생이 끝나는 순간 시뮬이
+ * 태그를 다시 걷게 만들었다. 화면에는 경보가 떠 있는데 마커는 산책하는 상태였다.
+ */
+const alertedTags = new Set<string>();
+
+/** 행위자. 관제 화면 인증이 아직 없어 고정값이다(spec 11 §8에 미구현으로 적어 둔다). */
+const OPERATOR = 'operator';
+
+/**
+ * 판정을 레코드에 심는다. 경보 종료(최초 판정)와 번복이 같은 길을 쓴다.
+ *
+ * `allowPending`은 경보 종료 쪽에만 준다. 기록은 후행 창 10초가 찬 뒤에 닫히는데
+ * 관제사가 그 전에 끄는 일이 흔하다 — 그때는 판정을 들고 있다가 기록이 닫힐 때 심는다.
+ * 번복은 이미 닫힌 기록을 고치는 것이라 없는 eventId면 404가 맞다.
+ */
+function judge(
+  eventId: string,
+  outcome: Judgment,
+  by: string,
+  { allowPending = false }: { allowPending?: boolean } = {},
+): { ok: boolean; reason: string; status: number } {
+  if (!isValidEventId(eventId)) return { ok: false, reason: `잘못된 eventId: ${eventId}`, status: 400 };
+
+  const record = eventStore.read(eventId);
+  if (!record) {
+    if (!allowPending) return { ok: false, reason: `없는 이벤트: ${eventId}`, status: 404 };
+    const at = Date.now();
+    const fields: OutcomeFields = {
+      outcome,
+      resolvedAt: at,
+      resolvedBy: by,
+      outcomeHistory: [{ at, from: 'detected', to: outcome, by }],
+    };
+    pendingJudgments.set(eventId, fields);
+
+    // **사건은 지금 만든다.** 기록이 닫히기를 기다리면 12초 뒤에야 목록에 뜬다 —
+    // 판정한 사람 눈에는 아무 일도 안 일어난 것처럼 보인다. 궤적·가속도는 비워 두고
+    // 기록이 닫힐 때 채운다(onRecord).
+    const alert = liveAlerts.get(eventId);
+    if (alert) {
+      syncIncident(eventId, { ...stubFrom(alert), ...fields }, outcome, by, at);
+    }
+    return { ok: true, reason: '', status: 200 };
+  }
+
+  const at = Date.now();
+  const result = applyJudgment(record, outcome, by, at, retention.config.undoWindowMs);
+  if (!result.ok || !result.patch) return { ok: false, reason: result.reason, status: 409 };
+
+  const from = outcomeOf(record);
+  const next = eventStore.patch(eventId, result.patch);
+  syncIncident(eventId, next ?? { ...record, ...result.patch }, outcome, by, at);
+  auditLog.record({
+    at,
+    kind: 'access',
+    tagId: record.tagId,
+    actor: by,
+    detail: `${eventId} 판정 ${from} → ${outcome}`,
+  });
+  console.log(`[event] ${eventId} 판정 ${from} → ${outcome} (${by})`);
+  return { ok: true, reason: '', status: 200 };
+}
+
+/** 아직 안 닫힌 경보로 만드는 뼈대 레코드. 궤적·가속도는 기록이 닫힐 때 채워진다. */
+function stubFrom(alert: FallEvent): EventRecord {
+  return {
+    eventId: alert.eventId,
+    tagId: alert.tagId,
+    ts: alert.ts,
+    alert: { ...alert } as Record<string, unknown>,
+    track: [],
+    accel: [],
+    attachments: [],
+  };
+}
+
+/**
+ * 판정에 맞춰 사건 사본을 만들거나 지운다.
+ *
+ * **사본이지 참조가 아니다.** 원본 이벤트를 지워도 사건은 온전히 남고, 사건을 지워도
+ * 로그는 그대로다(spec operation 02 §2). 사건 쪽에는 첨부가 붙으므로 이미 있으면
+ * 덮어쓰지 않는다 — 덮어쓰면 붙여둔 영상·3D 목록이 날아간다.
+ */
+function syncIncident(
+  eventId: string,
+  record: EventRecord,
+  outcome: Judgment,
+  by: string,
+  at: number,
+): void {
+  const had = incidentStore.read(eventId);
+  if (wantsIncident(outcome)) {
+    if (had) return;
+    incidentStore.save({ ...record, attachments: [] });
+    auditLog.record({ at, kind: 'access', tagId: record.tagId, actor: by, detail: `${eventId} 사건 기록 생성` });
+    console.log(`[incident] ${eventId} 사건 기록 생성 → ${incidentStore.dir}`);
+    return;
+  }
+  // 낙상 → 오보로 뒤집혔다. 사건도 같이 지운다(붙어 있던 영상·3D째).
+  if (!had) return;
+  incidentStore.remove(eventId);
+  auditLog.record({ at, kind: 'access', tagId: record.tagId, actor: by, detail: `${eventId} 사건 기록 파기 · 오보로 번복` });
+  console.log(`[incident] ${eventId} 사건 기록 파기 (오보로 번복)`);
+}
 
 // 삼각측량이 해 없음으로 클램프됐을 때 알리는 경고. 50Hz로 쏟아지면 로그가 못 쓰게 되므로
 // 태그별로 간격을 둔다. 시각은 payload.ts를 쓴다 — 주입 재생과 실측이 같은 기준으로 찍힌다.
@@ -180,11 +361,14 @@ function noteSingleAnchorEstimate(
 }
 
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
+  // 확인자료의 '수집'. 프레임마다가 아니라 세션 단위로 남는다 — 조문이 요구하는 것은
+  // 처리 사실이지 프레임 이력이 아니다(spec 11 §4.6).
+  if (payload.tagId) collectTracker.touch(payload.tagId);
   const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
   warnIfGeometryBroken(rawPosition);
   noteSingleAnchorEstimate(rawPosition);
   const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
-  if (position) broadcast('position', position);
+  if (position) broadcastPosition(position);
   // 경보보다 먼저 넣는다. 판정은 정점 뒤 1.5초에 나므로, 경보가 등록되는 시점에는
   // 이 프레임까지가 이미 버퍼에 들어 있어야 한다.
   eventRecorder.observe(payload, position);
@@ -202,10 +386,24 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
   }
   for (const event of fallEvents) {
     if (event.pos) event.zone = zoneAt(map, event.pos.x, event.pos.y);
+    // 쓰러진 사람은 누가 갈 때까지 그 자리에 있다. 시뮬이 이 태그를 계속 걷게 두면
+    // 화면에는 경보가 떠 있는데 마커만 산책하는 상태가 된다. 푸는 것은 관제사가
+    // 경보를 끌 때뿐이다(/alerts/resolve).
+    alertedTags.add(event.tagId);
+    sim.freeze(event.tagId);
     const ai = event.aiScore != null ? ` ai=${event.aiScore}` : '';
     console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${event.zone ?? '-'}`);
     broadcast('alert', event);
+    // 확인자료의 '이용'. 좌표를 낙상 판정과 화면 표시에 썼다는 사실을 남긴다.
+    // **좌표값 자체는 넣지 않는다** — 그러면 확인자료가 아니라 파기 대상이 된다.
+    auditLog.record({
+      kind: 'use',
+      tagId: event.tagId,
+      actor: 'system',
+      detail: `낙상 감지 · ${event.eventId} · ${event.zone ?? '구역 미지정'}`,
+    });
     // zone까지 채운 뒤에 넘긴다 — 레코드의 alert는 SSE로 나간 것과 같아야 한다.
+    liveAlerts.set(event.eventId, { ...event });
     eventRecorder.record(event);
   }
   return position;
@@ -213,7 +411,7 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
 
 // 측위 스트림은 sim 모드에서만 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
 if (sourceMode === 'sim') {
-  sim.on('position', (position: unknown) => broadcast('position', position));
+  sim.on('position', (position: unknown) => broadcastPosition(position));
   sim.start(5);
 }
 
@@ -250,8 +448,10 @@ const injector = createInjector({
     console.log(`[inject] ${tagId} <- ${clip.id} (${clip.source.dataset} ${clip.source.activity}/${clip.source.trial}, ${clip.samples.ax.length}샘플)`);
   },
   onEnd: (tagId, clip, completed) => {
-    sim.unfreeze(tagId);
-    console.log(`[inject] ${tagId} ${completed ? '재생 끝' : '중단'} ${clip.id}`);
+    // 재생이 끝나도 경보가 살아 있으면 그 자리에 둔다. 관제사가 끄면 그때 걷는다.
+    if (!alertedTags.has(tagId)) sim.unfreeze(tagId);
+    console.log(`[inject] ${tagId} ${completed ? '재생 끝' : '중단'} ${clip.id}`
+      + (alertedTags.has(tagId) ? ' · 경보 대기 중이라 정지 유지' : ''));
   },
 });
 
@@ -290,7 +490,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   // 첨부는 다섯 갈래다. 로그(GET) → 재구성 걸기(POST) → 업로드(POST) → 파일(GET) → JSON 조회.
   const logTarget = parseReconLogPath(pathname);
   if (logTarget) {
-    const tail = readReconLogTail(eventStore.dir, logTarget, Number(url.searchParams.get('tail')) || undefined);
+    const tail = readReconLogTail(incidentStore.dir, logTarget, Number(url.searchParams.get('tail')) || undefined);
     if (tail === null) return sendJson(response, { ok: false, error: '로그가 아직 없습니다' }, 404);
     response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
     return void response.end(tail);
@@ -336,7 +536,65 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   const fileTarget = parseAttachmentFilePath(pathname);
   if (fileTarget && serveAttachment(request, response, fileTarget, eventAttachments)) return;
 
-  const eventRoute = routeEvents(pathname, url.searchParams, eventStore);
+  // 판정 번복(spec 11 §3). 번복 창 안에서만 되고, 밖이면 409로 막는다.
+  // **routeEvents보다 먼저다** — 그쪽은 `/events/` 뒤를 통째로 eventId로 읽어서,
+  // 늦게 두면 `/events/<id>/outcome`이 "잘못된 eventId"로 떨어진다.
+  const outcomeTarget = parseOutcomePath(pathname);
+  if (outcomeTarget) {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    const outcome = url.searchParams.get('outcome');
+    if (!isJudgment(outcome)) {
+      return sendJson(response, { ok: false, error: 'outcome은 confirmed 또는 false_alarm이어야 합니다' }, 400);
+    }
+    const result = judge(outcomeTarget, outcome, url.searchParams.get('by') || OPERATOR);
+    if (!result.ok) return sendJson(response, { ok: false, error: result.reason }, result.status);
+    return sendJson(response, { ok: true, eventId: outcomeTarget, outcome });
+  }
+
+  // 6층만 지운다. 사건 기록과 최종 산출물은 그대로 둔다 — 관제 화면에 둬도 되는 유일한 삭제다.
+  const purgeTarget = parsePurgeWorkdirPath(pathname);
+  if (purgeTarget) {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    if (!incidentStore.read(purgeTarget)) {
+      return sendJson(response, { ok: false, error: `없는 사건: ${purgeTarget}` }, 404);
+    }
+    const actions = retention.purgeWorkdir(purgeTarget);
+    const bytes = actions.reduce((sum, a) => sum + a.bytes, 0);
+    auditLog.record({ kind: 'access', actor: OPERATOR, detail: `${purgeTarget} 재구성 중간물 정리 요청` });
+    return sendJson(response, { ok: true, eventId: purgeTarget, purged: actions.length, bytes });
+  }
+
+  // 수동 파기. **감지 이벤트와 확인 사건은 서로를 건드리지 않는다** — 사건은 사본이라
+  // 원본을 지워도 남고, 사건을 지워도 로그는 그대로다(spec operation 02 §2).
+  if (request.method === 'DELETE') {
+    const target = ['/events/', '/incidents/'].find((base) => pathname.startsWith(base));
+    if (target) {
+      const isIncident = target === '/incidents/';
+      const store = isIncident ? incidentStore : eventStore;
+      const what = isIncident ? '사건' : '이벤트';
+      const id = decodeURIComponent(pathname.slice(target.length).replace(/\/$/, ''));
+      if (!isValidEventId(id)) {
+        return sendJson(response, { ok: false, error: `잘못된 id: ${id}` }, 400);
+      }
+      const record = store.read(id);
+      if (!store.remove(id)) {
+        return sendJson(response, { ok: false, error: `없는 ${what}: ${id}` }, 404);
+      }
+      auditLog.record({
+        kind: 'access',
+        ...(record?.tagId ? { tagId: record.tagId } : {}),
+        actor: OPERATOR,
+        detail: `${id} ${what} 수동 파기`,
+      });
+      console.log(`[retention] ${id} ${what} 수동 파기`);
+      return sendJson(response, { ok: true, id, deleted: true });
+    }
+  }
+
+  const incidentRoute = routeIncidents(pathname, url.searchParams, incidentStore);
+  if (incidentRoute) return sendJson(response, incidentRoute.body, incidentRoute.status);
+
+  const eventRoute = routeEvents(pathname, url.searchParams, eventStore, retention.config.undoWindowMs);
   if (eventRoute) return sendJson(response, eventRoute.body, eventRoute.status);
   if (pathname === '/map') return sendJson(response, map);
   if (pathname === '/clips') return sendJson(response, clips.map(clipSummary));
@@ -358,6 +616,41 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   if (pathname === '/tags') {
     return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));
   }
+  // 관제사가 경보를 껐다. 경보를 끝내는 유일한 경로이고, 여기서만 태그가 다시 움직인다.
+  //
+  // **경보 해제와 판정은 다른 일이다.** `outcome`이 있으면 함께 판정하고, 없으면 경보만
+  // 끈다(화면 우상단 X). 판정 없이 끈 건은 번복 창 안에 아무도 안 보면 좌표가 파기되며
+  // 미판정이 된다(spec operation 02 §3).
+  if (pathname === '/alerts/resolve') {
+    const tagId = url.searchParams.get('tagId') ?? '';
+    const eventId = url.searchParams.get('eventId') ?? '';
+    const raw = url.searchParams.get('outcome');
+    if (raw !== null && !isJudgment(raw)) {
+      return sendJson(response, { ok: false, error: 'outcome은 confirmed 또는 false_alarm이어야 합니다' }, 400);
+    }
+    const outcome = raw as Judgment | null;
+
+    const had = alertedTags.delete(tagId);
+    // 재생 중이면 주입기가 좌표를 쥐고 있다. 지금 풀면 시뮬 5Hz와 주입 50Hz가 마커를
+    // 서로 뺏는다 — 재생이 끝날 때 onEnd가 알아서 푼다.
+    if (had && !injector.isPlaying(tagId)) sim.unfreeze(tagId);
+    if (had) console.log(`[alert] ${tagId} 경보 종료 — ${outcome ?? '판정 없음'} (관제사 확인)`);
+    if (!outcome) {
+      // 판정을 안 했다는 것도 처리 행위다. 나중에 "왜 판정이 없나"를 이 기록으로 답한다.
+      auditLog.record({
+        kind: 'access',
+        ...(tagId ? { tagId } : {}),
+        actor: OPERATOR,
+        detail: `${eventId || tagId} 경보 해제 · 판정 보류`,
+      });
+    }
+
+    const judged = outcome && eventId
+      ? judge(eventId, outcome, OPERATOR, { allowPending: true })
+      : { ok: false, reason: outcome ? 'eventId가 없다' : '판정 없음' };
+    return sendJson(response, { ok: true, tagId, eventId, outcome, resolved: had, judged: judged.ok });
+  }
+
   // API 라우트를 다 흘려보낸 뒤 정적 파일. 못 찾으면 404로 떨어진다.
   if (serveStatic(request, response, pathname)) return;
 
@@ -384,7 +677,16 @@ server.listen(port, () => {
     + ` · 경보 전 ${recorderConfig.preWindowMs / 1000}초 / 후 ${recorderConfig.postWindowMs / 1000}초`
     + ' (EVENT_PRE_MS / EVENT_POST_MS 로 조절)',
   );
-  console.log(`  이벤트 조회 GET http://localhost:${shown}/events · /events/<eventId>`);
+  console.log(`  이벤트 조회 GET http://localhost:${shown}/events · 확인 사건 GET /incidents`);
+  console.log(`  확인 사건  ${incidentStore.dir} (판정이 낙상이면 이벤트의 사본이 여기 생긴다)`);
+  console.log(
+    `  보관·파기  감지 이벤트 ${retention.config.undoWindowMs / 3_600_000}시간`
+    + ` · 확인 사건 ${Math.round(retention.config.incidentRetentionMs / 86_400_000)}일`
+    + ` · ${retention.config.sweepIntervalMs / 3_600_000}시간마다 자동`
+    + `${retention.config.dryRun ? ' · dry-run' : ''}`
+    + ' (UNDO_WINDOW_HOURS / INCIDENT_RETENTION_DAYS / SWEEP_INTERVAL_HOURS)',
+  );
+  console.log(`  확인자료   ${auditLog.dir} (위치정보법 제16조② · 파기 금지)`);
   console.log(
     `  현장 영상  POST /events/<eventId>/attachments?kind=video (본문=파일 바이트)`
     + ` · 최대 ${Math.round(attachmentLimitBytes / 1024 / 1024)}MB (ATTACHMENT_LIMIT_MB)`
@@ -412,4 +714,15 @@ server.listen(port, () => {
       + ' 거리만 실측이고 방향은 가짜이므로 리허설·시연에는 끄고 실행하세요.',
     );
   }
+  // 기동 시 한 번 훑는다. 서버가 꺼져 있던 사이에 만료된 것을 여기서 거둔다.
+  retention.start();
 });
+
+// 열려 있는 수집 세션을 닫고 나간다. 안 닫으면 확인자료에 개시만 남고 종료가 없다.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    collectTracker.flush();
+    retention.stop();
+    process.exit(0);
+  });
+}

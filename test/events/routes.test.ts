@@ -20,12 +20,25 @@ function record(eventId: string, ts: number, tagId = 'tag-a'): EventRecord {
 /** 파일을 안 만들고 경로 동작만 본다. */
 function fakeStore(records: EventRecord[]): EventStore & { limits: number[] } {
   const limits: number[] = [];
+  const find = (eventId: string) => records.find((r) => r.eventId === eventId) ?? null;
   return {
     dir: '/tmp/none',
     limits,
     eventDir: (eventId) => `/tmp/none/${eventId}`,
     save: () => {},
-    read: (eventId) => records.find((r) => r.eventId === eventId) ?? null,
+    read: find,
+    patch: (eventId, fields) => {
+      const index = records.findIndex((r) => r.eventId === eventId);
+      if (index < 0) return null;
+      records[index] = { ...records[index], ...fields };
+      return records[index];
+    },
+    remove: (eventId) => {
+      const index = records.findIndex((r) => r.eventId === eventId);
+      if (index < 0) return false;
+      records.splice(index, 1);
+      return true;
+    },
     list: (limit = 100) => {
       limits.push(limit);
       return [...records].sort((a, b) => b.ts - a.ts).slice(0, limit).map(summarize);

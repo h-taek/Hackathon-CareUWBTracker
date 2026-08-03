@@ -136,7 +136,7 @@ test('빈 첨부는 거절하고 반쪽 파일을 안 남긴다', async () => {
     () => attachments.receive('evt-1', { kind: 'video' }, Readable.from([])),
     (error: unknown) => error instanceof AttachmentError && error.statusCode === 400,
   );
-  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')), ['record.json']);
+  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')).sort(), ['record.json', 'summary.json'], '찌꺼기 없이 레코드와 요약만 남는다');
 });
 
 test('한도를 넘으면 413이고 받다 만 파일은 지운다', async () => {
@@ -149,7 +149,7 @@ test('한도를 넘으면 413이고 받다 만 파일은 지운다', async () =>
     () => attachments.receive('evt-1', { kind: 'video' }, bytes('열 바이트를 훌쩍 넘는 본문')),
     (error: unknown) => error instanceof AttachmentError && error.statusCode === 413,
   );
-  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')), ['record.json']);
+  assert.deepEqual(fs.readdirSync(store.eventDir('evt-1')).sort(), ['record.json', 'summary.json'], '찌꺼기 없이 레코드와 요약만 남는다');
 });
 
 test('기본 한도가 2분짜리 4K 폰 영상을 받는다', () => {

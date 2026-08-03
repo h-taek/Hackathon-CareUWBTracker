@@ -42,6 +42,8 @@ export interface ReconRunnerOptions extends Partial<ReconTuning> {
   run?: RunCommand;
   now?: () => number;
   onLog?: (line: string) => void;
+  /** 산출물이 붙은 직후. 파기 엔진이 여기서 중간물을 거둔다(spec 11 §4.5). */
+  onDone?: (eventId: string, attachmentId: string) => void;
 }
 
 export type RunCommand = (
@@ -267,6 +269,14 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     const elapsed = Math.round((now() - startedAt) / 1000);
     appendLog(`\n완료 — ${output.attachmentId} (${elapsed}초)\n`);
     log(`[recon] ✅ 완료 ${job.eventId}/${job.attachmentId} → ${output.attachmentId} (${elapsed}초, ${Math.round(output.bytes / 1024)}KB)`);
+
+    // 여기서부터 작업 폴더는 목적을 달성했다. 지우는 쪽이 정하고, 실패하더라도
+    // 재구성 자체는 이미 성공이라 예외를 밖으로 던지지 않는다.
+    try {
+      options.onDone?.(job.eventId, job.attachmentId);
+    } catch (error: unknown) {
+      log(`[recon] ⚠ 중간물 정리 실패 ${job.eventId}/${job.attachmentId} — ${describe(error)}`);
+    }
   }
 
   function fail(
