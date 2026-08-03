@@ -25,7 +25,7 @@ npm start -- \
 
 ### 서브폰 없이 화면만 볼 때 (`--single-anchor-bearing`)
 
-서브폰(앵커2)이 없으면 거리가 하나뿐이라 삼각측량이 성립하지 않고 마커가 아예 안 그려진다. 화면 확인이 목적일 때만 방향을 고정해 좌표를 만든다(spec 03 §5.3).
+서브폰(앵커2)이 없으면 거리가 하나뿐이라 삼각측량이 성립하지 않고 마커가 아예 안 그려진다. 화면 확인이 목적일 때만 방향을 고정해 좌표를 만든다(spec/system 03 §5.3).
 
 ```bash
 npm start -- \
@@ -77,7 +77,7 @@ UWB 거리는 제자리에 서 있어도 수 cm씩 흔들린다. 이동평균만
 
 ## 사고 기록 (R-1)
 
-경보를 SSE로 뿌리고 끝내지 않는다. `fall_detected` 하나마다 **그 전후 구간의 궤적·가속도를 묶어 파일 하나**로 남긴다. 스키마는 `../docs/spec/03_data-interface.md` §6.1이고, 여기 남은 `eventId`가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
+경보를 SSE로 뿌리고 끝내지 않는다. `fall_detected` 하나마다 **그 전후 구간의 궤적·가속도를 묶어 파일 하나**로 남긴다. 스키마는 `../docs/spec/system/03_data-interface.md` §6.1이고, 여기 남은 `eventId`가 R-2~R-4의 현장 영상·재구성 산출물이 붙을 자리다.
 
 **화면으로 하는 게 빠르다.** `http://localhost:8080/recon` — 영상 올리기, 붙일 낙상 기록 고르기, 변환 설정, 진행 보기, 결과 3D 보기가 한 페이지에 있다. 관제 화면 상단의 `사고 현장 3D 기록` 버튼으로 넘어간다.
 
@@ -141,7 +141,7 @@ server/                재사용 런타임
     zone.ts            (x,y) → 구역 라벨(순수 함수)
   ingest/              런타임 ingest 수신부
     endpoint.ts        POST /ingest 핸들러(검증 → onIngest → 202)
-    validate.ts        spec 03 §5 스키마 검증(accel-only 허용, 최대 2앵커)
+    validate.ts        spec/system 03 §5 스키마 검증(accel-only 허용, 최대 2앵커)
     body.ts            HTTP 본문 파싱 + 타입별 에러(400/413/415)
   positioning/         측위
     handler.ts         ingest → 위치 핸들러 팩토리

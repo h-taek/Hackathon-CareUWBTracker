@@ -1,6 +1,6 @@
 # Ingest 시뮬·리플레이 도구
 
-모바일 앱 없이 spec 03 §5의 원시 ingest를 생성하거나, 저장된 NDJSON을 기록 당시 간격대로 재생한다. B1 ingest 수신·B2 삼각측량·B4 낙상 판정 개발용이다. Node 내장 모듈만 사용하므로 별도 설치가 필요 없다.
+모바일 앱 없이 spec/system 03 §5의 원시 ingest를 생성하거나, 저장된 NDJSON을 기록 당시 간격대로 재생한다. B1 ingest 수신·B2 삼각측량·B4 낙상 판정 개발용이다. Node 내장 모듈만 사용하므로 별도 설치가 필요 없다.
 
 ## 생성
 
@@ -62,7 +62,7 @@ CLI는 기본적으로 ingest JSON을 표준 출력으로 내보내며, `--url`�
 
 ## 평가 (evaluate) — 고전 감지기 베이스라인 성적
 
-정규화 CSV(`ml/normalize_falls.py` 출력)의 라벨된 trial을 고전 낙상 감지기(`server/detection/fall.ts`)에 통째로 흘려 혼동행렬을 뽑는다. 이 감지기의 성적이 곧 AI가 넘어야 할 기준선(spec 04 §6)이고, AI 감지기도 같은 도구로 비교한다.
+정규화 CSV(`ml/normalize_falls.py` 출력)의 라벨된 trial을 고전 낙상 감지기(`server/detection/fall.ts`)에 통째로 흘려 혼동행렬을 뽑는다. 이 감지기의 성적이 곧 AI가 넘어야 할 기준선(spec/system 04 §6)이고, AI 감지기도 같은 도구로 비교한다.
 
 ```bash
 node tools/cli.ts evaluate ml/datasets/_normalized/waist_falls_50hz.csv

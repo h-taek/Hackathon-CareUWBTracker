@@ -42,7 +42,7 @@
 
 ## 실측 & 기록
 
-두 기기(또는 세 기기)를 벌려 두고 아래를 기록. 결과는 먼저 `docs/research/`에 정리한 뒤 `docs/PROGRESS.md`/`HANDOFF.md`에 반영.
+두 기기(또는 세 기기)를 벌려 두고 아래를 기록. 결과는 먼저 `docs/research/`에 정리한 뒤 `docs/PROGRESS_HT.md`/`../../HANDOFF.md`에 반영.
 
 | 항목 | 확인 방법 | 결과 |
 |---|---|---|
