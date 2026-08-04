@@ -40,6 +40,28 @@ npm start -- \
 
 흔적은 세 군데 남는다: 시작 배너 경고, 태그별 첫 프레임 경고(`[position] ⚠ … 1앵커 추정 좌표입니다`), position 페이로드의 `estimate` 필드. **측위 정확도 근거로는 쓸 수 없으니 리허설·시연에서는 이 인자를 뺀다.**
 
+## 관제사 식별
+
+**기록을 바꾸는 동작은 관제사를 고른 뒤에만 된다.** 판정·경보 해제·태그 등록/반납·수동 파기가 그렇고, 세션이 없으면 401 `operator_required`다. **조회와 측위(`POST /ingest`)는 막지 않는다** — 식별은 조작의 조건이지 감지의 조건이 아니다.
+
+**관문은 별도 페이지다.** `http://localhost:8080/operator`에서 명부의 관제사를 고르면 관제 화면이 열린다. 같은 화면에서 관제사를 추가하거나 지운다. 관제 화면과 태그 관리 화면은 **세션이 없으면 뜨자마자 이 주소로 돌아간다.** **비밀번호는 없다** — 이유와 대외 서술 기준은 `../docs/spec/operation/03_operator-identity.md` §8.
+
+상단바의 `관제사 변경`은 세션을 닫고 관문으로 나간다(교대 종료를 겸한다). **만료는 다르다** — 관제 중에 3시간이 차면 화면을 걷어내지 않고 흐린 팝업으로 막은 뒤 `연장`·`관제사 변경` 중에 고르게 한다. 연장은 같은 사람으로 세션을 다시 열어 **화면을 떠나지 않으므로 SSE가 안 끊긴다.**
+
+| 경로 | 뜻 |
+| --- | --- |
+| `GET /session` | 지금 관제사, 만료 시각, 고를 수 있는 명부 |
+| `POST /session?operatorId=&renew=` | 관제사 선택. 쿠키 `op_sid`를 발급한다. `renew=1`은 만료 팝업의 연장 |
+| `DELETE /session` | 교대 종료 |
+| `POST /operators/add?name=` | 명부 추가. 서버가 `op-N`을 매긴다 |
+| `POST /operators/remove?operatorId=` | 명부에서 삭제. 그 관제사의 세션도 함께 끊긴다 |
+
+명부는 `server/data/operators.json` 하나다(`OPERATORS_DIR`로 옮긴다). **태그 명부와 달리 모드로 나누지 않는다** — 시뮬이든 실기기든 화면 앞에 앉은 사람은 같은 사람이다. 파일이 없으면 `관제사 1~3`으로 깔린다.
+
+**세션은 3시간이고 메모리에만 있다.** 재기동하면 다시 고른다 — 서버가 내려가 있던 사이에 교대가 있었는지 알 방법이 없는데 세션만 살아남으면 어제 사람 이름으로 오늘의 판정이 찍힌다. 만료되면 화면이 스스로 선택창으로 돌아간다.
+
+확인자료의 `actor`는 이름이 아니라 `op-N`이다. 이름 대조는 명부에서 한다.
+
 ## 태그 등록·반납
 
 **태그 명부에 있는 태그만 수집한다.** 명부에 없거나 반납한 태그의 프레임은 `POST /ingest` 진입점에서 버려진다 — 측위도 궤적 기록도 서버 로그도 낙상 판정도 돌지 않는다(`server.ts:isCollecting`). 개인위치정보 수집의 일시 중지를 태그 반납으로 갈음하는 구조이고, 근거와 계약은 `../docs/spec/operation/02_data-retention.md` §4.7이다.
@@ -171,6 +193,9 @@ server/                재사용 런타임
   tags/
     registry.ts        태그 명부. 등록·반납이 수집을 켜고 끈다(위치정보법 제24조②). 모드별 파일
     sightings.ts       명부에 없는 태그가 문을 두드린 기록(메모리 전용 · 60초 만료)
+  operators/
+    registry.ts        관제사 명부. 확인자료의 actor가 여기서 온다. 지워도 파일에는 남는다
+    session.ts         관제 세션(메모리 전용 · 3시간) + 쿠키 읽기·쓰기
   ni/
     mailbox.ts         앵커 폰끼리 NI 토큰을 건네는 우편함(메모리 전용 · 15초 만료).
                        폰↔폰이 서로를 Bonjour로 찾던 자리를 대신한다 — spec/system 03 §5.4
@@ -205,12 +230,16 @@ server/                재사용 런타임
     index.html         대시보드 마크업(실시간 관제)
     recon/index.html   사고 현장 3D 기록 페이지 — /recon. 관제 상단 버튼으로 넘어간다
     registry/index.html 태그 등록·반납 페이지 — /registry. 관제 화면과 같은 _ds 토큰을 쓴다
+    operator/index.html 관제사 관문 — /operator. 여기를 지나야 위 두 화면이 열린다
     assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
+                       operator.css(관문 페이지·상단바 칩·만료 팝업)
     assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
                        scene3d.js(관제용 3D 패널 — 씬 설정 · 마커 · 좌표 정합, ESM)
                        recon.js(사고 기록 화면 — 업로드 · 설정 · 진행 폴링 · 기록 조회)
                        splat-view.js(URL 하나로 스플랫만 띄우는 얇은 뷰어)
                        registry.js(태그 명부 화면 — 등록·반납 요청과 목록 그리기)
+                       operator.js(관문 가드 — 세션 확인·상단바·만료 팝업. 보호된 두 화면이 같이 쓴다)
+                       operator-page.js(관문 페이지 — 명부 선택·추가·삭제)
     assets/splat/      스플랫 씬(git 제외 — README의 curl로 조달) + scene.json(씬·정합 설정, git 포함)
     vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
 
@@ -219,10 +248,11 @@ tools/                 개발 전용 도구(서버 런타임과 무관) — 루�
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
-  detection/ events/ ingest/ positioning/ lib/ tags/ ni/ config/ tools/  fixtures/
+  detection/ events/ ingest/ positioning/ lib/ tags/ operators/ ni/ config/ tools/  fixtures/
 
 data/events/           사고 기록 산출물(런타임 생성 · git 제외). EVENTS_DIR로 옮길 수 있다
 data/tags/             태그 명부(런타임 생성 · git 제외). 모드별 파일. TAGS_DIR로 옮길 수 있다
+data/operators.json    관제사 명부(런타임 생성 · git 제외). OPERATORS_DIR로 옮길 수 있다
 ```
 
 런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `events/`(사고 기록) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
