@@ -1072,6 +1072,18 @@ function connect() {
     if (f.privacy === true) privacyInject.arrived(f.tagId);
     scheduleRender();
   });
+  // 태그를 반납했다. 프레임이 끊기는 것만으로는 부족하다 — 그러면 목록에 '측위 끊김'으로
+  // 남아, 반납한 사람이 장애 상태로 계속 떠 있게 된다. 관제 대상에서 아예 내린다.
+  es.addEventListener('tags', (e) => {
+    const { released } = JSON.parse(e.data);
+    if (!released) return;
+    state.frames.delete(released);
+    roster.delete(released);
+    if (state.selected === released) state.selected = null;
+    if (state.alert && state.alert.tagId === released) state.alert = null;
+    privacyInject.cancel();
+    render();
+  });
   es.addEventListener('alert', (e) => {
     const a = JSON.parse(e.data);
     state.alert = { ...a, name: nameOf(a.tagId) };

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>태그 등록·반납 — 한마음요양원</title>
+<link rel="stylesheet" href="/_ds/styles.css">
+<link rel="stylesheet" href="/assets/css/registry.css">
+<script src="/assets/js/registry.js" type="module"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="brand-title">태그 등록·반납</span>
+    <span class="brand-sub">한마음요양원 1층</span>
+  </div>
+  <span class="spacer"></span>
+</div>
+
+<main class="wrap">
+
+  <!-- ── 미등록 태그 (신호가 잡힐 때만 나타난다) ── -->
+  <section class="panel panel-pending" id="pendingPanel" hidden>
+    <div class="panel-head">
+      <span class="panel-title">감지된 미등록 태그</span>
+      <span class="panel-hint">신호는 오지만 아직 받지 않는 태그다</span>
+    </div>
+    <div class="rows" id="pendingRows"></div>
+  </section>
+
+  <!-- ── 등록 ── -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-title">태그 배정</span>
+      <span class="panel-hint">등록한 순간부터 수집이 시작된다</span>
+    </div>
+    <div class="panel-body">
+      <div class="form">
+        <div class="field">
+          <label for="tagId">태그 번호</label>
+          <input id="tagId" placeholder="tag-104" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="label">표시명</label>
+          <input id="label" placeholder="301호 김OO" autocomplete="off" maxlength="40">
+        </div>
+        <button class="act act-primary" id="register" type="button">등록</button>
+      </div>
+      <p class="note" id="note">관제 화면에 띄울 표시명 하나만 받는다. 그 외 신원 항목은 받지 않는다.</p>
+    </div>
+  </section>
+
+  <!-- ── 명부 ── -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-title">명부</span>
+      <span class="panel-hint" id="count">불러오는 중…</span>
+    </div>
+    <div class="rows" id="rows">
+      <div class="empty">불러오는 중…</div>
+    </div>
+  </section>
+
+  <!-- ── 근거 ── -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-title">반납이 곧 수집 중단이다</span>
+    </div>
+    <div class="panel-body">
+      <p class="basis">
+        위치정보법 제24조 제2항은 개인위치정보주체가 언제든 수집·이용·제공의 일시적인 중지를
+        요구할 수 있게 하고, 사업자는 <b>이를 거절할 수 없으며 그 기술적 수단을 갖추어야 한다</b>고
+        정한다. 우리 서비스에서 그 수단이 이 화면의 반납이다 —
+        <b>반납한 태그의 프레임은 서버가 아예 처리하지 않는다.</b>
+        측위도, 궤적 기록도, 낙상 판정도 돌지 않는다. 반납 시각은 확인자료에 남는다.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+</body>
+</html>
