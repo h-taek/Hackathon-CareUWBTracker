@@ -40,6 +40,34 @@ npm start -- \
 
 흔적은 세 군데 남는다: 시작 배너 경고, 태그별 첫 프레임 경고(`[position] ⚠ … 1앵커 추정 좌표입니다`), position 페이로드의 `estimate` 필드. **측위 정확도 근거로는 쓸 수 없으니 리허설·시연에서는 이 인자를 뺀다.**
 
+## 태그 등록·반납
+
+**태그 명부에 있는 태그만 수집한다.** 명부에 없거나 반납한 태그의 프레임은 `POST /ingest` 진입점에서 버려진다 — 측위도 궤적 기록도 서버 로그도 낙상 판정도 돌지 않는다(`server.ts:isCollecting`). 개인위치정보 수집의 일시 중지를 태그 반납으로 갈음하는 구조이고, 근거와 계약은 `../docs/spec/operation/02_data-retention.md` §4.7이다.
+
+화면은 `http://localhost:8080/registry` 한 페이지다. 관제 화면 상단바의 `태그 관리` 버튼이 **새 탭으로** 연다 — 같은 탭에서 넘어가면 그동안 SSE가 닫혀 관제가 끊긴다.
+
+| 경로 | 뜻 |
+| --- | --- |
+| `GET /tags` | 수집 중인 태그만. 관제 화면이 이름을 여기서 찾는다 |
+| `GET /tags/all` | 반납분까지 이력 전체 + 미등록 태그 목록(`pending`) |
+| `POST /tags/register?tagId=&label=` | 배정. 표시명은 1~40자 |
+| `POST /tags/release?tagId=` | 반납. 이 순간부터 그 태그를 처리하지 않는다 |
+| `POST /ni/token` | 앵커 폰끼리 NI 토큰을 놓는다. 본문 `{from, to, token}` |
+| `GET /ni/token?to=` | 그 앞으로 온 토큰. 가져가도 안 지운다(15초 만료) |
+
+명부는 `server/data/tags/`에 있고 **모드마다 파일이 다르다**(`TAGS_DIR`로 옮긴다).
+
+```
+registry.live.json   실기기 (--source live)
+registry.sim.json    시뮬  (--source sim)
+```
+
+한 파일을 같이 쓰면 시뮬로 띄울 때 자동 등록된 배경 태그가 남아, 다음에 실기기로 띄워도 "수집 중" 세 명이 앉아 있다. 명부는 지금 누구의 위치를 수집하는지를 말하는 장부라 거짓말하면 안 된다. 기동 배너에 **어느 장부를 들었는지** 찍히니, 명부가 비어 보이면 거기부터 본다.
+
+**재기동해도 반납 상태가 유지된다** — 재기동으로 풀린다면 중지 수단이 아니다. 시뮬 배경 태그 3개는 `--source sim`일 때만 자동 등록되고, **이미 반납한 태그는 되살리지 않는다.**
+
+**실기기(`--source live`)는 명부가 빈 채로 시작한다.** 워치를 켜면 프레임은 버려지지만 관리 화면의 `감지된 미등록 태그`에 `tag-watch`가 뜬다. 거기서 `배정`을 눌러 이름을 붙이면 그 순간부터 수집이 시작된다. 미등록 목록은 메모리에만 있고 60초 무신호면 사라진다.
+
 낙상 주입은 `GET /inject-fall?tagId=<ID>&clip=<클립 ID>`다. 클립 목록은 `GET /clips`. **주입은 실제 파이프라인을 그대로 통과한다** — 공개 데이터셋에서 잘라둔 가속도 구간을 ingest 프레임으로 되돌려(`inject/`) `validateIngest` → 삼각측량 → 스무딩 → 낙상 감지 순으로 흘리고, 경보는 감지기가 낸다. 그래서 응답에는 경보가 없고 재생 정보(`clipId` `frames` `durationMs`)만 들어 있다. 결과는 `/stream`으로 나온다.
 
 클립이 정하는 건 입력 신호뿐이고 결과는 감지기가 정한다. 헛경보 클립처럼 AI가 기각하는 신호는 아무 경보도 안 낸다(기각 사실은 `[fall] 기각 ...` 로그에만 남는다). 클립을 다시 만드는 법은 `tools/README.md`.
@@ -137,8 +165,15 @@ server/                재사용 런타임
   sim.ts               배경 태그 보행 시뮬레이터(경보는 안 만든다)
   map.json             좌표계 범위·구역 메타
   lib/
-    ingest-log.ts      수신 프레임 → 콘솔 한 줄 포맷(순수 함수)
-    zone.ts            (x,y) → 구역 라벨(순수 함수)
+    ingest-log.ts      수신 프레임 → 콘솔 한 줄 포맷(순수 함수). 사생활 구역은 좌표·거리를 가린다
+    zone.ts            (x,y) → 구역 라벨·구역 객체(순수 함수)
+    privacy.ts         사생활 구역 필터 — 좌표·오차·앵커 거리 폐기(순수 함수, F-6)
+  tags/
+    registry.ts        태그 명부. 등록·반납이 수집을 켜고 끈다(위치정보법 제24조②). 모드별 파일
+    sightings.ts       명부에 없는 태그가 문을 두드린 기록(메모리 전용 · 60초 만료)
+  ni/
+    mailbox.ts         앵커 폰끼리 NI 토큰을 건네는 우편함(메모리 전용 · 15초 만료).
+                       폰↔폰이 서로를 Bonjour로 찾던 자리를 대신한다 — spec/system 03 §5.4
   ingest/              런타임 ingest 수신부
     endpoint.ts        POST /ingest 핸들러(검증 → onIngest → 202)
     validate.ts        spec/system 03 §5 스키마 검증(accel-only 허용, 최대 2앵커)
@@ -169,11 +204,13 @@ server/                재사용 런타임
   public/              브라우저가 받는 것 전부 (디스크 배치 = URL)
     index.html         대시보드 마크업(실시간 관제)
     recon/index.html   사고 현장 3D 기록 페이지 — /recon. 관제 상단 버튼으로 넘어간다
+    registry/index.html 태그 등록·반납 페이지 — /registry. 관제 화면과 같은 _ds 토큰을 쓴다
     assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
     assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
                        scene3d.js(관제용 3D 패널 — 씬 설정 · 마커 · 좌표 정합, ESM)
                        recon.js(사고 기록 화면 — 업로드 · 설정 · 진행 폴링 · 기록 조회)
                        splat-view.js(URL 하나로 스플랫만 띄우는 얇은 뷰어)
+                       registry.js(태그 명부 화면 — 등록·반납 요청과 목록 그리기)
     assets/splat/      스플랫 씬(git 제외 — README의 curl로 조달) + scene.json(씬·정합 설정, git 포함)
     vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
 
@@ -182,9 +219,10 @@ tools/                 개발 전용 도구(서버 런타임과 무관) — 루�
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
-  detection/ events/ ingest/ positioning/ lib/ config/ tools/  fixtures/
+  detection/ events/ ingest/ positioning/ lib/ tags/ ni/ config/ tools/  fixtures/
 
 data/events/           사고 기록 산출물(런타임 생성 · git 제외). EVENTS_DIR로 옮길 수 있다
+data/tags/             태그 명부(런타임 생성 · git 제외). 모드별 파일. TAGS_DIR로 옮길 수 있다
 ```
 
 런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `events/`(사고 기록) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.
