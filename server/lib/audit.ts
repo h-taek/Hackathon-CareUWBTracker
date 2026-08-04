@@ -21,7 +21,7 @@ export interface AuditEntry {
   kind: AuditKind;
   /** 대상 태그. 시스템 동작이면 없다. */
   tagId?: string;
-  /** 행위자. 관제 화면 인증이 없어 지금은 'operator' 아니면 'system'이다(spec 11 §8). */
+  /** 행위자. 관제사 ID(`op-N`) 아니면 'system'이다(spec operation 03 §5). */
   actor: string;
   /** 무엇을 했는지 한 줄. **좌표를 여기 적으면 그 자체가 위반이다.** */
   detail: string;

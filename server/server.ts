@@ -29,6 +29,18 @@ import { zoneAt } from './lib/zone.ts';
 import { applyZonePolicy, type PositionLike } from './lib/privacy.ts';
 import { createTagRegistry, normalizeLabel, isValidTagId } from './tags/registry.ts';
 import { createSightings } from './tags/sightings.ts';
+import {
+  createOperatorRegistry,
+  normalizeOperatorName,
+  isValidOperatorId,
+} from './operators/registry.ts';
+import {
+  createSessionStore,
+  readCookie,
+  sessionCookie,
+  clearedSessionCookie,
+  SESSION_COOKIE,
+} from './operators/session.ts';
 import { createTokenMailbox, parseTokenMessage, isPeerId } from './ni/mailbox.ts';
 import { readJsonBody, HttpBodyError } from './ingest/body.ts';
 import { createStaticHandler } from './static/handler.ts';
@@ -118,6 +130,20 @@ const incidentStore = createEventStore(process.env.INCIDENTS_DIR || path.join(da
 const auditLog = createAuditLog(process.env.AUDIT_DIR || path.join(dataDir, 'audit'));
 const collectTracker = createCollectTracker(auditLog);
 
+// 관제사 명부와 세션(spec operation 03). 확인자료의 `actor`가 여기서 온다 — 예전에는
+// `'operator'` 고정값이라 "누가 이 경보를 오보로 내렸나"에 답할 수 없었다.
+// **모드로 나누지 않는다.** 시뮬이든 실기기든 화면 앞에 앉은 사람은 같은 사람이다.
+const operatorRegistry = createOperatorRegistry(process.env.OPERATORS_DIR || dataDir);
+const sessions = createSessionStore({
+  // 만료는 조회하는 순간 발견된다. 화면이 만료 시각에 `GET /session`을 부르므로
+  // 실질적으로는 만료된 그때 남는다.
+  onExpire: (session) => auditLog.record({
+    kind: 'access',
+    actor: session.operatorId,
+    detail: '관제 화면 세션 만료',
+  }),
+});
+
 // 태그 명부. **반납이 곧 수집 중단이다**(위치정보법 제24조②의 기술적 수단).
 // 여기에 없거나 반납된 태그의 프레임은 아래 ingest 관문에서 통째로 버린다.
 //
@@ -198,7 +224,8 @@ const eventRecorder = createEventRecorder({
       console.log(`[incident] ${record.eventId} 궤적 ${saved.track.length}점 · 가속도 ${saved.accel.length}표본 채움`);
     } else if (pending?.outcome && isJudgment(pending.outcome)) {
       // 경보 객체가 없어 사건을 못 만들었던 경우의 보루.
-      syncIncident(record.eventId, saved, pending.outcome, pending.resolvedBy ?? OPERATOR, pending.resolvedAt ?? Date.now());
+      // 판정이 들어올 때 행위자가 함께 실렸다. 없다면 그건 사람이 거친 판정이 아니다.
+      syncIncident(record.eventId, saved, pending.outcome, pending.resolvedBy ?? SYSTEM, pending.resolvedAt ?? Date.now());
     }
     console.log(
       `[event] 기록 ${record.eventId} (${record.tagId})`
@@ -283,8 +310,39 @@ const handlePositioning = createPositioningHandler({
  */
 const alertedTags = new Set<string>();
 
-/** 행위자. 관제 화면 인증이 아직 없어 고정값이다(spec 11 §8에 미구현으로 적어 둔다). */
-const OPERATOR = 'operator';
+/**
+ * 사람이 개입하지 않은 자동 동작. 수집 세션과 보관기간 파기가 이 이름으로 남는다.
+ */
+const SYSTEM = 'system';
+
+/**
+ * 세션 없이 한 일. **명부 수정에만 나온다** — 처음에는 명부가 비어 있어 식별을 요구할 수
+ * 없는데(spec operation 03 §2), 식별 없이 한 일이 있었다는 사실은 기록에 드러나야 한다.
+ */
+const UNIDENTIFIED = 'unidentified';
+
+/** 선택창과 상단바에 나가는 형태. 확인자료에는 ID만 남고 이름은 명부에서 찾는다. */
+const publicOperator = (entry: { operatorId: string; name: string }) => ({
+  id: entry.operatorId,
+  name: entry.name,
+});
+
+/** 세션 없이는 못 하는 POST들. 경로가 고정된 것만 여기 두고, id가 낀 것은 아래 파서로 본다. */
+const OPERATOR_REQUIRED_POSTS = ['/alerts/resolve', '/tags/register', '/tags/release'];
+
+/**
+ * 이 요청이 관제사 식별을 요구하는가(spec operation 03 §4).
+ *
+ * **조회는 하나도 막지 않는다.** 막는 것은 기록을 바꾸는 동작뿐이다. 첨부 업로드와 재구성
+ * 실행은 아직 넣지 않았다 — `/recon` 화면이 통째로 재구성될 때 같은 세션에 붙인다.
+ */
+function requiresOperator(method: string, pathname: string): boolean {
+  // 수동 파기. 되돌릴 수 없는 동작이라 누가 눌렀는지가 특히 중요하다.
+  if (method === 'DELETE') return pathname.startsWith('/events/') || pathname.startsWith('/incidents/');
+  if (method !== 'POST') return false;
+  if (OPERATOR_REQUIRED_POSTS.includes(pathname)) return true;
+  return parseOutcomePath(pathname) !== null || parsePurgeWorkdirPath(pathname) !== null;
+}
 
 /**
  * 판정을 레코드에 심는다. 경보 종료(최초 판정)와 번복이 같은 길을 쓴다.
@@ -557,10 +615,16 @@ const injector = createInjector({
   },
 });
 
-function sendJson(response: ServerResponse, value: unknown, status = 200): void {
+function sendJson(
+  response: ServerResponse,
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): void {
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    ...headers,
   });
   response.end(JSON.stringify(value));
 }
@@ -589,6 +653,103 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     request.on('close', () => clients.delete(response));
     return;
   }
+
+  // ── 관제사 식별(spec operation 03) ──────────────────────────────────────────
+  //
+  // **측위(/ingest)와 경보 수신(/stream)은 위에서 이미 지나갔다.** 식별은 조작의 조건이지
+  // 감지의 조건이 아니다 — 세션이 없다고 낙상을 놓치면 본말전도다.
+  const session = sessions.get(readCookie(request.headers.cookie, SESSION_COOKIE));
+  /** 확인자료에 남길 행위자. **클라이언트가 보낸 이름은 쓰지 않는다** — 그건 위조 통로다. */
+  const actor = session?.operatorId ?? UNIDENTIFIED;
+
+  if (pathname === '/session') {
+    // 교대 종료.
+    if (request.method === 'DELETE') {
+      const closed = sessions.close(session?.sid);
+      if (closed) {
+        auditLog.record({ kind: 'access', actor: closed.operatorId, detail: '관제 화면 교대 종료' });
+        console.log(`[operators] ${closed.operatorId} 교대 종료`);
+      }
+      return sendJson(response, { ok: true }, 200, { 'Set-Cookie': clearedSessionCookie() });
+    }
+    // 관제사 선택.
+    if (request.method === 'POST') {
+      const operatorId = url.searchParams.get('operatorId') ?? '';
+      if (!isValidOperatorId(operatorId)) {
+        return sendJson(response, { ok: false, error: `잘못된 operatorId: ${operatorId}` }, 400);
+      }
+      const entry = operatorRegistry.get(operatorId);
+      if (!entry || entry.removedAt != null) {
+        return sendJson(response, { ok: false, error: '명부에 없거나 삭제된 관제사입니다' }, 409);
+      }
+      const opened = sessions.open(operatorId);
+      // 만료 팝업의 `연장`이 부른 것인지 구분한다. 같은 사람이 세 시간마다 계속 연장만
+      // 하고 있다면 그건 교대가 기록에 안 잡히고 있다는 뜻이라, 확인자료에서 보여야 한다.
+      const renew = url.searchParams.get('renew') === '1';
+      // 접속기록이다(개인정보보호법 시행령 제30조①5호). 확인자료 파일 하나로 같이 채운다.
+      auditLog.record({
+        kind: 'access',
+        actor: operatorId,
+        detail: `관제 화면 ${renew ? '연장' : '접속'} · ${entry.name}`,
+      });
+      console.log(`[operators] ${operatorId} ${renew ? '연장' : '접속'} · ${entry.name}`);
+      return sendJson(
+        response,
+        { ok: true, operator: publicOperator(entry), expiresAt: opened.expiresAt },
+        200,
+        { 'Set-Cookie': sessionCookie(opened.sid, sessions.ttlMs) },
+      );
+    }
+    // 화면이 선택창을 그리는 데 필요한 전부를 한 번에 준다.
+    const current = session ? operatorRegistry.get(session.operatorId) : null;
+    return sendJson(response, {
+      ok: true,
+      operator: current ? publicOperator(current) : null,
+      expiresAt: session?.expiresAt ?? null,
+      roster: operatorRegistry.active().map(publicOperator),
+    });
+  }
+
+  // **명부 수정에는 세션이 필요 없다.** 처음에는 아무도 명부에 없어서, 식별을 요구하면
+  // 첫 실행에서 누구도 들어갈 수 없다. 대신 그 행위 자체를 확인자료에 남긴다 —
+  // 식별 없이 한 일이 있었다는 사실이 기록에 드러나는 것이 요점이다(spec operation 03 §2).
+  if (pathname === '/operators/add') {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    const name = normalizeOperatorName(url.searchParams.get('name'));
+    if (!name) return sendJson(response, { ok: false, error: '이름은 1~20자여야 합니다' }, 400);
+    const entry = operatorRegistry.add(name, actor);
+    if (!entry) return sendJson(response, { ok: false, error: '같은 이름이 이미 명부에 있습니다' }, 409);
+    auditLog.record({ kind: 'access', actor, detail: `관제사 명부 추가 · ${entry.operatorId} ${name}` });
+    console.log(`[operators] ${entry.operatorId} 추가 · ${name}`);
+    return sendJson(response, { ok: true, operator: publicOperator(entry) });
+  }
+  if (pathname === '/operators/remove') {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    const operatorId = url.searchParams.get('operatorId') ?? '';
+    if (!isValidOperatorId(operatorId)) {
+      return sendJson(response, { ok: false, error: `잘못된 operatorId: ${operatorId}` }, 400);
+    }
+    const entry = operatorRegistry.remove(operatorId, actor);
+    if (!entry) return sendJson(response, { ok: false, error: '명부에 없거나 이미 삭제된 관제사입니다' }, 409);
+    // **명부에서 내린 사람의 세션도 함께 끊는다.** 안 끊으면 삭제한 사람이 남은 교대
+    // 시간 동안 계속 판정한다. 반납이 곧 수집 중단인 것과 같은 결이다.
+    const cut = sessions.closeOperator(operatorId);
+    auditLog.record({ kind: 'access', actor, detail: `관제사 명부 삭제 · ${operatorId} ${entry.name}` });
+    console.log(`[operators] ${operatorId} 삭제 · ${entry.name}${cut ? ' · 세션 종료' : ''}`);
+    return sendJson(
+      response,
+      { ok: true, operator: publicOperator(entry), sessionClosed: cut !== null },
+      200,
+      // 자기 자신을 지웠으면 브라우저의 쿠키도 같이 비운다.
+      cut && cut.sid === session?.sid ? { 'Set-Cookie': clearedSessionCookie() } : {},
+    );
+  }
+
+  // 기록을 바꾸는 동작은 식별 없이 못 한다. 화면은 이 401을 받으면 선택창을 연다.
+  if (!session && requiresOperator(request.method ?? 'GET', pathname)) {
+    return sendJson(response, { ok: false, error: 'operator_required' }, 401);
+  }
+
   // 첨부는 다섯 갈래다. 로그(GET) → 재구성 걸기(POST) → 업로드(POST) → 파일(GET) → JSON 조회.
   const logTarget = parseReconLogPath(pathname);
   if (logTarget) {
@@ -648,7 +809,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     if (!isJudgment(outcome)) {
       return sendJson(response, { ok: false, error: 'outcome은 confirmed 또는 false_alarm이어야 합니다' }, 400);
     }
-    const result = judge(outcomeTarget, outcome, url.searchParams.get('by') || OPERATOR);
+    const result = judge(outcomeTarget, outcome, actor);
     if (!result.ok) return sendJson(response, { ok: false, error: result.reason }, result.status);
     return sendJson(response, { ok: true, eventId: outcomeTarget, outcome });
   }
@@ -662,7 +823,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     }
     const actions = retention.purgeWorkdir(purgeTarget);
     const bytes = actions.reduce((sum, a) => sum + a.bytes, 0);
-    auditLog.record({ kind: 'access', actor: OPERATOR, detail: `${purgeTarget} 재구성 중간물 정리 요청` });
+    auditLog.record({ kind: 'access', actor, detail: `${purgeTarget} 재구성 중간물 정리 요청` });
     return sendJson(response, { ok: true, eventId: purgeTarget, purged: actions.length, bytes });
   }
 
@@ -685,7 +846,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
       auditLog.record({
         kind: 'access',
         ...(record?.tagId ? { tagId: record.tagId } : {}),
-        actor: OPERATOR,
+        actor,
         detail: `${id} ${what} 수동 파기`,
       });
       console.log(`[retention] ${id} ${what} 수동 파기`);
@@ -760,7 +921,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     const label = normalizeLabel(url.searchParams.get('label'));
     if (!isValidTagId(tagId)) return sendJson(response, { ok: false, error: `잘못된 tagId: ${tagId}` }, 400);
     if (!label) return sendJson(response, { ok: false, error: '표시명은 1~40자여야 합니다' }, 400);
-    const entry = registerTag(tagId, label, OPERATOR);
+    const entry = registerTag(tagId, label, actor);
     console.log(`[tags] ${tagId} 등록 · ${label}`);
     return sendJson(response, { ok: true, tag: entry });
   }
@@ -768,7 +929,7 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   if (pathname === '/tags/release') {
     const tagId = url.searchParams.get('tagId') ?? '';
     if (!isValidTagId(tagId)) return sendJson(response, { ok: false, error: `잘못된 tagId: ${tagId}` }, 400);
-    const entry = releaseTag(tagId, OPERATOR);
+    const entry = releaseTag(tagId, actor);
     if (!entry) return sendJson(response, { ok: false, error: '등록돼 있지 않거나 이미 반납한 태그입니다' }, 409);
     // 반납한 태그가 경보를 걸어 둔 채였다면 그 경보도 끝난다 — 대상이 관제에서 빠지므로
     // 화면에 남겨 두면 아무도 끌 수 없는 경보가 된다.
@@ -844,13 +1005,13 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
       auditLog.record({
         kind: 'access',
         ...(tagId ? { tagId } : {}),
-        actor: OPERATOR,
+        actor,
         detail: `${eventId || tagId} 경보 해제 · 판정 보류`,
       });
     }
 
     const judged = outcome && eventId
-      ? judge(eventId, outcome, OPERATOR, { allowPending: true })
+      ? judge(eventId, outcome, actor, { allowPending: true })
       : { ok: false, reason: outcome ? 'eventId가 없다' : '판정 없음' };
     return sendJson(response, { ok: true, tagId, eventId, outcome, resolved: had, judged: judged.ok });
   }
@@ -914,6 +1075,7 @@ server.listen(port, () => {
   // 어느 장부를 들고 있는지 밝힌다. 모드마다 다른 파일이라, 명부가 비어 보이는 게
   // 고장인지 다른 장부를 연 것인지 여기서 갈린다.
   console.log(`  태그 명부  ${tagRegistry.file} · 수집 중 ${tagRegistry.active().length}명`);
+  console.log(`  관제사     ${operatorRegistry.file} · ${operatorRegistry.active().length}명`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {
     console.warn(
       `  ⚠ 1앵커 테스트 모드 — 서브 앵커 거리가 없으면 ${anchorConfig.mainAnchorId} 거리를`

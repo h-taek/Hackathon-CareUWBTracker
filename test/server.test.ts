@@ -187,15 +187,140 @@ async function collectStream(
 const alertsIn = (events: SseEvent[]) => events.filter((e) => e.event === 'alert');
 
 /**
+ * 명부에서 관제사를 하나 골라 세션 쿠키를 얻는다.
+ *
+ * **기록을 바꾸는 동작은 식별 없이 안 된다**(spec operation 03 §4). 예전에는 확인자료의
+ * 행위자가 `'operator'` 고정값이라 이 절차가 없었다.
+ */
+async function openSession(port: number): Promise<string> {
+  const { roster } = await (await fetch(`http://127.0.0.1:${port}/session`)).json();
+  assert.ok(roster?.length > 0, '명부가 비어 있으면 아무도 못 들어간다');
+  const res = await fetch(`http://127.0.0.1:${port}/session?operatorId=${roster[0].id}`, { method: 'POST' });
+  assert.equal((await res.json()).ok, true, '관제사 선택 실패');
+  const cookie = res.headers.get('set-cookie');
+  assert.ok(cookie, '세션 쿠키가 안 왔다');
+  return cookie.split(';')[0];
+}
+
+interface AuditLine { kind: string; actor: string; detail: string; tagId?: string }
+
+/** 확인자료를 통째로 읽는다. 날짜별 파일이라 자정을 걸치면 두 개다. */
+function readAudit(dataDir: string): AuditLine[] {
+  const dir = path.join(dataDir, 'audit');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .flatMap((name) => fs.readFileSync(path.join(dir, name), 'utf8').split('\n'))
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as AuditLine);
+}
+
+test('식별 없이는 기록을 바꾸는 동작이 401이다', async () => {
+  // **live 모드다.** 시뮬은 배경 태그를 `system`으로 자동 등록해서 명부가 비어 있지 않다.
+  const server = await start([...ANCHOR_ARGS, '--source', 'live']);
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const blocked = await fetch(`${base}/tags/register?tagId=tag-101&label=${encodeURIComponent('김OO')}`, {
+      method: 'POST',
+    });
+    assert.equal(blocked.status, 401);
+    assert.equal((await blocked.json()).error, 'operator_required');
+
+    // 막혔으면 명부가 그대로여야 한다 — 401을 주면서 등록은 되는 게 제일 나쁘다.
+    assert.deepEqual(await (await fetch(`${base}/tags`)).json(), [], '401인데 명부가 바뀌었다');
+
+    // **조회와 측위는 막지 않는다.** 식별은 조작의 조건이지 감지의 조건이 아니다.
+    assert.equal((await fetch(`${base}/tags`)).status, 200);
+    assert.equal((await fetch(`${base}/events`)).status, 200);
+    const ingest = await fetch(`${base}/ingest`, { method: 'POST', body: '{}' });
+    assert.notEqual(ingest.status, 401, '측위 경로에 게이트가 걸리면 낙상을 놓친다');
+  } finally {
+    server.kill();
+  }
+});
+
+test('관제사를 고르면 확인자료에 그 ID가 남는다', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-actor-'));
+  // live 모드라 명부가 비어서 시작한다 — 확인자료의 `태그 등록`은 우리가 만든 한 줄뿐이다.
+  const server = await start([...ANCHOR_ARGS, '--source', 'live'], { DATA_DIR: dataDir });
+  try {
+    await assignTag(server.port, 'tag-101', '301호 김OO');
+    const lines = readAudit(dataDir);
+
+    // 접속기록(개인정보보호법 시행령 제30조①5호)
+    const login = lines.find((l) => l.detail.startsWith('관제 화면 접속'));
+    assert.ok(login, '접속이 확인자료에 안 남았다');
+    assert.match(login.actor, /^op-\d+$/);
+
+    // 그리고 그 사람이 한 일
+    const register = lines.find((l) => l.detail.startsWith('태그 등록'));
+    assert.ok(register, '태그 등록이 확인자료에 안 남았다');
+    assert.equal(register.actor, login.actor, '누가 등록했는지가 접속한 사람과 같아야 한다');
+    assert.equal(register.tagId, 'tag-101');
+    assert.notEqual(register.actor, 'operator', '고정값이 다시 들어오면 안 된다');
+  } finally {
+    server.kill();
+  }
+});
+
+test('명부에서 지우면 그 관제사의 세션이 그 자리에서 끊긴다', async () => {
+  const server = await start(ANCHOR_ARGS);
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const { roster } = await (await fetch(`${base}/session`)).json();
+    const cookie = await openSession(server.port);
+    const me = roster[0].id;
+
+    const removed = await fetch(`${base}/operators/remove?operatorId=${me}`, {
+      method: 'POST',
+      headers: { cookie },
+    });
+    assert.equal((await removed.json()).sessionClosed, true);
+
+    // 명부에서 내린 사람이 남은 교대 시간 동안 계속 판정하면 안 된다.
+    const after = await fetch(`${base}/tags/release?tagId=tag-101`, { method: 'POST', headers: { cookie } });
+    assert.equal(after.status, 401);
+    // 다시 고를 수도 없다.
+    const relogin = await fetch(`${base}/session?operatorId=${me}`, { method: 'POST' });
+    assert.equal(relogin.status, 409);
+  } finally {
+    server.kill();
+  }
+});
+
+test('명부 수정은 세션 없이도 되고, 그 사실이 확인자료에 남는다', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-roster-'));
+  const server = await start(ANCHOR_ARGS, { DATA_DIR: dataDir });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    // 처음에는 아무도 명부에 없을 수 있다. 식별을 요구하면 누구도 못 들어간다.
+    const added = await fetch(`${base}/operators/add?name=${encodeURIComponent('박간호')}`, { method: 'POST' });
+    assert.equal(added.status, 200);
+    const { operator } = await added.json();
+    assert.equal(operator.name, '박간호');
+
+    const line = readAudit(dataDir).find((l) => l.detail.startsWith('관제사 명부 추가'));
+    assert.ok(line, '명부 수정이 확인자료에 안 남았다');
+    assert.equal(line.actor, 'unidentified', '식별 없이 한 일이라는 사실이 드러나야 한다');
+
+    // 같은 이름은 두 번 안 들어간다 — 드롭다운에서 구분이 안 된다.
+    const dup = await fetch(`${base}/operators/add?name=${encodeURIComponent('박간호')}`, { method: 'POST' });
+    assert.equal(dup.status, 409);
+  } finally {
+    server.kill();
+  }
+});
+
+/**
  * 주입할 태그를 먼저 명부에 올린다. **live 모드 명부는 비어서 시작한다** — 시뮬 배경 태그를
  * 자동 등록하는 건 sim 모드뿐이라, 등록 없이 주입하면 ingest 관문이 프레임을 통째로 버린다
  * (그게 반납=수집 중단의 설계다). 예전엔 개발 기기에 남아 있던 명부 파일 덕에 이 줄 없이도
  * 통과했다.
  */
 async function assignTag(port: number, tagId: string, label = '테스트 대상'): Promise<void> {
+  const cookie = await openSession(port);
   const res = await fetch(
     `http://127.0.0.1:${port}/tags/register?tagId=${tagId}&label=${encodeURIComponent(label)}`,
-    { method: 'POST' },
+    { method: 'POST', headers: { cookie } },
   );
   assert.equal((await res.json()).ok, true, `${tagId} 등록 실패`);
 }
