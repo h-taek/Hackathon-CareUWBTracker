@@ -5,10 +5,23 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'server.ts');
+
+/**
+ * 이 테스트가 띄우는 서버는 **자기 데이터 폴더**를 쓴다.
+ *
+ * 안 그러면 개발 기기의 `server/data/`를 그대로 물어서, (1) 테스트가 남의 명부에 이미
+ * 적혀 있던 태그 덕에 통과하고(새 클론·다른 기기에서는 깨진다), (2) `npm test`를 돌릴
+ * 때마다 진짜 사고 기록·확인자료에 테스트 이벤트가 쌓인다. 둘 다 실제로 있던 일이다.
+ */
+function isolatedEnv(): Record<string, string> {
+  return { DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'server-test-')) };
+}
 const ANCHOR_ARGS = [
   '--main-anchor-id', 'phoneMain',
   '--sub-anchor-id', 'phoneSub',
@@ -26,7 +39,7 @@ function launch(args: readonly string[], timeoutMs = 20000): Promise<Launch> {
   return new Promise((resolve, reject) => {
     // PORT=0으로 OS가 빈 포트를 잡게 해 다른 테스트·개발 서버와 부딪히지 않게 한다.
     const child = spawn(process.execPath, [SERVER, ...args], {
-      env: { ...process.env, PORT: '0', FALL_AI: '0' },
+      env: { ...process.env, PORT: '0', FALL_AI: '0', ...isolatedEnv() },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -99,7 +112,7 @@ interface Running {
 function start(args: readonly string[], env: Record<string, string> = {}): Promise<Running> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER, ...args], {
-      env: { ...process.env, PORT: '0', ...env },
+      env: { ...process.env, PORT: '0', ...isolatedEnv(), ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -173,9 +186,24 @@ async function collectStream(
 
 const alertsIn = (events: SseEvent[]) => events.filter((e) => e.event === 'alert');
 
+/**
+ * 주입할 태그를 먼저 명부에 올린다. **live 모드 명부는 비어서 시작한다** — 시뮬 배경 태그를
+ * 자동 등록하는 건 sim 모드뿐이라, 등록 없이 주입하면 ingest 관문이 프레임을 통째로 버린다
+ * (그게 반납=수집 중단의 설계다). 예전엔 개발 기기에 남아 있던 명부 파일 덕에 이 줄 없이도
+ * 통과했다.
+ */
+async function assignTag(port: number, tagId: string, label = '테스트 대상'): Promise<void> {
+  const res = await fetch(
+    `http://127.0.0.1:${port}/tags/register?tagId=${tagId}&label=${encodeURIComponent(label)}`,
+    { method: 'POST' },
+  );
+  assert.equal((await res.json()).ok, true, `${tagId} 등록 실패`);
+}
+
 test('낙상 클립을 주입하면 감지기가 감지 이벤트를 낸다', async () => {
   const server = await start([...ANCHOR_ARGS, '--source', 'live']);
   try {
+    await assignTag(server.port, 'tag-101');
     const clips = await (await fetch(`http://127.0.0.1:${server.port}/clips`)).json();
     assert.ok(Array.isArray(clips) && clips.length >= 1);
     assert.ok(clips.some((c: { id: string }) => c.id === 'fall-detected'));
@@ -217,6 +245,7 @@ test('낙상 클립을 주입하면 감지기가 감지 이벤트를 낸다', as
 test('헛경보 클립은 AI가 기각해 경보가 안 나간다', async () => {
   const server = await start([...ANCHOR_ARGS, '--source', 'live']);
   try {
+    await assignTag(server.port, 'tag-101');
     const stream = collectStream(server.port, () => false, 13000);
     await new Promise((r) => setTimeout(r, 300));
     const started = await (await fetch(

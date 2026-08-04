@@ -27,6 +27,10 @@ import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/
 import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
 import { applyZonePolicy, type PositionLike } from './lib/privacy.ts';
+import { createTagRegistry, normalizeLabel, isValidTagId } from './tags/registry.ts';
+import { createSightings } from './tags/sightings.ts';
+import { createTokenMailbox, parseTokenMessage, isPeerId } from './ni/mailbox.ts';
+import { readJsonBody, HttpBodyError } from './ingest/body.ts';
 import { createStaticHandler } from './static/handler.ts';
 import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS, type EventRecord } from './events/recorder.ts';
 import { createEventStore, isValidEventId } from './events/store.ts';
@@ -114,6 +118,55 @@ const incidentStore = createEventStore(process.env.INCIDENTS_DIR || path.join(da
 const auditLog = createAuditLog(process.env.AUDIT_DIR || path.join(dataDir, 'audit'));
 const collectTracker = createCollectTracker(auditLog);
 
+// 태그 명부. **반납이 곧 수집 중단이다**(위치정보법 제24조②의 기술적 수단).
+// 여기에 없거나 반납된 태그의 프레임은 아래 ingest 관문에서 통째로 버린다.
+//
+// **모드마다 장부가 다르다.** 시뮬 배경 태그는 기동할 때 자동으로 명부에 오르는데(아래),
+// 장부가 한 파일이면 그 세 명이 파일에 남아 다음에 실기기로 띄워도 "수집 중"으로 앉아 있다.
+// 명부는 지금 누구의 위치를 수집하는지를 말하는 장부이자 확인자료의 근거라, 가짜 사람이
+// 섞이면 안 된다. 걸러서 감추는 대신 장부 자체를 나눈다 — 필터는 언젠가 새는 곳이 생긴다.
+const tagRegistry = createTagRegistry(process.env.TAGS_DIR || path.join(dataDir, 'tags'), {
+  fileName: sourceMode === 'sim' ? 'registry.sim.json' : 'registry.live.json',
+});
+// 명부에 없는 태그가 문을 두드린 기록(메모리 전용). 관리 화면이 이걸 보고 배정한다.
+const sightings = createSightings();
+// 앵커 폰끼리 NI 토큰을 건네는 우편함(메모리 전용, 만료 15초). 자세한 이유는 ni/mailbox.ts.
+// 명부와 달리 수집 여부와 무관한 무선 링크 설정용이라, 등록 관문 앞에 있어도 된다 —
+// 토큰이 오간다고 위치가 수집되지는 않는다. 수집은 /ingest 관문이 따로 막는다.
+const tokenMailbox = createTokenMailbox();
+
+/** 등록과 반납은 처리 사실이라 확인자료에 남는다. 반납 시각이 곧 수집 종료 시각이다. */
+function registerTag(tagId: string, label: string, by: string) {
+  const entry = tagRegistry.register(tagId, label, by);
+  // 배정됐으니 더는 미등록이 아니다.
+  sightings.forget(tagId);
+  auditLog.record({ kind: 'collect', tagId, actor: by, detail: `태그 등록 · ${label}` });
+  return entry;
+}
+
+function releaseTag(tagId: string, by: string) {
+  const entry = tagRegistry.release(tagId, by);
+  if (!entry) return null;
+  // 열려 있던 수집 세션도 지금 닫는다. 반납했는데 세션이 30초 더 열려 있으면
+  // 확인자료의 종료 시각과 실제 중단 시각이 어긋난다.
+  auditLog.closeCollect(tagId);
+  auditLog.record({ kind: 'collect', tagId, actor: by, detail: `태그 반납 · 수집 중단 · ${entry.label}` });
+  return entry;
+}
+
+// 시뮬 배경 태그를 기동 시 명부에 올린다. 명부에 없으면 관문에서 프레임이 버려져
+// 화면이 빈 채로 뜬다. **이미 반납한 태그는 되살리지 않는다** — 재기동으로 반납이
+// 풀린다면 그건 중지 수단이 아니다.
+//
+// **live 모드에서는 올리지 않는다.** 시뮬이 안 도는데 명부에 "수집 중"으로 세 명이
+// 앉아 있으면 실기기 검증 중에 명부가 거짓말을 하는 셈이다. 그때 명부는 비어서
+// 시작하고, 워치를 켜면 미등록으로 잡혀 거기서 배정한다.
+if (sourceMode === 'sim') {
+  for (const tag of sim.tags) {
+    if (!tagRegistry.get(tag.id)) registerTag(tag.id, tag.name, 'system');
+  }
+}
+
 /**
  * 아직 파일로 안 닫힌 경보에 대한 판정.
  *
@@ -196,7 +249,7 @@ const retention = createRetention({
   facilityDir: process.env.FACILITY_DIR || path.join(dataDir, 'facility'),
 });
 
-function broadcast(event: 'position' | 'alert', data: unknown): void {
+function broadcast(event: 'position' | 'alert' | 'tags', data: unknown): void {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const response of clients) response.write(frame);
 }
@@ -363,7 +416,41 @@ function noteSingleAnchorEstimate(
   );
 }
 
+/**
+ * 이 태그를 지금 수집해도 되는가. **프레임 하나하나가 여기를 먼저 통과한다.**
+ *
+ * 반납한 태그의 프레임은 여기서 끝난다 — 측위도, 기록도, 로그도, 낙상 판정도 돌지 않는다.
+ * 위치정보법 제24조 제2항이 요구하는 "일시 중지의 기술적 수단"이 이 한 줄이고, 수단을
+ * 안 갖춘 것 자체가 과태료 대상이라 화면에서 감추는 것으로는 갈음되지 않는다.
+ *
+ * 명부에 아예 없는 태그도 같이 막힌다. 등록은 배정 절차이자 수집 근거의 시작이라,
+ * 등록 안 된 태그가 흘러들어오는 것은 근거 없는 수집이다.
+ */
+function isCollecting(tagId: unknown): boolean {
+  return typeof tagId === 'string' && tagRegistry.isActive(tagId);
+}
+
+/**
+ * 안 받은 프레임을 기록한다. **프레임은 버리고 태그 번호와 시각만 남긴다.**
+ *
+ * 명부에 아예 없는 태그는 "문을 두드리는 중"이라 관리 화면에 띄워야 배정할 수 있다.
+ * 반납한 태그는 관제사가 이미 아는 상태라 목록에 올리지 않는다 — 올리면 반납할 때마다
+ * 미등록 목록에 다시 나타나 반납이 안 끝난 것처럼 보인다.
+ */
+function noteDrop(tagId: unknown): void {
+  const id = typeof tagId === 'string' ? tagId : '(태그 없음)';
+  if (typeof tagId !== 'string') return;
+  const entry = tagRegistry.get(tagId);
+  if (entry) return;   // 반납된 태그. 조용히 버린다
+  if (sightings.note(tagId)) console.log(`[tags] ${id} 미등록 태그가 신호를 보내고 있습니다`);
+}
+
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
+  // 반납했거나 등록 안 된 태그는 여기서 끝난다. 아래 어느 줄도 실행되지 않는다.
+  if (!isCollecting(payload.tagId)) {
+    noteDrop(payload.tagId);
+    return null;
+  }
   // 확인자료의 '수집'. 프레임마다가 아니라 세션 단위로 남는다 — 조문이 요구하는 것은
   // 처리 사실이지 프레임 이력이 아니다(spec 11 §4.6).
   if (payload.tagId) collectTracker.touch(payload.tagId);
@@ -420,8 +507,13 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
 
 // 측위 스트림은 sim 모드에서만 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
 if (sourceMode === 'sim') {
-  // 시뮬 좌표도 같은 관문을 지난다. 배경 태그가 화장실에 있으면 화면에서도 사라져야 한다.
-  sim.on('position', (position: unknown) => broadcast('position', zonePolicy(position)));
+  // 시뮬 좌표도 같은 관문 둘을 지난다 — 반납한 태그는 여기서도 안 나가고(제24조②),
+  // 배경 태그가 화장실에 있으면 화면에서 사라진다(F-6).
+  sim.on('position', (position: unknown) => {
+    const tagId = (position as { tagId?: unknown } | null)?.tagId;
+    if (!isCollecting(tagId)) return;
+    broadcast('position', zonePolicy(position));
+  });
   sim.start(5);
 }
 
@@ -623,8 +715,70 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
       throw error;
     }
   }
+  // NI 토큰 우편함. 앵커 폰 두 대가 서로의 discoveryToken을 여기서 주고받는다.
+  //
+  // 워치는 짝폰(메인폰)하고만 통신할 수 있어 서브폰 몫 토큰은 메인폰이 중계해 왔는데, 그 폰↔폰
+  // 구간이 Bonjour 탐색이라 Wi-Fi 환경을 탔다(같은 공유기여도 AP가 단말 간 통신을 막으면 못 찾는다).
+  // 두 폰이 이미 주소를 아는 곳이 서버뿐이라 여기를 경유지로 쓴다. 자세한 근거는 ni/mailbox.ts.
+  if (pathname === '/ni/token') {
+    // 놓기. 본문은 앱이 Bonjour로 보내던 AddressedToken JSON 그대로다(부호화 변경 없음).
+    if (request.method === 'POST') {
+      readJsonBody(request, { limit: 16 * 1024 })
+        .then((body) => {
+          const message = parseTokenMessage(body);
+          if (!message) return sendJson(response, { ok: false, error: '토큰 메시지 형식이 아닙니다' }, 400);
+          const stored = tokenMailbox.put(message);
+          return sendJson(response, { ok: true, at: stored.at });
+        })
+        .catch((error: unknown) => {
+          if (error instanceof HttpBodyError) {
+            return sendJson(response, { ok: false, error: error.message }, error.statusCode);
+          }
+          console.error('[ni] 토큰 저장 실패', error);
+          return sendJson(response, { ok: false, error: 'internal_error' }, 500);
+        });
+      return;
+    }
+    // 가져가기. 지우지 않는다 — 응답을 한 번 놓쳐도 다음 조회에 다시 잡히고, 같은 토큰을
+    // 두 번 받아도 앱이 아무것도 하지 않는다(runningToken 비교). 정리는 만료가 맡는다.
+    const to = url.searchParams.get('to') ?? '';
+    if (!isPeerId(to)) return sendJson(response, { ok: false, error: `잘못된 to: ${to}` }, 400);
+    return sendJson(response, { ok: true, tokens: tokenMailbox.take(to) });
+  }
+  // 관제 화면이 쓰는 대상 명부. **수집 중인 태그만** 나간다 — 반납한 사람은 관제 대상이
+  // 아니다. `{id, name}` 형태는 예전 계약 그대로다(화면이 이름을 여기서 찾는다).
   if (pathname === '/tags') {
-    return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));
+    return sendJson(response, tagRegistry.active().map((t) => ({ id: t.tagId, name: t.label })));
+  }
+  // 관리 화면용. 반납분까지 이력 전체 + 문을 두드리는 미등록 태그를 같이 준다.
+  if (pathname === '/tags/all') {
+    return sendJson(response, { tags: tagRegistry.list(), pending: sightings.list() });
+  }
+  // 배정. 반납된 태그를 다시 등록하면 새 배정이 된다(같은 사람일 필요는 없다).
+  if (pathname === '/tags/register') {
+    const tagId = url.searchParams.get('tagId') ?? '';
+    const label = normalizeLabel(url.searchParams.get('label'));
+    if (!isValidTagId(tagId)) return sendJson(response, { ok: false, error: `잘못된 tagId: ${tagId}` }, 400);
+    if (!label) return sendJson(response, { ok: false, error: '표시명은 1~40자여야 합니다' }, 400);
+    const entry = registerTag(tagId, label, OPERATOR);
+    console.log(`[tags] ${tagId} 등록 · ${label}`);
+    return sendJson(response, { ok: true, tag: entry });
+  }
+  // 반납. 개인위치정보 수집 일시 중지를 이 절차로 갈음한다(위치정보법 제24조②).
+  if (pathname === '/tags/release') {
+    const tagId = url.searchParams.get('tagId') ?? '';
+    if (!isValidTagId(tagId)) return sendJson(response, { ok: false, error: `잘못된 tagId: ${tagId}` }, 400);
+    const entry = releaseTag(tagId, OPERATOR);
+    if (!entry) return sendJson(response, { ok: false, error: '등록돼 있지 않거나 이미 반납한 태그입니다' }, 409);
+    // 반납한 태그가 경보를 걸어 둔 채였다면 그 경보도 끝난다 — 대상이 관제에서 빠지므로
+    // 화면에 남겨 두면 아무도 끌 수 없는 경보가 된다.
+    alertedTags.delete(tagId);
+    sim.unfreeze(tagId);
+    // 화면이 이 태그를 목록에서 내리도록 알린다. 프레임이 그냥 끊기면 '측위 끊김'으로
+    // 남아, 반납한 사람이 장애 상태로 계속 떠 있게 된다.
+    broadcast('tags', { released: tagId, at: entry.releasedAt });
+    console.log(`[tags] ${tagId} 반납 · 수집 중단 (${entry.label})`);
+    return sendJson(response, { ok: true, tag: entry });
   }
   // 시연용. 배경 태그 하나를 사생활 구역으로 들여보낸다.
   //
@@ -643,7 +797,8 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
 
     // 재생 중인 태그는 주입기가 좌표를 쥐고 있어 걷게 할 수 없다. 남은 것 중 제일 가까운 태그.
     const candidates = sim.tags
-      .filter((tag: SimTag) => !sim.frozen.has(tag.id))
+      // 반납한 태그는 어차피 프레임이 안 나가므로 보내 봐야 화면에 안 뜬다.
+      .filter((tag: SimTag) => !sim.frozen.has(tag.id) && isCollecting(tag.id))
       .map((tag: SimTag) => ({ tag, at: sim.positionOf(tag.id) }))
       .filter((c): c is { tag: SimTag; at: { x: number; y: number } } => c.at !== null)
       .sort((a, b) => Math.hypot(a.at.x - center.x, a.at.y - center.y)
@@ -756,6 +911,9 @@ server.listen(port, () => {
   }
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
   console.log(`  소스       ${sourceMode}${sourceMode === 'sim' ? ' (시뮬 자동 방출)' : ' (실측 ingest만 방출)'}`);
+  // 어느 장부를 들고 있는지 밝힌다. 모드마다 다른 파일이라, 명부가 비어 보이는 게
+  // 고장인지 다른 장부를 연 것인지 여기서 갈린다.
+  console.log(`  태그 명부  ${tagRegistry.file} · 수집 중 ${tagRegistry.active().length}명`);
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {
     console.warn(
       `  ⚠ 1앵커 테스트 모드 — 서브 앵커 거리가 없으면 ${anchorConfig.mainAnchorId} 거리를`
