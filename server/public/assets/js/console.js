@@ -1060,7 +1060,16 @@ function connect() {
   es.addEventListener('position', (e) => {
     const f = JSON.parse(e.data);
     const prev = state.frames.get(f.tagId) || {};
-    state.frames.set(f.tagId, { ...prev, ...f, name: prev.name || f.name || f.tagId, seenAt: Date.now() });
+    state.frames.set(f.tagId, {
+      ...prev, ...f,
+      name: prev.name || f.name || f.tagId,
+      // 프레임은 누적 병합이라 안 실린 필드는 직전 값이 남는다. privacy는 그러면 안 된다 —
+      // 화장실에서 나온 프레임에 이 필드가 없으면 마커가 영영 안 돌아온다.
+      privacy: f.privacy === true,
+      seenAt: Date.now(),
+    });
+    // 사생활 구역에 들어간 대상을 기다리고 있었다면 지금이 주입할 때다.
+    if (f.privacy === true) privacyInject.arrived(f.tagId);
     scheduleRender();
   });
   es.addEventListener('alert', (e) => {
@@ -1116,6 +1125,51 @@ function inject(tagId, whenMissing) {
     })
     .catch((err) => { state.demoNote = `주입 실패: ${err.message}`; render(); });
 }
+
+/**
+ * 사생활 구역 시연. 화장실에 아무도 없으면 먼저 한 명을 들여보내고, 좌표가 지워진 채로
+ * 프레임이 오기 시작하면 그때 낙상을 주입한다.
+ *
+ * 대상이 도착했다는 신호는 SSE 프레임의 `privacy` 하나뿐이다 — 서버가 좌표를 지웠다는 건
+ * 그 사람이 구역 안에 있다는 뜻이고, 화면이 알 수 있는 건 거기까지다. 시각으로 재지 않고
+ * 이 신호를 기다리는 이유가 그것이다(걷는 속도가 태그마다 다르다).
+ */
+const privacyInject = {
+  waitingFor: null,
+  timer: null,
+  arrived(tagId) {
+    if (this.waitingFor !== tagId) return;
+    this.cancel();
+    inject(tagId, '');
+  },
+  cancel() {
+    this.waitingFor = null;
+    clearTimeout(this.timer);
+    this.timer = null;
+  },
+  send() {
+    this.cancel();
+    state.demoNote = '대상을 화장실로 보내는 중…';
+    render();
+    fetch('/demo/privacy-enter', { method: 'POST' })
+      .then((r) => r.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(res.error || '이동 실패');
+        this.waitingFor = res.tagId;
+        const eta = Math.ceil(res.etaMs / 1000);
+        state.demoNote = `${res.name || res.tagId} → ${res.zone} 이동 중 · 약 ${eta}초`;
+        render();
+        // 벽을 안 세고 잰 직선 거리라 실제로는 더 걸린다. 넉넉히 기다렸다가 포기한다 —
+        // 아무 말 없이 멈춰 있으면 버튼이 고장 난 걸로 보인다.
+        this.timer = setTimeout(() => {
+          this.cancel();
+          state.demoNote = '이동이 예상보다 오래 걸린다 — 도착하면 버튼을 다시 누른다';
+          render();
+        }, res.etaMs * 2 + 20000);
+      })
+      .catch((err) => { state.demoNote = `이동 실패: ${err.message}`; render(); });
+  },
+};
 
 // ── 조작 ───────────────────────────────────────────────────
 
@@ -1244,7 +1298,11 @@ function bind() {
   $('injectPrivacy').onclick = () => {
     // 좌표가 지워진 채로 오는 대상만 사생활 구역 안에 있다고 볼 수 있다.
     const target = Array.from(state.frames.values()).find((f) => f.privacy);
-    inject(target && target.tagId, '사생활 구역에 있는 대상이 없다 — 서버 사생활 필터(P1)가 아직 없다');
+    // 아무도 없으면 한 명을 들여보내고 도착하면 주입한다. 배경 태그는 통행 구역만
+    // 걷게 돼 있어 화장실에 스스로 들어가지 않는다.
+    if (!target) return privacyInject.send();
+    privacyInject.cancel();
+    inject(target.tagId, '');
   };
 
   // 층 메뉴 바깥을 누르면 닫는다.
