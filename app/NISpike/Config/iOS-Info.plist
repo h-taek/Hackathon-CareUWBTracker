@@ -2,10 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_nispike._tcp</string>
-	</array>
+	<!-- NSBonjourServices는 없앴다. 폰끼리 서로를 mDNS로 찾던 경로를 걷어내고 서버 우편함
+	     (/ni/token)으로 옮겼다 — 찾는 단계가 AP 설정에 막혀 자주 죽었다. 로컬 네트워크 권한
+	     자체는 여전히 필요하다(맥으로 가는 HTTP도 로컬 대상이다). -->
 	<!-- 서버(.local / 사설 IP)로 평문 HTTP ingest 허용. 로컬 네트워크에 한정, 인터넷 임의 HTTP는 막힘. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

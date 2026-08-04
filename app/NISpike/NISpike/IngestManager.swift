@@ -6,9 +6,6 @@ import Combine
 import CoreMotion
 import HealthKit
 #endif
-#if os(iOS)
-import Network   // 폰↔폰 토큰 교환용. watchOS는 로컬 네트워크 금지라 이 채널을 안 쓴다.
-#endif
 
 /// 최종 측위·텔레메트리 매니저. 앵커 폰이 **1대든 2대든** 동작한다.
 ///
@@ -26,15 +23,23 @@ import Network   // 폰↔폰 토큰 교환용. watchOS는 로컬 네트워크 �
 /// - 각 세션은 자기 discoveryToken을 만든다. "이 토큰은 누구(from)→누구(to)"인지 주소를 붙여야 상대가
 ///   올바른 세션에 꽂는다 → `AddressedToken{from,to,token}`.
 /// - 워치는 companion 폰(WCSession)하고만 통신 가능하다. 그래서 서브폰 토큰은 **메인폰이 중계**한다
-///   (워치→WC→메인폰→네트워크→서브폰, 반대도 동일). `relays=true`인 메인폰이 그 다리다.
-/// - UWB 거리 측정 자체는 토큰만 교환되면 두 라디오가 직접 잰다. 네트워크는 "전화번호(토큰) 교환"에만 쓴다.
+///   (워치→WC→메인폰→서버→서브폰, 반대도 동일). `relays=true`인 메인폰이 그 다리다.
+/// - UWB 거리 측정 자체는 토큰만 교환되면 두 라디오가 직접 잰다. 이 통신은 "전화번호(토큰) 교환"에만 쓴다.
 ///
-/// WCSession 한 채널에 두 종류를 흘린다(멀티플렉싱):
-/// - **NI 토큰**: raw 데이터(sendMessageData) 또는 userInfo["m"]. 주소가 붙어 있어 필요 시 메인폰이 중계.
-/// - **텔레메트리 배치**: 키 메시지(sendMessage["batch"]). 워치→메인폰 단방향. + 제어(ctrl:stop) 양방향.
+/// 토큰이 지나는 길은 둘뿐이고, 둘 다 **찾는 단계가 없다**:
+/// - 워치↔메인폰: WCSession(짝폰 전용 링크). Wi-Fi·인터넷과 무관해 어디서든 붙는다.
+/// - 메인폰↔서브폰: 서버 우편함(HTTP). 예전엔 Bonjour로 서로를 **찾아** 직접 붙었는데, 그 찾는
+///   단계(mDNS 멀티캐스트)가 AP 설정에 따라 자주 죽었다 — 인터넷은 되는데 옆 단말만 안 보이는
+///   상태(client isolation), 멀티캐스트 억제, 밴드/게스트망 분리. 서버 경유는 두 폰이 서로를
+///   볼 필요가 없다. 각자 아는 주소(맥)와 1:1로만 통하면 된다.
+///
+/// WCSession 한 채널에 세 종류를 흘린다(멀티플렉싱, 모두 키 메시지):
+/// - **NI 토큰** `["m"]` · **텔레메트리 배치** `["batch"]`(워치→메인폰 단방향) · **제어** `["ctrl"]`(양방향).
+///   토큰과 배치가 같은 문을 쓴다 — 배치는 도착하는데 토큰만 안 붙던 자리라 검증된 채널로 합쳤다.
 ///
 /// 최신화(캐시·묵은 데이터 방지):
-/// - 시작할 때마다 세션·네트워크 채널을 새로 만든다(새 discoveryToken) → 묵은 토큰 latch 방지.
+/// - 시작할 때마다 세션을 새로 만든다(새 discoveryToken) → 묵은 토큰 latch 방지.
+///   서버 우편함도 같은 자리를 덮어쓰고 15초면 만료돼, 꺼진 기기의 토큰이 남지 않는다.
 /// - 정지하면 모든 세션·연결·타이머·상태를 완전히 비운다(teardown).
 /// - 워치독 타이머가 일정 시간 갱신 없는 앵커 거리를 nil로 만든다 → 얼어붙은 옛 거리가 남지 않는다.
 final class IngestManager: NSObject, ObservableObject {
@@ -84,7 +89,7 @@ final class IngestManager: NSObject, ObservableObject {
     private let rangeLock = NSLock()
     private var sendRanges: [String: Double] = [:]
     #if os(iOS)
-    private var net: NetworkTokenChannel?
+    private var mailbox: TokenMailboxClient?   // 폰↔폰 토큰이 지나는 서버 우편함
     #endif
 
     #if os(watchOS)
@@ -148,18 +153,18 @@ final class IngestManager: NSObject, ObservableObject {
                      PeerState(id: IngestManager.subID,  chan: "frame", distance: nil, hz: 0, connected: false)]
         } else {
             peers = role.peers.map {
-                PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "NET", distance: nil, hz: 0, connected: false)
+                PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "서버", distance: nil, hz: 0, connected: false)
             }
         }
         #else
         peers = role.peers.map {
-            PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "NET", distance: nil, hz: 0, connected: false)
+            PeerState(id: $0.id, chan: $0.chan == .wc ? "WC" : "서버", distance: nil, hz: 0, connected: false)
         }
         #endif
 
         if role.usesWC { setupWC() }
         #if os(iOS)
-        if role.usesNet { setupNet() }
+        if role.usesServer { setupTokenMailbox() }
         #endif
         #if os(watchOS)
         startSampling()
@@ -193,7 +198,7 @@ final class IngestManager: NSObject, ObservableObject {
         sessionOwner.removeAll()
         rangeLock.lock(); sendRanges.removeAll(); rangeLock.unlock()
         #if os(iOS)
-        net?.stop(); net = nil
+        mailbox?.stop(); mailbox = nil
         lastFrameAt = nil
         #endif
         #if os(watchOS)
@@ -222,7 +227,7 @@ final class IngestManager: NSObject, ObservableObject {
                         peers: [PeerSpec(id: IngestManager.tagID, chan: .wc)], relays: true)
         case .sub:   // 앵커2: 워치와 거리(net으로 토큰, 메인폰이 중계)
             return Role(myID: IngestManager.subID,
-                        peers: [PeerSpec(id: IngestManager.tagID, chan: .net)], relays: false)
+                        peers: [PeerSpec(id: IngestManager.tagID, chan: .server)], relays: false)
         }
     }
     #endif
@@ -252,13 +257,25 @@ final class IngestManager: NSObject, ObservableObject {
     }
 
     #if os(iOS)
-    private func setupNet() {
-        let ch = NetworkTokenChannel(
-            onMessage:   { [weak self] data in self?.handleIncoming(data, via: .net) },
-            onConnected: { [weak self] in self?.shareMyTokens() },
-            log:         { _ in })
-        ch.start()
-        net = ch
+    /// 폰↔폰 토큰이 지나는 길을 연다. 서버 우편함 하나뿐이다.
+    ///
+    /// 예전엔 Bonjour로 두 폰이 서로를 **찾아서** 직접 붙었는데, 그 찾는 단계(mDNS 멀티캐스트)가
+    /// AP 설정에 따라 자주 죽었다 — 인터넷은 되는데 옆 단말만 안 보이는 상태(client isolation)나,
+    /// 멀티캐스트 억제, 2.4/5GHz 세그먼트 분리 같은 것들. 서버 경유는 두 폰이 서로를 볼 필요가
+    /// 없다. 각자 아는 주소(맥)와 1:1로만 통하면 된다.
+    ///
+    /// 가져올 우편함: 내 앞으로 온 것 + (중계자면) 워치 앞으로 온 것.
+    /// 워치는 HTTP를 못 쓰므로(로컬 네트워크 금지) 워치 몫은 메인폰이 대신 집어 WCSession으로 넘긴다.
+    private func setupTokenMailbox() {
+        guard let role = role else { return }
+        var inboxes = [role.myID]
+        if role.relays { inboxes.append(IngestManager.tagID) }
+        let box = TokenMailboxClient(
+            host:      { [weak self] in self?.serverHost ?? "" },
+            inboxes:   inboxes,
+            onMessage: { [weak self] data in self?.handleIncoming(data, via: .server) })
+        box.start()
+        mailbox = box
     }
     #endif
 
@@ -266,6 +283,7 @@ final class IngestManager: NSObject, ObservableObject {
     private func shareMyTokens() {
         guard let role = role else { return }
         for spec in role.peers {
+            // discoveryToken은 세션이 준비돼야 나온다. 아직이면 건너뛰고 다음 재시도에 맡긴다.
             guard let link = links[spec.id], let tok = link.session.discoveryToken,
                   let tokData = try? NSKeyedArchiver.archivedData(withRootObject: tok,
                                                                   requiringSecureCoding: true) else { continue }
@@ -280,13 +298,17 @@ final class IngestManager: NSObject, ObservableObject {
         case .wc:
             guard let wc = wc, wc.activationState == .activated else { return }
             if wc.isReachable {
-                wc.sendMessageData(data, replyHandler: nil) { _ in wc.transferUserInfo(["m": data]) }
+                // 텔레메트리 배치와 **같은 문**(sendMessage 키 채널)으로 보낸다.
+                // 예전엔 토큰만 sendMessageData(raw)를 썼는데, 배치는 도착하고 토큰만 안 붙는
+                // 증상이 반복돼 검증된 채널 하나로 합쳤다. 수신측 `message["m"]` 경로는 원래 있었다.
+                wc.sendMessage(["m": data], replyHandler: nil) { _ in wc.transferUserInfo(["m": data]) }
             } else {
                 wc.transferUserInfo(["m": data])   // 상대 앱 꺼져있으면 큐잉
             }
-        case .net:
+        case .server:
+            // 폰↔폰. 워치는 이 길을 못 쓰고 쓸 일도 없다(상대가 항상 짝폰이다).
             #if os(iOS)
-            net?.broadcast(data)
+            mailbox?.post(data)
             #endif
         }
     }
@@ -314,13 +336,21 @@ final class IngestManager: NSObject, ObservableObject {
     }
 
     // MARK: 토큰 수신 + (메인폰이면) 중계
+    /// WCSession 델리게이트와 우편함 조회는 **각자 자기 백그라운드 큐**에서 이걸 부른다.
+    /// 반면 `links`·`rangingRunning`·`NISession.run`은 메인 큐 소유물이다. 여태 두 쓰레드가 같은
+    /// 딕셔너리를 만지고 있어서, 토큰이 시작 직후에 오면 조회가 어긋날 수 있었다(간헐 미연결).
+    /// 여기서 한 번 메인으로 넘겨 소유권을 한 쓰레드로 되돌린다.
     private func handleIncoming(_ data: Data, via: Chan) {
+        DispatchQueue.main.async { self.routeIncoming(data, via: via) }
+    }
+
+    private func routeIncoming(_ data: Data, via: Chan) {
         guard rangingRunning,
               let msg = try? JSONDecoder().decode(AddressedToken.self, from: data) else { return }
         if msg.to == role?.myID {
             deliver(msg)
         } else if role?.relays == true {
-            let out: Chan = (via == .wc) ? .net : .wc   // 온 채널의 반대쪽으로 넘김
+            let out: Chan = (via == .wc) ? .server : .wc   // 온 채널의 반대쪽으로 넘김
             send(data, on: out)
         }
     }
@@ -570,14 +600,18 @@ final class IngestManager: NSObject, ObservableObject {
 
 // MARK: - 토큰/역할 모델 (라우팅에 쓰는 값 타입)
 
-/// 주소가 붙은 토큰 메시지(JSON으로 직렬화해 WC/네트워크 어디로든 보냄).
+/// 주소가 붙은 토큰 메시지(JSON으로 직렬화해 WCSession·서버 우편함 어디로든 보냄).
 struct AddressedToken: Codable {
     let from: String    // 보낸 기기 역할 ID
     let to: String      // 받을 기기 역할 ID
     let token: Data     // NSKeyedArchiver로 아카이브한 NIDiscoveryToken
 }
 
-enum Chan { case wc, net }   // 이 피어에게 내 토큰을 보낼 채널
+/// 이 피어에게 내 토큰을 보낼 길. 둘뿐이고 둘 다 상대를 찾을 필요가 없다.
+enum Chan {
+    case wc       // 워치↔짝폰. WCSession 전용 링크
+    case server   // 폰↔폰. 서버 우편함(HTTP)
+}
 
 struct PeerSpec { let id: String; let chan: Chan }
 
@@ -587,7 +621,7 @@ struct Role {
     let peers: [PeerSpec]      // 내가 거리 잴 상대들 (각자 세션 1개)
     let relays: Bool           // true면 나한테 안 온 메시지를 반대 채널로 중계(메인폰 전용)
     var usesWC: Bool { relays || peers.contains { $0.chan == .wc } }
-    var usesNet: Bool { relays || peers.contains { $0.chan == .net } }
+    var usesServer: Bool { relays || peers.contains { $0.chan == .server } }
 }
 
 /// 피어별 링크(세션 + 상태).
@@ -649,7 +683,8 @@ extension IngestManager: WCSessionDelegate {
         DispatchQueue.main.async { self.shareMyTokens() }
     }
 
-    // raw 데이터 == NI 토큰(AddressedToken)
+    // raw 데이터 == NI 토큰(AddressedToken). 이제 보내지는 않지만 계속 받는다 —
+    // 한쪽 기기만 새 빌드로 올라간 상태에서도 옛 빌드가 쏜 토큰을 놓치지 않게.
     func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
         handleIncoming(messageData, via: .wc)
     }
@@ -667,7 +702,8 @@ extension IngestManager: WCSessionDelegate {
         if let data = userInfo["m"] as? Data { handleIncoming(data, via: .wc) }
     }
     func sessionReachabilityDidChange(_ session: WCSession) {
-        if !anyPeerConnected { shareMyTokens() }
+        // 델리게이트 큐(백그라운드)에서 온다. links·role을 읽으므로 메인으로 넘긴다.
+        DispatchQueue.main.async { if !self.anyPeerConnected { self.shareMyTokens() } }
     }
 
     #if os(iOS)

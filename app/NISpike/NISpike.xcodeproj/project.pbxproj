@@ -447,7 +447,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Config/NISpike-HealthKit.entitlements";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "낙상 감지 정확도 테스트를 위해 손목 모션 세션(운동)을 사용합니다.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "낙상 감지 정확도 테스트를 위해 운동 세션 데이터를 기록합니다.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "근처 기기와 UWB 거리 측정을 위해 로컬 네트워크로 토큰을 교환합니다.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "관제 서버로 측정값을 보내고 앵커 기기 사이의 UWB 토큰을 주고받기 위해 로컬 네트워크를 사용합니다.";
 				INFOPLIST_KEY_NSNearbyInteractionUsageDescription = "실내 위치 측정을 위해 근처 기기와의 거리를 사용합니다.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -488,7 +488,7 @@
 				CODE_SIGN_ENTITLEMENTS = "Config/NISpike-HealthKit.entitlements";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "낙상 감지 정확도 테스트를 위해 손목 모션 세션(운동)을 사용합니다.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "낙상 감지 정확도 테스트를 위해 운동 세션 데이터를 기록합니다.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "근처 기기와 UWB 거리 측정을 위해 로컬 네트워크로 토큰을 교환합니다.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "관제 서버로 측정값을 보내고 앵커 기기 사이의 UWB 토큰을 주고받기 위해 로컬 네트워크를 사용합니다.";
 				INFOPLIST_KEY_NSNearbyInteractionUsageDescription = "실내 위치 측정을 위해 근처 기기와의 거리를 사용합니다.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

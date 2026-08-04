@@ -71,19 +71,19 @@ struct IngestView: View {
             .font(.caption)
 
             #if os(iOS)
-            if mgr.phoneRole == .main {
-                VStack(spacing: 4) {
-                    HStack {
-                        Text("서버").font(.caption2).foregroundStyle(.secondary)
-                        TextField("host:port", text: $mgr.serverHost)
-                            .textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .font(.caption.monospaced())
-                    }
-                    if !mgr.lastPostStatus.isEmpty {
-                        Text(mgr.lastPostStatus).font(.caption2).foregroundStyle(.secondary)
-                    }
+            // 서버 주소는 두 역할 모두 쓴다. 메인폰은 ingest를 POST하고, 서브폰은 NI 토큰을
+            // 여기서 가져온다(폰↔폰 토큰이 이 서버를 경유한다 — 서브폰이 비어 있으면 안 붙는다).
+            VStack(spacing: 4) {
+                HStack {
+                    Text("서버").font(.caption2).foregroundStyle(.secondary)
+                    TextField("host:port", text: $mgr.serverHost)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .font(.caption.monospaced())
+                }
+                if mgr.phoneRole == .main, !mgr.lastPostStatus.isEmpty {
+                    Text(mgr.lastPostStatus).font(.caption2).foregroundStyle(.secondary)
                 }
             }
             #endif
