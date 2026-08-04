@@ -6,6 +6,7 @@
 <title>태그 등록·반납 — 한마음요양원</title>
 <link rel="stylesheet" href="/_ds/styles.css">
 <link rel="stylesheet" href="/assets/css/registry.css">
+<link rel="stylesheet" href="/assets/css/operator.css">
 <script src="/assets/js/registry.js" type="module"></script>
 </head>
 <body>
@@ -16,6 +17,11 @@
     <span class="brand-sub">한마음요양원 1층</span>
   </div>
   <span class="spacer"></span>
+  <!-- 등록·반납이 누구의 조작인지 확인자료에 남는다(spec operation 03). -->
+  <div class="op" id="opChip" hidden>
+    <span class="op-name" id="opName">—</span>
+    <button class="op-switch" id="opSwitch" type="button">관제사 변경</button>
+  </div>
 </div>
 
 <main class="wrap">

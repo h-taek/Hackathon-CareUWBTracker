@@ -10,6 +10,8 @@
 //
 // 화면 구조와 클래스는 index.html · assets/css/console.css를 함께 본다.
 
+import { initOperatorGate, requireOperator, guard } from './operator.js';
+
 const $ = (id) => document.getElementById(id);
 const tpl = (id) => $(id).content.firstElementChild;
 
@@ -462,9 +464,10 @@ function confirmDelete(kind, e) {
 
 async function removeRecord(kind, id) {
   closeModal();
+  if (!requireOperator()) return;
   const base = kind === 'incident' ? '/incidents' : '/events';
   try {
-    const res = await fetch(`${base}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = guard(await fetch(`${base}/${encodeURIComponent(id)}`, { method: 'DELETE' }));
     const body = await res.json().catch(() => ({}));
     state.demoNote = res.ok
       ? `${kind === 'incident' ? '사건' : '기록'} 삭제됨`
@@ -884,8 +887,9 @@ function focusOn(pos) {
 /** 판정·번복을 서버에 보낸다. 화면 상태는 서버 응답을 받고 나서 바꾼다 — 창 밖이면 409다. */
 async function sendOutcome(eventId, outcome) {
   closeModal();
+  if (!requireOperator()) return;
   try {
-    const res = await fetch(`/events/${encodeURIComponent(eventId)}/outcome?outcome=${outcome}`, { method: 'POST' });
+    const res = guard(await fetch(`/events/${encodeURIComponent(eventId)}/outcome?outcome=${outcome}`, { method: 'POST' }));
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       state.demoNote = `정정 불가 — ${body.error || res.status}`;
@@ -1248,6 +1252,9 @@ function bind() {
   const resolveWith = (outcome) => {
     const a = state.alert;
     if (!a) return;
+    // **화면에서 지우기 전에 막는다.** 아래에서 경보를 먼저 걷고 서버에 알리는 구조라,
+    // 서버가 401로 거절하면 화면에서만 사라진 경보가 서버에 남는다.
+    if (!requireOperator()) return;
     state.alert = null;
     const at = Date.now();
     // 서버가 이 기록을 파일로 닫기까지 10초 남짓 걸린다. 그동안 화면에서 사라지지 않도록
@@ -1268,6 +1275,7 @@ function bind() {
       + `&eventId=${encodeURIComponent(a.eventId || '')}`
       + (outcome ? `&outcome=${outcome}` : '');
     fetch(`/alerts/resolve?${query}`, { method: 'POST' })
+      .then(guard)
       .then(() => {
         // 사건은 서버가 판정 즉시 만든다. 3D 탭을 보고 있으면 바로 반영한다.
         if (state.tab === 'scene') loadScenes();
@@ -1330,6 +1338,7 @@ const round1 = (n) => Math.round(n * 10) / 10;
 
 // ── 시작 ───────────────────────────────────────────────────
 
+initOperatorGate();
 buildFloorMenu();
 bind();
 render();

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>관제사 확인 — 한마음요양원</title>
+<link rel="stylesheet" href="/_ds/styles.css">
+<link rel="stylesheet" href="/assets/css/operator.css">
+<script src="/assets/js/operator-page.js" type="module"></script>
+</head>
+<body>
+
+<!-- 관제 화면 앞의 관문이다. 여기를 지나야 /와 /registry가 열린다(spec operation 03 §7).
+     상단바를 두지 않는다 — 아직 아무것도 조작할 수 없는 화면이라 걸 것이 없다. -->
+<main class="op-wrap">
+
+  <div class="op-brand">
+    <span class="op-brand-title">실시간 낙상 관제</span>
+    <span class="op-brand-sub">한마음요양원 · 1층</span>
+  </div>
+
+  <section class="op-card">
+    <h1 class="op-title">관제사 선택</h1>
+
+    <div class="op-roster" id="roster">
+      <div class="op-empty">불러오는 중…</div>
+    </div>
+
+    <div class="op-add">
+      <input class="op-input" id="name" maxlength="20" placeholder="관제사 추가"
+             autocomplete="off" spellcheck="false">
+      <button class="op-add-go" id="add" type="button">추가</button>
+    </div>
+
+    <button class="op-enter" id="enter" type="button" disabled>관제 화면으로 들어가기</button>
+
+    <p class="op-note" id="note"></p>
+  </section>
+
+</main>
+
+</body>
+</html>

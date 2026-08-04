@@ -4,6 +4,8 @@
 // 수집을 켜고 끄는 실제 스위치는 서버의 명부 하나다(server/tags/registry.ts).
 // 화면에서만 감추는 방식으로는 위치정보법 제24조②의 "기술적 수단"이 되지 않는다.
 
+import { initOperatorGate, requireOperator, guard } from './operator.js';
+
 const $ = (id) => document.getElementById(id);
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -130,11 +132,17 @@ async function load() {
   }
 }
 
+/**
+ * 등록·반납은 **관제사를 고른 뒤에만** 된다(spec operation 03 §4). 서버도 401로 막지만,
+ * 화면이 먼저 걸러야 "왜 안 되는지"를 그 자리에서 보여줄 수 있다.
+ */
 async function post(path, params) {
+  if (!requireOperator()) throw new Error('먼저 관제사를 고른다');
   const query = new URLSearchParams(params).toString();
-  const res = await fetch(`${path}?${query}`, { method: 'POST' }).then((r) => r.json());
-  if (!res.ok) throw new Error(res.error || '요청 실패');
-  return res;
+  const res = guard(await fetch(`${path}?${query}`, { method: 'POST' }));
+  const body = await res.json().catch(() => ({}));
+  if (!body.ok) throw new Error(body.error || '요청 실패');
+  return body;
 }
 
 async function register() {
@@ -172,6 +180,8 @@ async function release(tag) {
     say(`반납 실패: ${err.message}`, true);
   }
 }
+
+initOperatorGate();
 
 $('register').onclick = register;
 for (const id of ['tagId', 'label']) {
