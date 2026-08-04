@@ -33,13 +33,8 @@ const OUTCOME_LABEL = {
 /** 번복 창. 서버 /events가 실제 값을 알려주면 그걸로 바뀐다. */
 let undoWindowMs = 24 * 3600 * 1000;
 
-// 층은 아직 서버에 개념이 없다. 1층만 데이터가 있고 나머지는 자리만 잡아둔다.
-const FLOORS = [
-  { id: 'F1', name: '1층 · 요양생활실', ready: true },
-  { id: 'F2', name: '2층 · 요양생활실', ready: false },
-  { id: 'F3', name: '3층 · 재활실', ready: false },
-  { id: 'F4', name: '4층 · 관리동', ready: false },
-];
+// 층 목록은 서버가 쥔다(/map). 여기 하드코딩하면 서버가 모르는 층을 화면이 알고 있는
+// 상태가 생긴다 — 그 층으로 바꾸면 도면도 마커도 없이 빈 화면이 뜬다.
 
 const state = {
   frames: new Map(),        // tagId -> 최신 position 페이로드 (+ seenAt)
@@ -59,7 +54,8 @@ const state = {
   selected: null,
   live: false,
   bounds: { x: [0, 32], y: [0, 20] },   // 서버 /map이 오면 그 값이 이긴다
-  floor: 'F1',
+  floors: [],               // /map의 층 목록. 받기 전에는 비어 있다
+  floor: null,              // 지금 보고 있는 층 id
   floorsOpen: false,
   leftOpen: true,
   rightOpen: true,
@@ -68,6 +64,7 @@ const state = {
   pan: { x: 0, y: 0 },
   clipId: null,             // /clips에서 고른 낙상 클립
   demoNote: '',
+  siteName: '',             // 시설명. /map이 준다
 };
 
 // ── 표시 형식 ──────────────────────────────────────────────
@@ -344,8 +341,12 @@ function renderEvents() {
     card.querySelector('.event-title').textContent = `${e.name} · 낙상 감지`;
     card.querySelector('.event-time').textContent = fmtClock(e.ts);
     card.querySelector('.event-status').textContent = OUTCOME_LABEL[e.outcome] || e.outcome;
+    // 로그는 층으로 거르지 않고 전 층을 함께 보여주되, 몇 층이었는지는 줄마다 적는다
+    // (plan/impl 01 A-F6). 구역명은 층마다 겹친다 — "화장실(여)"는 네 층에 다 있다.
+    // 층 필드가 없는 이전 기록은 층 없이 그대로 나온다.
     card.querySelector('.event-where').textContent =
-      (e.zone || '구역 미지정')
+      (e.floor ? `${e.floor} · ` : '')
+      + (e.zone || '구역 미지정')
       + (e.privacy ? ' · 좌표 미기록' : '')
       + (e.purged ? ' · 좌표 파기됨' : '');
     card.querySelector('.event-meta').textContent = fmtG(e.peakAccel);
@@ -907,43 +908,154 @@ async function sendOutcome(eventId, outcome) {
 
 const floorEls = new Map();
 
+/** 지금 보고 있는 층. 아직 /map을 못 받았으면 null. */
+const currentFloor = () => state.floors.find((f) => f.id === state.floor) || null;
+
+/** 그 층에서 지금 프레임이 오고 있는 태그. 마커·목록·배지가 전부 이걸로 갈린다. */
+const framesOn = (floorId) => Array.from(state.frames.values()).filter((f) => f.floor === floorId);
+
+/**
+ * 도면 SVG. 층마다 파일이 따로이므로 받아서 심는다.
+ *
+ * `<img>`로 물리지 않는 이유는 그러면 SVG가 격리 문서로 그려져 이 페이지의 웹폰트를
+ * 못 쓰기 때문이다 — 도면 실명이 전부 기본 sans-serif로 떨어진다.
+ * 한 번 받은 것은 들고 있는다. 층을 오갈 때마다 다시 받으면 전환할 때 도면이 깜빡인다.
+ */
+const planCache = new Map();
+
+async function showPlan(floor) {
+  const host = $('floorplanHost');
+  if (!floor || !floor.plan) { host.innerHTML = ''; return; }
+  let markup = planCache.get(floor.id);
+  if (markup === undefined) {
+    try {
+      const res = await fetch(floor.plan);
+      markup = res.ok ? await res.text() : '';
+    } catch { markup = ''; }
+    planCache.set(floor.id, markup);
+  }
+  // 받아오는 사이에 관제사가 층을 또 바꿨으면 늦게 온 도면을 심지 않는다.
+  if (state.floor !== floor.id) return;
+  host.innerHTML = markup;
+}
+
+/** 미리 받아둔다. 층을 처음 여는 순간에 네트워크를 기다리면 빈 도면이 스친다. */
+function prefetchPlans() {
+  for (const f of state.floors) {
+    if (planCache.has(f.id) || !f.plan) continue;
+    fetch(f.plan)
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((text) => planCache.set(f.id, text))
+      .catch(() => planCache.set(f.id, ''));
+  }
+}
+
+/**
+ * 층을 바꾼다. 도면·마커·목록·상단바가 함께 따라간다(plan/impl 01 A-F2).
+ *
+ * 화면이 스스로 층을 옮기는 자리는 경보가 올 때 하나뿐이고, 그것도 경보 한 건에 한 번이다.
+ * 그래서 그 뒤 관제사가 직접 옮긴 층은 아무것도 되돌리지 않는다(B-4).
+ */
+function goToFloor(floorId) {
+  if (!floorId || state.floor === floorId) return;
+  state.floor = floorId;
+  // 선택한 대상이 다른 층 사람이면 선택을 놓는다. 안 그러면 목록에 없는 사람이
+  // 선택된 채로 남아 `위치로 이동`이 화면 밖을 가리킨다.
+  const sel = state.selected ? state.frames.get(state.selected) : null;
+  if (sel && sel.floor !== floorId) state.selected = null;
+  showPlan(currentFloor());
+  render();
+}
+
 function buildFloorMenu() {
   const menu = $('floorMenu');
-  for (const f of FLOORS) {
+  menu.replaceChildren();
+  floorEls.clear();
+  for (const f of state.floors) {
     const node = tpl('tplFloor').cloneNode(true);
     node.querySelector('.floormenu-id').textContent = f.id;
     node.querySelector('.floormenu-name').textContent = f.name;
     node.$badge = node.querySelector('.floormenu-badge');
-    node.onclick = () => { state.floor = f.id; state.floorsOpen = false; render(); };
+    node.onclick = () => { state.floorsOpen = false; goToFloor(f.id); };
     floorEls.set(f.id, node);
     menu.appendChild(node);
   }
 }
 
-function renderFloors(online) {
-  const cur = FLOORS.find((f) => f.id === state.floor) || FLOORS[0];
-  setText($('floorId'), cur.id);
-  setText($('floorName'), cur.name);
-  setText($('floorMeta'), cur.ready ? `태그 ${state.frames.size} · 연결 ${online}` : '데이터 대기');
+/**
+ * 층 배지 문구. **프레임이 오는지로 판단한다** — 앵커 선언이 아니라.
+ * 실기기는 앵커 쌍이 하나뿐이라 나머지 층은 자연히 `데이터 없음`이 된다(A-F5).
+ */
+function floorMeta(floorId, now) {
+  const frames = framesOn(floorId);
+  if (frames.length === 0) return '데이터 없음';
+  const online = frames.filter((f) => !isOffline(f, now)).length;
+  return `태그 ${frames.length} · 연결 ${online}`;
+}
+
+const alarmFloor = () => (state.alert ? state.alert.floor : null);
+
+function renderFloors(now) {
+  const cur = currentFloor();
+  setText($('floorId'), cur ? cur.id : '—');
+  setText($('floorName'), cur ? cur.name : '층 정보를 받는 중…');
+  setText($('floorMeta'), cur ? floorMeta(cur.id, now) : '—');
+  // 상단바 시설명도 지금 층을 따라간다.
+  setText($('siteName'), cur ? `${state.siteName} · ${cur.name}` : state.siteName);
+  setText($('siteBadge'), cur ? cur.id : '—');
 
   $('floorMenu').hidden = !state.floorsOpen;
   $('floorToggle').setAttribute('aria-expanded', String(state.floorsOpen));
   if (!state.floorsOpen) return;
 
-  for (const f of FLOORS) {
+  for (const f of state.floors) {
     const node = floorEls.get(f.id);
-    const cls = `floormenu-item${f.id === state.floor ? ' is-current' : ''}${f.ready ? '' : ' is-pending'}`;
+    if (!node) continue;
+    const frames = framesOn(f.id);
+    const alarming = alarmFloor() === f.id;
+    const cls = `floormenu-item${f.id === state.floor ? ' is-current' : ''}`
+      + `${frames.length === 0 ? ' is-pending' : ''}${alarming ? ' is-alarm' : ''}`;
     if (node.className !== cls) node.className = cls;
-    setText(node.$badge, f.ready ? `태그 ${state.frames.size}` : '데이터 대기');
+    setText(node.$badge, alarming ? '낙상' : floorMeta(f.id, now));
   }
 }
 
 // ── 경보 ───────────────────────────────────────────────────
 
+/**
+ * 사생활 구역 강조 사각형(A-P5). **그 층 구역에서 계산한다.**
+ *
+ * 예전에는 CSS에 1층 화장실 자리를 백분율로 박아 뒀는데, 층마다 도면이 다른 지금은
+ * 2층 화장실 낙상에 1층 화장실이 빨개진다. 좌표계는 서버가 쥐고 있으므로(bounds)
+ * 구역 사각형을 그대로 백분율로 옮기면 된다.
+ */
+function placeZoneAlert(alert) {
+  const box = $('zoneAlert');
+  const floor = state.floors.find((f) => f.id === alert.floor);
+  // 경보가 난 구역을 이름으로 찾는다. 좌표는 이미 지워졌으므로 이것 말고 단서가 없다.
+  const zone = floor && floor.zones.find((z) => z.label === alert.zone && z.privacy);
+  if (!zone) { box.hidden = true; return; }
+
+  const [bx0, bx1] = state.bounds.x;
+  const [by0, by1] = state.bounds.y;
+  const bw = bx1 - bx0 || 32;
+  const bh = by1 - by0 || 20;
+  const [zx, zy, zw, zh] = zone.rect;
+  box.style.left = `${((zx - bx0) / bw * 100).toFixed(2)}%`;
+  // SVG는 위에서부터 재므로 구역 위쪽 모서리(zy + zh)를 기준으로 뒤집는다.
+  box.style.top = `${((by1 - (zy + zh)) / bh * 100).toFixed(2)}%`;
+  box.style.width = `${(zw / bw * 100).toFixed(2)}%`;
+  box.style.height = `${(zh / bh * 100).toFixed(2)}%`;
+  box.hidden = false;
+}
+
 function renderAlert() {
   const a = state.alert;
   $('alertCard').hidden = !a;
-  $('zoneAlert').hidden = !(a && a.privacy);   // A-P5: 강조할 마커가 없으면 구역을 강조한다
+  // A-P5: 강조할 마커가 없으면 구역을 강조한다. 그 층을 보고 있을 때만이다 —
+  // 4층 경보인데 1층 도면 위에 사각형을 그리면 없는 자리를 가리킨다.
+  if (a && a.privacy && a.floor === state.floor) placeZoneAlert(a);
+  else $('zoneAlert').hidden = true;
   if (!a) return;
   setText($('alertHead'), `${a.name || nameOf(a.tagId)} · ${a.zone || '구역 미지정'}`);
   setText($('alertWhere'), a.pos
@@ -964,13 +1076,16 @@ function scheduleRender() {
 
 function render() {
   const now = Date.now();
-  const list = Array.from(state.frames.values());
+  // **실시간 화면은 지금 층만 본다.** 다른 층 사람을 이 도면에 찍으면 그 층에 없는
+  // 자리에 마커가 앉는다 — 층마다 방 배치가 다르기 때문이다(plan/impl 01 A-F2).
+  // 거르는 것은 여기까지다. 이벤트 로그는 전 층을 함께 본다(A-F6).
+  const list = state.floor ? framesOn(state.floor) : [];
   const online = list.filter((f) => !isOffline(f, now)).length;
 
   renderMarkers(list, now);
   renderRoster(list, now);
   renderEvents();
-  renderFloors(online);
+  renderFloors(now);
   renderAlert();
 
   setText($('countLabel'), `전체 ${list.length}명`);
@@ -1011,8 +1126,17 @@ async function loadMap() {
     const m = await (await fetch('/map')).json();
     if (m && m.bounds && Array.isArray(m.bounds.x) && Array.isArray(m.bounds.y)) {
       state.bounds = m.bounds;
-      scheduleRender();
     }
+    if (m && typeof m.name === 'string') state.siteName = m.name;
+    // 층 목록은 서버가 정본이다. 화면은 받은 것만 보여준다.
+    if (m && Array.isArray(m.floors) && m.floors.length > 0) {
+      state.floors = m.floors;
+      buildFloorMenu();
+      if (!state.floors.some((f) => f.id === state.floor)) state.floor = state.floors[0].id;
+      await showPlan(currentFloor());
+      prefetchPlans();
+    }
+    scheduleRender();
   } catch { /* 맵을 못 받으면 도면 기본 범위로 계속 간다 */ }
 }
 
@@ -1036,7 +1160,7 @@ async function loadHistory() {
       undoWindowMs = history.undoWindowMs;
     }
     const fromServer = (history.events || []).map((e) => ({
-      id: e.eventId, name: named(e.tagId), zone: e.zone, ts: e.ts,
+      id: e.eventId, name: named(e.tagId), floor: e.floor, zone: e.zone, ts: e.ts,
       peakAccel: e.peakAccel, privacy: !e.pos,
       outcome: e.outcome || 'detected',
       resolvedAt: e.resolvedAt,
@@ -1098,6 +1222,11 @@ function connect() {
     // 크게 띄운 3D가 도면을 덮고 있으면 접는다. 3D는 사고 이후 열람용이라
     // 지금 일어나는 낙상보다 앞설 수 없다(spec system 01 §2.6).
     setFullscreen(false);
+    // **다른 층 낙상이면 그 층으로 화면이 따라간다**(plan/impl 01 B-4). 4층 낙상인데
+    // 1층 도면을 보고 있으면 강조할 마커가 화면에 아예 없고, 관제사가 층을 찾아
+    // 메뉴를 뒤지는 시간이 그대로 대응 지연이 된다.
+    // 여기서만 자동으로 옮긴다 — 옮긴 뒤 관제사가 스스로 나가면 다시 안 끌어온다.
+    if (a.floor) goToFloor(a.floor);
     // 쓰러진 대상을 화면 중앙으로 끌어온다. 사생활 구역이면 좌표가 없어 그냥 넘어가고,
     // 그때는 구역 강조(.zone-alert)가 대신 알린다.
     state.selected = a.tagId;
@@ -1167,7 +1296,9 @@ const privacyInject = {
     this.cancel();
     state.demoNote = '대상을 화장실로 보내는 중…';
     render();
-    fetch('/demo/privacy-enter', { method: 'POST' })
+    // 보고 있는 층에서 일어나야 한다. 다른 층 사람을 들여보내면 이 화면에서는
+    // 아무 일도 안 일어난 것처럼 보인다.
+    fetch(`/demo/privacy-enter?floor=${encodeURIComponent(state.floor || '')}`, { method: 'POST' })
       .then((r) => r.json())
       .then((res) => {
         if (!res.ok) throw new Error(res.error || '이동 실패');
@@ -1260,7 +1391,7 @@ function bind() {
     // 서버가 이 기록을 파일로 닫기까지 10초 남짓 걸린다. 그동안 화면에서 사라지지 않도록
     // 여기 담아 두고, 서버 목록에 나타나면 loadHistory가 알아서 걷어낸다.
     state.freshEvents.set(a.eventId, {
-      id: a.eventId, name: a.name || nameOf(a.tagId), zone: a.zone, ts: a.ts,
+      id: a.eventId, name: a.name || nameOf(a.tagId), floor: a.floor, zone: a.zone, ts: a.ts,
       peakAccel: a.peakAccel, privacy: !a.pos,
       outcome: outcome || 'detected',
       ...(outcome ? { resolvedAt: at } : {}),

@@ -103,6 +103,10 @@ body {
 .app.is-navigating .topbar,
 .app.is-navigating .zoombar { backdrop-filter: none; background: #fbfbfc; }
 
+/* 층 도면이 들어오는 자리. 도면 SVG는 층마다 파일이 따로이고 console.js가 받아 심는다.
+   심는 SVG가 .floorplan을 달고 오므로 크기는 아래 규칙이 잡는다. */
+.floorplan-host { display: contents; }
+
 .floorplan {
   position: absolute;
   inset: 0;
@@ -113,10 +117,11 @@ body {
 }
 
 /* 사생활 구역 낙상 강조(A-P5). 마커가 없으니 구역 전체가 경보를 대신한다.
-   위치·크기는 도면 SVG의 화장실 칸(x 60~390, y 726~1276)을 백분율로 옮긴 것이다. */
+   **위치·크기는 여기 두지 않는다.** 층마다 도면이 다르므로 좌표를 박아 두면 2층
+   화장실 낙상에 1층 화장실이 강조된다 — console.js가 그 층 map.json 구역에서 계산해
+   left/top/width/height를 직접 얹는다. */
 .zone-alert {
   position: absolute;
-  left: 1.87%; top: 36.3%; width: 10.31%; height: 13.7%;
   pointer-events: none;
   animation: zonePulse 1.1s ease-in-out infinite;
 }

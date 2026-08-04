@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="floorplan" viewBox="0 0 3200 2000">
+  <!-- 1층 · 요양생활실. 100px = 1m, 원점은 좌하단(SVG y는 아래로 자라므로 world_y = 20 - svg_y/100).
+       구역 사각형은 server/map.json의 F1 zones와 한 몸이다 — 벽을 옮기면 그쪽도 같이 고친다. -->
+  <defs>
+    <pattern id="uwbPriv" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#9a9a9d" stroke-width="2" opacity="0.5"></line>
+    </pattern>
+    <pattern id="uwbHaz" width="18" height="18" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <line x1="0" y1="0" x2="0" y2="18" stroke="#98989b" stroke-width="1.8" opacity="0.28"></line>
+    </pattern>
+    <filter id="uwbPaper" x="-3%" y="-3%" width="106%" height="106%">
+      <feDropShadow dx="0" dy="8" stdDeviation="18" flood-color="#2b2b2d" flood-opacity="0.15"></feDropShadow>
+    </filter>
+  </defs>
+
+  <rect x="45" y="45" width="3110" height="1910" fill="#f7f7f8" filter="url(#uwbPaper)"></rect>
+
+  <!-- 바닥 마감: 중앙 라운지 + 이를 두르는 회유 복도 -->
+  <g>
+    <rect x="60" y="526" width="3080" height="200" fill="#efefef"></rect>
+    <rect x="60" y="1276" width="3080" height="200" fill="#efefef"></rect>
+    <rect x="390" y="726" width="336" height="550" fill="#efefef"></rect>
+    <rect x="2350" y="726" width="250" height="550" fill="#efefef"></rect>
+    <rect x="726" y="726" width="1624" height="550" fill="#f7f7f8"></rect>
+    <rect x="60" y="60" width="466" height="466" fill="url(#uwbHaz)"></rect>
+    <rect x="60" y="726" width="330" height="550" fill="#eaeaeb"></rect>
+    <rect x="60" y="726" width="330" height="550" fill="url(#uwbPriv)"></rect>
+  </g>
+
+  <!-- 벽체 -->
+  <g fill="none" stroke="#6f6f72" stroke-width="7" stroke-linecap="square">
+    <rect x="60" y="60" width="3080" height="1880"></rect>
+  </g>
+  <g fill="none" stroke="#8a8a8d" stroke-width="5" stroke-linecap="square">
+    <path d="M60 526H3140 M60 726H3140 M60 1276H3140 M60 1476H3140"></path>
+    <path d="M390 726V1276 M726 726V1276 M2350 726V1276 M2600 726V1276"></path>
+    <path d="M60 1000H390 M2600 1000H3140"></path>
+    <path d="M526 60V526 M1117 60V526 M1700 60V526 M2283 60V526 M2866 60V526"></path>
+    <path d="M526 1476V1940 M1117 1476V1940 M1700 1476V1940 M2283 1476V1940 M2866 1476V1940"></path>
+  </g>
+
+  <!-- 개구부 -->
+  <g stroke-width="6" stroke-linecap="butt">
+    <path stroke="#efefef" d="M210 526H300 M780 526H870 M1360 526H1450 M1950 526H2040 M2530 526H2620 M2950 526H3040"></path>
+    <path stroke="#efefef" d="M210 1476H300 M780 1476H870 M1360 1476H1450 M1950 1476H2040 M2530 1476H2620 M2950 1476H3040"></path>
+    <path stroke="#eaeaeb" d="M390 800V890 M390 1100V1190"></path>
+    <path stroke="#efefef" d="M390 726H726 M390 1276H726 M2350 726H2600 M2350 1276H2600"></path>
+    <path stroke="#f7f7f8" d="M2600 800V890 M2600 1100V1190"></path>
+    <path stroke="#f7f7f8" d="M1000 726H1240 M1900 726H2140 M1450 1276H1750"></path>
+  </g>
+
+  <!-- 실명. **이 그룹의 글자만 map.json zones[].label과 짝을 이룬다**(테스트가 대조한다).
+       아래 보조 표기 그룹은 구역이 아니므로 대조 대상이 아니다. -->
+  <g id="roomLabels" font-family="Barlow Condensed, sans-serif" font-size="30" fill="#424244" letter-spacing="0.03em">
+    <text x="105" y="495">계단실</text>
+    <text x="553" y="495">101호</text><text x="1144" y="495">102호</text>
+    <text x="1727" y="495">103호</text><text x="2310" y="495">104호</text><text x="2893" y="495">창고</text>
+    <text x="80" y="975" font-size="24">화장실(여)</text><text x="80" y="1250" font-size="24">화장실(남)</text>
+    <text x="2620" y="975" font-size="24">간호사실</text>
+    <text x="2620" y="1250" font-size="24">상담실</text>
+    <text x="105" y="1905">주방 · 식당</text>
+    <text x="553" y="1905">105호</text><text x="1144" y="1905">106호</text>
+    <text x="1727" y="1905">107호</text><text x="2310" y="1905">108호</text><text x="2893" y="1905">세탁실</text>
+    <text x="755" y="1240" font-size="34">라운지 · 거실</text>
+  </g>
+  <g font-family="Barlow, sans-serif" font-size="17" fill="#8a8a8d">
+    <text x="228" y="495">위험구역</text>
+    <text x="651" y="495">4인실</text><text x="1242" y="495">4인실</text>
+    <text x="1825" y="495">2인실</text><text x="2408" y="495">2인실</text>
+    <text x="651" y="1905">4인실</text><text x="1242" y="1905">4인실</text>
+    <text x="1825" y="1905">2인실</text><text x="2408" y="1905">2인실</text>
+    <text x="80" y="1222">사생활 구역</text>
+    <text x="1010" y="1250">공용 생활공간 · 96.1㎡</text>
+  </g>
+</svg>
