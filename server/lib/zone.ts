@@ -14,10 +14,15 @@ export interface ZoneMap {
   zones: Zone[];
 }
 
-export function zoneAt(map: ZoneMap, x: number, y: number): string {
+/** 맵 좌표 (x,y)가 든 첫 zone. 없으면 null. 라벨만 필요하면 zoneAt을 쓴다. */
+export function findZone(map: ZoneMap, x: number, y: number): Zone | null {
   for (const z of map.zones) {
     const [rx, ry, rw, rh] = z.rect;
-    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return z.label;
+    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return z;
   }
-  return '미지정';
+  return null;
+}
+
+export function zoneAt(map: ZoneMap, x: number, y: number): string {
+  return findZone(map, x, y)?.label ?? '미지정';
 }

@@ -47,3 +47,26 @@ test('예상 밖 앵커는 두 슬롯 뒤에 덧붙인다', () => {
     payload({ ranges: [{ anchorId: 'phoneThird', distance: 3 }] }), null, OPTS);
   assert.match(line, /phoneMain=- phoneSub=- phoneThird=3\.00m/);
 });
+
+test('사생활 구역 프레임은 좌표도 앵커 거리도 안 찍는다', () => {
+  const line = formatIngestLine(
+    payload({ ranges: [
+      { anchorId: 'phoneMain', distance: 3.2 },
+      { anchorId: 'phoneSub', distance: 4.1 },
+    ] }),
+    { pos: null, privacy: true, zone: '화장실(여)' },
+    OPTS);
+  // 거리 둘이면 삼각측량으로 좌표가 다시 나온다 — 숫자가 한 톨도 남으면 안 된다.
+  assert.doesNotMatch(line, /3\.20|4\.10/);
+  assert.doesNotMatch(line, /phoneMain=|phoneSub=/);
+  assert.match(line, /ranges: \(사생활 구역 · 미기록\)/);
+  assert.match(line, /pos=\(사생활 구역 · 화장실\(여\)\)/);
+});
+
+test('사생활 구역에서도 가속도는 로그에 남는다 — 낙상 판정의 입력이다', () => {
+  const line = formatIngestLine(
+    payload({ accel: { x: 0, y: 0, z: 29.4 } }),
+    { pos: null, privacy: true, zone: '화장실(남)' },
+    OPTS);
+  assert.match(line, /\|a\|=29\.40 m\/s²/);
+});

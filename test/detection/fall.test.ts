@@ -198,3 +198,33 @@ test('허용폭을 넘게 늦은 프레임은 여전히 버린다', () => {
   ]);
   assert.strictEqual(out.length, 0);
 });
+
+// ── 사생활 구역(F-6) ────────────────────────────────────────
+//
+// 감지기는 태그별 마지막 좌표를 들고 있다가 이벤트에 싣는다. 사생활 구역에서 좌표가
+// 안 오면 그 '마지막 좌표'는 화장실 문 앞이 된다 — 서버가 지운 좌표가 경보를 타고
+// 되살아나는 길이다. 아래 둘이 그 길을 막는다.
+
+/** 사생활 구역 프레임(서버 필터를 통과한 모양). 좌표는 없고 구역명만 있다. */
+const priv = (zone = '화장실(여)') => ({ pos: null, zone, privacy: true });
+
+test('사생활 구역 프레임이 들어오면 들고 있던 좌표를 버린다', () => {
+  const det = createFallDetector();
+  // 복도에서 걷다가(좌표 있음) 화장실로 들어간 뒤 넘어진다.
+  det.observe(frame(0, 1), { pos: { x: 5.0, y: 9.0, z: 1 }, zone: '서측 복도', privacy: false });
+  const events = run(det, [frame(100, 4.0), ...seq(200, 100, QUIET(20))], priv() as never);
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].pos, null, '문 앞 좌표가 이벤트에 실렸다');
+  assert.strictEqual(events[0].zone, '화장실(여)');
+  assert.strictEqual(events[0].privacy, true);
+});
+
+test('사생활 구역을 나오면 다시 좌표가 실린다', () => {
+  const det = createFallDetector();
+  det.observe(frame(0, 1), priv() as never);
+  const after = { pos: { x: 5.0, y: 9.0, z: 1 }, zone: '서측 복도', privacy: false };
+  const events = run(det, [frame(100, 4.0), ...seq(200, 100, QUIET(20))], after as never);
+  assert.deepStrictEqual(events[0].pos, { x: 5.0, y: 9.0, z: 1 });
+  assert.strictEqual(events[0].privacy, false);
+  assert.strictEqual(events[0].zone, '서측 복도');
+});

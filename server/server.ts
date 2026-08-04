@@ -26,6 +26,7 @@ import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ing
 import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
 import { createCascadeDetector } from './detection/cascade.ts';
 import { zoneAt } from './lib/zone.ts';
+import { applyZonePolicy, type PositionLike } from './lib/privacy.ts';
 import { createStaticHandler } from './static/handler.ts';
 import { createEventRecorder, recorderOptionsFromEnv, RECORDER_DEFAULTS, type EventRecord } from './events/recorder.ts';
 import { createEventStore, isValidEventId } from './events/store.ts';
@@ -201,17 +202,19 @@ function broadcast(event: 'position' | 'alert', data: unknown): void {
 }
 
 /**
- * 좌표에 구역 라벨을 붙여 내보낸다. 화면은 마커와 대상 목록에 구역명을 쓰는데 측위 결과
- * 자체에는 구역이 없다 — 맵을 쥐고 있는 건 서버뿐이라 여기서 채운다. 경보(alert)는
- * 이미 같은 방식으로 zone을 달고 나가므로 둘의 라벨이 어긋나지 않는다.
+ * 좌표에 구역 라벨을 붙이고, 사생활 구역이면 좌표를 지운다(F-6, spec 03 §1.1).
  *
- * 표시용 보강이라 기록·로그 경로는 건드리지 않는다. 사생활 구역 필터를 여기에 두면 안 된다 —
- * 방출 직전이라 그때는 이미 좌표가 레코드에 들어간 뒤다(계약 spec 03 §1.1).
+ * 맵을 쥐고 있는 건 서버뿐이라 구역 판정은 여기서만 할 수 있다. 그래서 이 함수는
+ * **처리 단계의 첫 관문**이다 — 여기를 지난 프레임만 기록·로그·감지기·방출로 간다.
+ * 방출 직전에 두면 화면에서만 감춰지고 궤적 버퍼와 서버 로그에는 좌표가 남는다.
+ *
+ * 좌표는 구역 판정에 쓰고 즉시 버린다. 평활기까지는 좌표가 들어가지만 그건 메모리
+ * 안에서 끝나고, 이 함수 뒤로는 어디에도 기록되지 않는다.
  */
-function broadcastPosition(position: unknown): void {
+function zonePolicy(position: unknown): unknown {
   const pos = (position as { pos?: { x: number; y: number } | null } | null)?.pos;
-  if (!position || !pos) return broadcast('position', position);
-  broadcast('position', { ...(position as object), zone: zoneAt(map, pos.x, pos.y) });
+  if (!position || !pos) return position;   // 측위 실패·보류 프레임은 그대로 흘린다
+  return applyZonePolicy(map, position as PositionLike);
 }
 
 const handlePositioning = createPositioningHandler({
@@ -367,8 +370,11 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
   const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
   warnIfGeometryBroken(rawPosition);
   noteSingleAnchorEstimate(rawPosition);
-  const position = rawPosition ? positionSmoother.observe(rawPosition) : null;
-  if (position) broadcastPosition(position);
+  // 평활화까지가 좌표를 다루는 마지막 자리다. 그 뒤 zonePolicy를 지나면 사생활 구역
+  // 프레임에는 좌표가 없고, 아래 넷(방출·기록·로그·감지기)은 전부 지워진 것만 본다.
+  const smoothed = rawPosition ? positionSmoother.observe(rawPosition) : null;
+  const position = zonePolicy(smoothed) as PositionRecord | null;
+  if (position) broadcast('position', position);
   // 경보보다 먼저 넣는다. 판정은 정점 뒤 1.5초에 나므로, 경보가 등록되는 시점에는
   // 이 프레임까지가 이미 버퍼에 들어 있어야 한다.
   eventRecorder.observe(payload, position);
@@ -385,6 +391,8 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
     console.error('[fall] detector error', error);
   }
   for (const event of fallEvents) {
+    // 좌표가 있으면 그 자리로 라벨을 다시 매긴다. 사생활 구역은 좌표가 없으므로
+    // 감지기가 실어 보낸 구역명(마지막으로 본 구역)을 그대로 둔다.
     if (event.pos) event.zone = zoneAt(map, event.pos.x, event.pos.y);
     // 쓰러진 사람은 누가 갈 때까지 그 자리에 있다. 시뮬이 이 태그를 계속 걷게 두면
     // 화면에는 경보가 떠 있는데 마커만 산책하는 상태가 된다. 푸는 것은 관제사가
@@ -392,7 +400,8 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
     alertedTags.add(event.tagId);
     sim.freeze(event.tagId);
     const ai = event.aiScore != null ? ` ai=${event.aiScore}` : '';
-    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${event.zone ?? '-'}`);
+    const where = event.privacy ? `${event.zone ?? '사생활 구역'} · 좌표 미기록` : (event.zone ?? '-');
+    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${where}`);
     broadcast('alert', event);
     // 확인자료의 '이용'. 좌표를 낙상 판정과 화면 표시에 썼다는 사실을 남긴다.
     // **좌표값 자체는 넣지 않는다** — 그러면 확인자료가 아니라 파기 대상이 된다.
@@ -411,7 +420,8 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
 
 // 측위 스트림은 sim 모드에서만 방출한다. live 모드에서는 실측 ingest만 /stream으로 나간다.
 if (sourceMode === 'sim') {
-  sim.on('position', (position: unknown) => broadcastPosition(position));
+  // 시뮬 좌표도 같은 관문을 지난다. 배경 태그가 화장실에 있으면 화면에서도 사라져야 한다.
+  sim.on('position', (position: unknown) => broadcast('position', zonePolicy(position)));
   sim.start(5);
 }
 
@@ -615,6 +625,45 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   }
   if (pathname === '/tags') {
     return sendJson(response, sim.tags.map((tag: SimTag) => ({ id: tag.id, name: tag.name })));
+  }
+  // 시연용. 배경 태그 하나를 사생활 구역으로 들여보낸다.
+  //
+  // 배경 태그는 통행 구역만 걷게 돼 있어(sim.waypoint) 화장실에 스스로 들어가지 않는다.
+  // 그래서 사생활 구역 필터가 걸리는 장면을 보려면 누군가를 들여보내야 한다. 순간이동이
+  // 아니라 걸어 들어가게 두는 이유는, 마커가 화장실 앞에서 사라지는 그 순간이 이 기능의
+  // 전부이기 때문이다. 도착까지 걸리는 시간은 응답의 etaMs로 알려준다.
+  if (pathname === '/demo/privacy-enter') {
+    // 시연용 이동 속도(m/s). 평소 배회 속도(0.4~0.9)로 맵을 가로지르면 20초 넘게 걸려
+    // 발표가 멈춘다. 도착하면 평소 걸음으로 되돌아온다(sim.sendTo).
+    const DEMO_WALK_SPEED = 3.0;
+    const zone = map.zones.find((z) => z.privacy);
+    if (!zone) return sendJson(response, { ok: false, error: '맵에 사생활 구역이 없습니다' }, 400);
+    const [rx, ry, rw, rh] = zone.rect;
+    const center = { x: rx + rw / 2, y: ry + rh / 2 };
+
+    // 재생 중인 태그는 주입기가 좌표를 쥐고 있어 걷게 할 수 없다. 남은 것 중 제일 가까운 태그.
+    const candidates = sim.tags
+      .filter((tag: SimTag) => !sim.frozen.has(tag.id))
+      .map((tag: SimTag) => ({ tag, at: sim.positionOf(tag.id) }))
+      .filter((c): c is { tag: SimTag; at: { x: number; y: number } } => c.at !== null)
+      .sort((a, b) => Math.hypot(a.at.x - center.x, a.at.y - center.y)
+        - Math.hypot(b.at.x - center.x, b.at.y - center.y));
+    const chosen = candidates[0];
+    if (!chosen) return sendJson(response, { ok: false, error: '보낼 수 있는 대상이 없습니다' }, 409);
+
+    // 낙상 주입을 기다렸다가 판정까지 끝낼 만큼은 머물러야 한다. 나오는 장면까지 보려면
+    // holdMs로 줄인다 — 체류가 끝나면 스스로 통행 구역으로 걸어 나간다.
+    const holdMs = Number(url.searchParams.get('holdMs'));
+    const sent = sim.sendTo(
+      chosen.tag.id, center,
+      Number.isFinite(holdMs) && holdMs >= 0 ? holdMs : 120_000,
+      DEMO_WALK_SPEED,
+    );
+    if (!sent) return sendJson(response, { ok: false, error: '보낼 수 있는 대상이 없습니다' }, 409);
+    console.log(`[demo] ${chosen.tag.id} → ${zone.label} (약 ${(sent.etaMs / 1000).toFixed(1)}초)`);
+    return sendJson(response, {
+      ok: true, tagId: chosen.tag.id, name: chosen.tag.name, zone: zone.label, etaMs: sent.etaMs,
+    });
   }
   // 관제사가 경보를 껐다. 경보를 끝내는 유일한 경로이고, 여기서만 태그가 다시 움직인다.
   //

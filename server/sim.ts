@@ -26,6 +26,12 @@ interface SimTagState extends SimTag {
   tx: number;
   ty: number;
   speed: number;
+  /** 이 태그의 평소 보행 속도. sendTo가 속도를 올렸다가 도착하면 이 값으로 되돌린다. */
+  baseSpeed: number;
+  /** 도착하면 이만큼 머문다(ms). sendTo가 심어 두고 도착 시 holdUntil로 바뀐다. */
+  holdMs: number;
+  /** 이 시각까지는 새 목표를 안 뽑는다. 체류를 만드는 값이다. */
+  holdUntil: number;
 }
 
 export interface SimMap extends ZoneMap {
@@ -58,13 +64,17 @@ export class Simulator extends EventEmitter {
       { id: 'tag-103', name: '박OO' },
     ].map((t) => {
       const start = this.waypoint();
+      const speed = rand(0.4, 0.9); // m/s, 노인 보행 속도대
       return {
         ...t,
         x: start.x,
         y: start.y,
         // 목표 지점을 향해 걷다가 도착하면 새 목표를 뽑는 웨이포인트 방식.
         ...this.waypointAsTarget(),
-        speed: rand(0.4, 0.9), // m/s, 노인 보행 속도대
+        speed,
+        baseSpeed: speed,
+        holdMs: 0,
+        holdUntil: 0,
       };
     });
   }
@@ -94,6 +104,35 @@ export class Simulator extends EventEmitter {
   private waypointAsTarget(): { tx: number; ty: number } {
     const p = this.waypoint();
     return { tx: p.x, ty: p.y };
+  }
+
+  /**
+   * 태그를 지정한 자리로 보내고 도착하면 머물게 한다. 배회 경로 밖으로 가는 유일한 길이다.
+   *
+   * 사생활 구역 시연이 이걸 쓴다 — 배경 태그는 통행 구역만 걷게 돼 있어(waypoint) 화장실에
+   * 스스로 들어가지 않는다. 순간이동시키지 않는 이유는 마커가 화장실 쪽으로 걸어가다
+   * 사라지는 그 순간이 보여야 하기 때문이다.
+   *
+   * `speed`를 주면 가는 동안만 그 속도로 걷고 도착하면 평소 속도로 되돌아온다. 시연에서
+   * 노인 보행 속도(0.4~0.9m/s)로 맵을 가로지르면 20초 넘게 걸려 발표가 멈춘다.
+   *
+   * 반환값의 etaMs는 직선 거리 기준 예상 도착 시간이다(벽을 안 세는 대략치).
+   */
+  sendTo(
+    tagId: string,
+    point: { x: number; y: number },
+    holdMs = 60_000,
+    speed?: number,
+  ): { etaMs: number } | null {
+    const tag = this.tags.find((t) => t.id === tagId);
+    if (!tag) return null;
+    tag.tx = point.x;
+    tag.ty = point.y;
+    tag.holdMs = holdMs;
+    tag.holdUntil = 0;
+    if (speed && speed > 0) tag.speed = speed;
+    const distance = Math.hypot(point.x - tag.x, point.y - tag.y);
+    return { etaMs: Math.round((distance / tag.speed) * 1000) };
   }
 
   /** 주입 중인 태그를 시뮬 대상에서 뺀다(좌표는 그 자리에 남는다). */
@@ -131,10 +170,20 @@ export class Simulator extends EventEmitter {
       const dy = tag.ty - tag.y;
       const dist = Math.hypot(dx, dy);
       if (dist < 0.3) {
-        // 도착 -> 새 목표.
-        const next = this.waypoint();
-        tag.tx = next.x;
-        tag.ty = next.y;
+        // 도착. 시연으로 올려 둔 속도는 여기서 평소 걸음으로 되돌린다 —
+        // 안 되돌리면 그 태그만 남은 시연 내내 뛰어다닌다.
+        tag.speed = tag.baseSpeed;
+        // 머물라고 보낸 자리면 그 시간이 찰 때까지 새 목표를 안 뽑는다.
+        if (tag.holdMs > 0) {
+          tag.holdUntil = now + tag.holdMs;
+          tag.holdMs = 0;
+        }
+        if (now >= tag.holdUntil) {
+          tag.holdUntil = 0;
+          const next = this.waypoint();
+          tag.tx = next.x;
+          tag.ty = next.y;
+        }
       } else {
         const stepLen = tag.speed * dt;
         tag.x += (dx / dist) * stepLen;

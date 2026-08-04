@@ -49,6 +49,8 @@ export interface FallEvent {
   aiScore?: number;
   pos?: { x: number; y: number; z?: number } | null;
   zone?: string | null;
+  /** 사생활 구역에서 난 낙상. pos가 null인 이유가 측위 실패가 아니라는 표시다(spec 03 §1.1). */
+  privacy?: boolean;
 }
 
 export interface FallDetectorOptions {
@@ -71,6 +73,10 @@ interface FallState {
   freefallAt: number | null;
   freefallSeen: boolean;
   lastPos: { x: number; y: number; z?: number } | null;
+  /** 마지막으로 확인한 구역. 사생활 구역에서는 좌표가 없어 이것만 남는다. */
+  lastZone: string | null;
+  /** 지금 사생활 구역에 있나. 좌표 없음이 측위 실패인지 정책인지를 이 값이 가른다. */
+  inPrivacy: boolean;
   seq: number;
   /** 이벤트를 낸 시각. 쿨다운은 여기서부터 잰다 */
   firedTs: number;
@@ -101,7 +107,8 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
     if (!st) {
       st = {
         phase: 'IDLE', lastTs: null, impactTs: 0, peakTs: 0, peakG: 0,
-        freefallAt: null, freefallSeen: false, lastPos: null, seq: 0, firedTs: 0,
+        freefallAt: null, freefallSeen: false, lastPos: null,
+        lastZone: null, inPrivacy: false, seq: 0, firedTs: 0,
       };
       states.set(tagId, st);
     }
@@ -126,13 +133,16 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
       freefall: st.freefallSeen,
       pos: st.lastPos ? { x: st.lastPos.x, y: st.lastPos.y, z: st.lastPos.z ?? 0 } : null,
       confidence,
-      zone: null as string | null, // server가 pos 기준으로 채움
+      // 좌표가 있으면 server가 pos 기준으로 덮어쓴다. 사생활 구역은 좌표가 없으므로
+      // 마지막으로 본 구역명이 그대로 이벤트의 위치 정보가 된다.
+      zone: st.lastZone,
+      privacy: st.inPrivacy,
     };
   }
 
   function observe(
     payload: { tagId: string; [key: string]: unknown },
-    position: { pos?: { x: number; y: number; z?: number } } | null,
+    position: { pos?: { x: number; y: number; z?: number } | null; zone?: string; privacy?: boolean } | null,
   ) {
     const st = stateFor(payload.tagId);
     const payloadTs = payload.ts as number;
@@ -148,7 +158,18 @@ export function createFallDetector(options: FallDetectorOptions = {}) {
     const late = behind > 0;
     const ts = late ? (st.lastTs as number) : payloadTs;
     if (!late) st.lastTs = payloadTs;
-    if (position && position.pos) st.lastPos = position.pos;
+    // 사생활 구역에 들어온 순간 들고 있던 좌표를 버린다. 안 버리면 화장실에서 넘어져도
+    // 이벤트에는 **문 앞 좌표**가 실리고 구역은 복도로 찍힌다 — 지운 좌표가 경보를 타고
+    // 되살아나는 셈이다(spec 03 §1.1).
+    if (position?.privacy) {
+      st.lastPos = null;
+      st.inPrivacy = true;
+      if (position.zone) st.lastZone = position.zone;
+    } else if (position?.pos) {
+      st.lastPos = position.pos;
+      st.inPrivacy = false;
+      st.lastZone = position.zone ?? null;
+    }
 
     const a = (payload.accel as { x?: number; y?: number; z?: number } | undefined) || {};
     const g = Math.hypot(a.x || 0, a.y || 0, a.z || 0) / cfg.gravity;
