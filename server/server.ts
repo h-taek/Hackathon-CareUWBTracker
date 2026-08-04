@@ -21,7 +21,11 @@ import { createPositioningHandler } from './positioning/handler.ts';
 import { rangesForPoint } from './positioning/to-ranges.ts';
 import { loadClips, clipSummary } from './inject/clip.ts';
 import { createInjector, ClipNotFoundError, TagNotFoundError } from './inject/injector.ts';
-import { Simulator, type SimTag, type SimMap } from './sim.ts';
+import { Simulator, type SimTag } from './sim.ts';
+import {
+  parseFacilityMap, createFloorIndex,
+  type FacilityMap, type FloorIndex, type Floor,
+} from './map/floors.ts';
 import { formatIngestLine, DEFAULT_GRAVITY, type IngestPayload } from './lib/ingest-log.ts';
 import { createFallDetector, optionsFromEnv, type FallEvent } from './detection/fall.ts';
 import { createCascadeDetector } from './detection/cascade.ts';
@@ -86,9 +90,25 @@ const anchorConfig = config.anchor;
 const sourceMode = config.source;
 
 const port = Number(process.env.PORT ?? 8080);
-const map: SimMap = JSON.parse(
-  fs.readFileSync(path.join(import.meta.dirname, 'map.json'), 'utf8'),
-);
+
+// 맵은 층의 배열이다(spec system 03 §5.2). 어긋난 선언은 여기서 끝난다 —
+// 틀린 층으로 도는 서버는 사고 기록에 틀린 층을 박고, 그건 나중에 되돌릴 수 없다.
+let map: FacilityMap;
+let floorIndex: FloorIndex;
+let liveFloor: Floor;
+try {
+  map = parseFacilityMap(JSON.parse(
+    fs.readFileSync(path.join(import.meta.dirname, 'map.json'), 'utf8'),
+  ));
+  floorIndex = createFloorIndex(map);
+  // 실측 프레임이 어느 층 것인지는 이 대조로 정해진다.
+  liveFloor = floorIndex.requireAnchorPair(anchorConfig.mainAnchorId, anchorConfig.subAnchorId);
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`맵 설정 오류(server/map.json): ${message}`);
+  process.exit(1);
+}
+
 const sim = new Simulator(map);
 // 기본은 고전 감지 후 LightGBM 정밀 판정. 비활성화 또는 모델 로드 실패 시 고전 감지기로 폴백한다.
 const fallDetector = (() => {
@@ -291,15 +311,31 @@ function broadcast(event: 'position' | 'alert' | 'tags', data: unknown): void {
  * 좌표는 구역 판정에 쓰고 즉시 버린다. 평활기까지는 좌표가 들어가지만 그건 메모리
  * 안에서 끝나고, 이 함수 뒤로는 어디에도 기록되지 않는다.
  */
-function zonePolicy(position: unknown): unknown {
+function zonePolicy(floor: Floor, position: unknown): unknown {
   const pos = (position as { pos?: { x: number; y: number } | null } | null)?.pos;
   if (!position || !pos) return position;   // 측위 실패·보류 프레임은 그대로 흘린다
-  return applyZonePolicy(map, position as PositionLike);
+  return applyZonePolicy(floor, position as PositionLike);
 }
 
-const handlePositioning = createPositioningHandler({
-  ...anchorConfig,
-});
+/**
+ * 층별 측위 계산기. 삼각측량은 **그 층의 앵커 쌍**을 기준선으로 삼는다.
+ *
+ * 하나로 두면 실행 인자의 앵커만 알아보므로, 다른 층 앵커로 들어온 프레임(주입기가
+ * 만든 것 포함)은 거리 짝을 못 찾아 좌표가 안 나온다. 앵커 간격과 반평면은 실행 인자
+ * 그대로 공유한다 — 층마다 다르게 둘 근거가 아직 없다(spec system 03 §5.2).
+ */
+const positioningByFloor = new Map<string, ReturnType<typeof createPositioningHandler>>();
+function positioningFor(floor: Floor) {
+  const cached = positioningByFloor.get(floor.id);
+  if (cached) return cached;
+  const handler = createPositioningHandler({
+    ...anchorConfig,
+    mainAnchorId: floor.anchors[0] ?? anchorConfig.mainAnchorId,
+    subAnchorId: floor.anchors[1] ?? anchorConfig.subAnchorId,
+  });
+  positioningByFloor.set(floor.id, handler);
+  return handler;
+}
 
 /**
  * 낙상 경보가 걸린 채 아직 관제사가 끄지 않은 태그.
@@ -503,29 +539,62 @@ function noteDrop(tagId: unknown): void {
   if (sightings.note(tagId)) console.log(`[tags] ${id} 미등록 태그가 신호를 보내고 있습니다`);
 }
 
+/**
+ * 이 프레임이 어느 층 것인가(spec system 03 §5.1 1단계).
+ *
+ * 앵커가 실려 있으면 그 앵커가 선언된 층이다. **accel-only 프레임은 앵커가 없다** —
+ * NI가 아직 안 붙었거나 끊긴 구간이고, 낙상 판정은 그래도 돌아야 한다. 그 태그는
+ * 물리적으로 앵커가 깔린 층에 있으므로 실행 인자가 가리키는 층으로 본다.
+ *
+ * 앵커는 실렸는데 어느 층에도 없으면 null이다 — 그 프레임은 버린다.
+ */
+function floorForPayload(payload: IngestPayload): Floor | null {
+  const ranges = (payload as { ranges?: { anchorId: string }[] }).ranges;
+  if (!Array.isArray(ranges) || ranges.length === 0) return liveFloor;
+  return floorIndex.ofRanges(ranges);
+}
+
+/** 모르는 앵커를 몇 번이나 봤는지. 프레임마다 찍으면 로그가 그걸로 덮인다. */
+const unknownAnchorSeen = new Set<string>();
+
 function logAndPosition(payload: IngestPayload): PositionRecord | null {
   // 반납했거나 등록 안 된 태그는 여기서 끝난다. 아래 어느 줄도 실행되지 않는다.
   if (!isCollecting(payload.tagId)) {
     noteDrop(payload.tagId);
     return null;
   }
+  // 층을 먼저 정한다. 좌표는 층 판정에 관여하지 않는다 — 층은 앵커가 정한다.
+  const floor = floorForPayload(payload);
+  if (!floor) {
+    const ids = ((payload as { ranges?: { anchorId: string }[] }).ranges ?? [])
+      .map((r) => r.anchorId).join(', ');
+    if (!unknownAnchorSeen.has(ids)) {
+      unknownAnchorSeen.add(ids);
+      console.warn(`[floor] 모르는 앵커라 프레임을 버립니다: ${ids}`
+        + ` — map.json의 floors[].anchors에 없는 ID입니다`);
+    }
+    return null;
+  }
   // 확인자료의 '수집'. 프레임마다가 아니라 세션 단위로 남는다 — 조문이 요구하는 것은
   // 처리 사실이지 프레임 이력이 아니다(spec 11 §4.6).
   if (payload.tagId) collectTracker.touch(payload.tagId);
+  const handlePositioning = positioningFor(floor);
   const rawPosition = handlePositioning(payload as Parameters<typeof handlePositioning>[0]);
   warnIfGeometryBroken(rawPosition);
   noteSingleAnchorEstimate(rawPosition);
   // 평활화까지가 좌표를 다루는 마지막 자리다. 그 뒤 zonePolicy를 지나면 사생활 구역
   // 프레임에는 좌표가 없고, 아래 넷(방출·기록·로그·감지기)은 전부 지워진 것만 본다.
   const smoothed = rawPosition ? positionSmoother.observe(rawPosition) : null;
-  const position = zonePolicy(smoothed) as PositionRecord | null;
+  // 층은 좌표에서 나온 값이 아니므로 사생활 필터를 지나도 남는다(spec system 03 §1).
+  const withFloor = smoothed ? { ...smoothed, floor: floor.id } : null;
+  const position = zonePolicy(floor, withFloor) as PositionRecord | null;
   if (position) broadcast('position', position);
   // 경보보다 먼저 넣는다. 판정은 정점 뒤 1.5초에 나므로, 경보가 등록되는 시점에는
   // 이 프레임까지가 이미 버퍼에 들어 있어야 한다.
   eventRecorder.observe(payload, position);
   console.log(formatIngestLine(payload, position, {
-    mainAnchorId: anchorConfig.mainAnchorId,
-    subAnchorId: anchorConfig.subAnchorId,
+    mainAnchorId: floor.anchors[0] ?? anchorConfig.mainAnchorId,
+    subAnchorId: floor.anchors[1] ?? anchorConfig.subAnchorId,
     gravity: DEFAULT_GRAVITY,
   }));
 
@@ -536,9 +605,12 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
     console.error('[fall] detector error', error);
   }
   for (const event of fallEvents) {
-    // 좌표가 있으면 그 자리로 라벨을 다시 매긴다. 사생활 구역은 좌표가 없으므로
-    // 감지기가 실어 보낸 구역명(마지막으로 본 구역)을 그대로 둔다.
-    if (event.pos) event.zone = zoneAt(map, event.pos.x, event.pos.y);
+    // 층은 좌표가 아니라 이 프레임이 온 앵커가 정한다. 좌표를 지운 사생활 구역
+    // 경보에도 남는다 — 몇 층인지 모르면 관제사가 갈 수가 없다.
+    event.floor = floor.id;
+    // 좌표가 있으면 그 자리로 라벨을 다시 매긴다. **그 층의 구역만 본다.**
+    // 사생활 구역은 좌표가 없으므로 감지기가 실어 보낸 구역명(마지막으로 본 구역)을 그대로 둔다.
+    if (event.pos) event.zone = zoneAt(floor, event.pos.x, event.pos.y);
     // 쓰러진 사람은 누가 갈 때까지 그 자리에 있다. 시뮬이 이 태그를 계속 걷게 두면
     // 화면에는 경보가 떠 있는데 마커만 산책하는 상태가 된다. 푸는 것은 관제사가
     // 경보를 끌 때뿐이다(/alerts/resolve).
@@ -546,7 +618,7 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
     sim.freeze(event.tagId);
     const ai = event.aiScore != null ? ` ai=${event.aiScore}` : '';
     const where = event.privacy ? `${event.zone ?? '사생활 구역'} · 좌표 미기록` : (event.zone ?? '-');
-    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${where}`);
+    console.log(`[fall] ${event.type} ${event.tagId} peak=${event.peakAccel}g freefall=${event.freefall}${ai} zone=${floor.id} ${where}`);
     broadcast('alert', event);
     // 확인자료의 '이용'. 좌표를 낙상 판정과 화면 표시에 썼다는 사실을 남긴다.
     // **좌표값 자체는 넣지 않는다** — 그러면 확인자료가 아니라 파기 대상이 된다.
@@ -554,7 +626,9 @@ function logAndPosition(payload: IngestPayload): PositionRecord | null {
       kind: 'use',
       tagId: event.tagId,
       actor: 'system',
-      detail: `낙상 감지 · ${event.eventId} · ${event.zone ?? '구역 미지정'}`,
+      // 층까지 남긴다. 구역명은 층마다 겹치므로("화장실(여)"는 네 층에 다 있다)
+      // 층이 없으면 확인자료만 보고는 어디였는지 못 짚는다.
+      detail: `낙상 감지 · ${event.eventId} · ${floor.name} ${event.zone ?? '구역 미지정'}`,
     });
     // zone까지 채운 뒤에 넘긴다 — 레코드의 alert는 SSE로 나간 것과 같아야 한다.
     liveAlerts.set(event.eventId, { ...event });
@@ -568,9 +642,13 @@ if (sourceMode === 'sim') {
   // 시뮬 좌표도 같은 관문 둘을 지난다 — 반납한 태그는 여기서도 안 나가고(제24조②),
   // 배경 태그가 화장실에 있으면 화면에서 사라진다(F-6).
   sim.on('position', (position: unknown) => {
-    const tagId = (position as { tagId?: unknown } | null)?.tagId;
-    if (!isCollecting(tagId)) return;
-    broadcast('position', zonePolicy(position));
+    const frame = position as { tagId?: unknown; floor?: unknown } | null;
+    if (!isCollecting(frame?.tagId)) return;
+    // 시뮬은 층을 직접 싣고 온다(앵커가 없으므로 판정할 것이 없다). 구역 판정은
+    // 실측과 똑같이 **그 층의 zones로만** 한다.
+    const floor = typeof frame?.floor === 'string' ? floorIndex.byId(frame.floor) : null;
+    if (!floor) return;   // 맵에 없는 층을 가리키는 프레임. 판정할 도면이 없다
+    broadcast('position', zonePolicy(floor, position));
   });
   sim.start(5);
 }
@@ -582,9 +660,18 @@ const clips = loadClips(path.join(import.meta.dirname, 'inject', 'clips'));
 const injector = createInjector({
   clips,
   gravity: DEFAULT_GRAVITY,
+  // 거리는 **그 태그가 있는 층의 앵커로** 합성한다. 실행 인자의 앵커 하나로 전부
+  // 만들면 3층 태그에 넣은 낙상이 1층 사고로 기록된다 — 층은 앵커가 정하기 때문이다.
   rangesFor: (tagId) => {
     const point = sim.positionOf(tagId);
-    return point ? rangesForPoint(point, anchorConfig) : null;
+    if (!point) return null;
+    const floorId = sim.floorIdOf(tagId);
+    const floor = floorId ? floorIndex.byId(floorId) : null;
+    return rangesForPoint(point, {
+      ...anchorConfig,
+      mainAnchorId: floor?.anchors[0] ?? anchorConfig.mainAnchorId,
+      subAnchorId: floor?.anchors[1] ?? anchorConfig.subAnchorId,
+    });
   },
   // 실측 워치가 보내는 것과 같은 검증을 통과시킨다. 여기서 걸리면 클립이나 거리 합성이
   // spec 03 스키마를 벗어난 것이다. 타이머 안이라 그냥 던지면 서버가 죽으므로,
@@ -951,13 +1038,21 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     // 시연용 이동 속도(m/s). 평소 배회 속도(0.4~0.9)로 맵을 가로지르면 20초 넘게 걸려
     // 발표가 멈춘다. 도착하면 평소 걸음으로 되돌아온다(sim.sendTo).
     const DEMO_WALK_SPEED = 3.0;
-    const zone = map.zones.find((z) => z.privacy);
-    if (!zone) return sendJson(response, { ok: false, error: '맵에 사생활 구역이 없습니다' }, 400);
+    // **보고 있는 층에서 일어나야 한다.** 화면이 현재 층을 실어 보내고, 없으면 앵커가
+    // 깔린 층으로 본다 — 다른 층에서 들여보내면 관제사 화면에서는 아무 일도 안 일어난다.
+    const askedFloor = url.searchParams.get('floor');
+    const floor = (askedFloor ? floorIndex.byId(askedFloor) : null) ?? liveFloor;
+    const zone = floor.zones.find((z) => z.privacy);
+    if (!zone) {
+      return sendJson(response, { ok: false, error: `${floor.name}에 사생활 구역이 없습니다` }, 400);
+    }
     const [rx, ry, rw, rh] = zone.rect;
     const center = { x: rx + rw / 2, y: ry + rh / 2 };
 
     // 재생 중인 태그는 주입기가 좌표를 쥐고 있어 걷게 할 수 없다. 남은 것 중 제일 가까운 태그.
     const candidates = sim.tags
+      // 그 층 사람만 보낸다. 층을 넘겨 걷게 하면 없는 기능(층간 이동)을 흉내내게 된다.
+      .filter((tag: SimTag) => tag.floor === floor.id)
       // 반납한 태그는 어차피 프레임이 안 나가므로 보내 봐야 화면에 안 뜬다.
       .filter((tag: SimTag) => !sim.frozen.has(tag.id) && isCollecting(tag.id))
       .map((tag: SimTag) => ({ tag, at: sim.positionOf(tag.id) }))
@@ -976,9 +1071,10 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
       DEMO_WALK_SPEED,
     );
     if (!sent) return sendJson(response, { ok: false, error: '보낼 수 있는 대상이 없습니다' }, 409);
-    console.log(`[demo] ${chosen.tag.id} → ${zone.label} (약 ${(sent.etaMs / 1000).toFixed(1)}초)`);
+    console.log(`[demo] ${chosen.tag.id} → ${floor.id} ${zone.label} (약 ${(sent.etaMs / 1000).toFixed(1)}초)`);
     return sendJson(response, {
-      ok: true, tagId: chosen.tag.id, name: chosen.tag.name, zone: zone.label, etaMs: sent.etaMs,
+      ok: true, tagId: chosen.tag.id, name: chosen.tag.name,
+      floor: floor.id, zone: zone.label, etaMs: sent.etaMs,
     });
   }
   // 관제사가 경보를 껐다. 경보를 끝내는 유일한 경로이고, 여기서만 태그가 다시 움직인다.
@@ -1032,6 +1128,11 @@ server.listen(port, () => {
   console.log(`  SSE 스트림 http://localhost:${shown}/stream`);
   console.log(`  ingest     POST http://localhost:${shown}/ingest`);
   console.log(`  앵커       ${anchorConfig.mainAnchorId} (0,0) / ${anchorConfig.subAnchorId} (${anchorConfig.anchorDistance},0), ${anchorConfig.halfPlane}`);
+  // 실측 프레임이 어느 층으로 기록되는지 밝힌다. 앵커 쌍이 하나뿐이라 live에서 사는 층은 이것 하나다.
+  console.log(
+    `  층         ${map.floors.map((f) => `${f.id} ${f.name}`).join(' · ')}`
+    + `\n             실측 앵커가 가리키는 층 = ${liveFloor.id} ${liveFloor.name}`,
+  );
   console.log(
     `  스무딩     최근 ${smootherConfig.windowSize}개 이동평균`
     + ` · 정지 ${smootherConfig.staticDeadbandM}m 고정 · 점프 ${smootherConfig.jumpBaseM}m↑ 컷 · 클램프 프레임 제외`

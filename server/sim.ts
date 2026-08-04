@@ -5,9 +5,13 @@
 // 경보는 여기서 만들지 않는다. 낙상 경보를 내는 곳은 감지기(detection/) 하나뿐이고,
 // 데모 주입 버튼도 그 감지기를 거친다(inject/injector.ts). 시뮬이 경보를 지어내던
 // 시절에는 화면에 뜨는 경보가 감지기 성능과 아무 상관이 없었다.
+//
+// **층은 시뮬이 직접 쥔다.** 앵커가 없으므로 판정할 대상이 없고, 태그마다 소속 층을 두고
+// 그 층 안에서만 걷게 한다(spec system 03 §5.1). 실측 경로는 앵커로 층을 정하지만 원칙은
+// 같다 — 층은 소스가 정하고, 그 뒤 판정 단계는 받은 층을 쓴다.
 
 import { EventEmitter } from 'node:events';
-import { zoneAt, type ZoneMap } from './lib/zone.ts';
+import type { Floor } from './map/floors.ts';
 
 const G = 9.81; // 1g, m/s^2
 
@@ -18,6 +22,14 @@ function rand(min: number, max: number): number {
 export interface SimTag {
   id: string;
   name: string;
+  /**
+   * 이 태그가 도는 층.
+   *
+   * **태그 ID의 숫자로 층을 알아내지 않는다.** ID에 층 번호를 넣은 것은 로그를 읽기
+   * 쉬우라고 붙인 이름 규칙일 뿐이다 — 사람은 층을 옮기고 태그는 재배정되므로, ID로
+   * 층을 맞히기 시작하면 그 순간부터 틀린 기록이 쌓인다.
+   */
+  floor: string;
 }
 
 interface SimTagState extends SimTag {
@@ -34,9 +46,28 @@ interface SimTagState extends SimTag {
   holdUntil: number;
 }
 
-export interface SimMap extends ZoneMap {
+/** 시뮬이 필요로 하는 맵의 최소 형태 — 좌표계 범위와 층 목록. */
+export interface SimMap {
   bounds: { x: [number, number]; y: [number, number] };
+  floors: Floor[];
 }
+
+/**
+ * 배경 태그 명단. **층마다 사람이 있어야 층 전환이 의미를 갖는다.**
+ *
+ * 1층에 셋을 둔 것은 시연 주무대이기 때문이고, 4층(관리동)에 하나를 둔 것은 로비·접견실이
+ * 입주자가 실제로 가는 자리라서다. 층에 아무도 없으면 그 층은 시뮬에서도 `데이터 없음`이다.
+ */
+const SIM_TAGS: readonly SimTag[] = [
+  { id: 'tag-101', name: '김OO', floor: 'F1' },
+  { id: 'tag-102', name: '이OO', floor: 'F1' },
+  { id: 'tag-103', name: '박OO', floor: 'F1' },
+  { id: 'tag-201', name: '최OO', floor: 'F2' },
+  { id: 'tag-202', name: '정OO', floor: 'F2' },
+  { id: 'tag-301', name: '강OO', floor: 'F3' },
+  { id: 'tag-302', name: '조OO', floor: 'F3' },
+  { id: 'tag-401', name: '윤OO', floor: 'F4' },
+];
 
 export class Simulator extends EventEmitter {
   map: SimMap;
@@ -57,20 +88,18 @@ export class Simulator extends EventEmitter {
     this.timer = null;
     this.frozen = new Set();
 
-    // 가짜 입주자 태그. 각자 통행 구역 안을 완만히 배회한다.
-    this.tags = [
-      { id: 'tag-101', name: '김OO' },
-      { id: 'tag-102', name: '이OO' },
-      { id: 'tag-103', name: '박OO' },
-    ].map((t) => {
-      const start = this.waypoint();
+    // 가짜 입주자 태그. 각자 **자기 층의** 통행 구역 안을 완만히 배회한다.
+    // 맵에 없는 층을 가리키는 태그는 올리지 않는다 — 갈 곳이 없어 좌표가 안 나온다.
+    const known = new Set(map.floors.map((f) => f.id));
+    this.tags = SIM_TAGS.filter((t) => known.has(t.floor)).map((t) => {
+      const start = this.waypoint(t.floor);
       const speed = rand(0.4, 0.9); // m/s, 노인 보행 속도대
       return {
         ...t,
         x: start.x,
         y: start.y,
         // 목표 지점을 향해 걷다가 도착하면 새 목표를 뽑는 웨이포인트 방식.
-        ...this.waypointAsTarget(),
+        ...this.waypointAsTarget(t.floor),
         speed,
         baseSpeed: speed,
         holdMs: 0,
@@ -79,13 +108,20 @@ export class Simulator extends EventEmitter {
     });
   }
 
+  /** 층 id로 층을 찾는다. 없으면 null. */
+  floorOf(floorId: string): Floor | null {
+    return this.map.floors.find((f) => f.id === floorId) ?? null;
+  }
+
   /**
-   * 다음 목표 지점. 맵이 `walkable` 구역을 선언했으면 그 안에서만 뽑는다 —
+   * 다음 목표 지점. **그 층이 선언한 `walkable` 구역 안에서만 뽑는다** —
    * 도면이 실제 평면도가 된 뒤로는 경계 안이라고 걸어도 되는 게 아니다.
    * 안 그러면 배경 태그가 벽을 통과해 창고나 사생활 구역으로 걸어 들어간다.
+   *
+   * 층마다 통행 구역이 다르므로(4층은 로비, 3층은 재활 홀) 층을 받아야 한다.
    */
-  waypoint(): { x: number; y: number } {
-    const walkable = (this.map.zones || []).filter((z) => z.walkable);
+  waypoint(floorId: string): { x: number; y: number } {
+    const walkable = (this.floorOf(floorId)?.zones ?? []).filter((z) => z.walkable);
     if (walkable.length === 0) {
       const [x0, x1] = this.bounds.x;
       const [y0, y1] = this.bounds.y;
@@ -101,8 +137,8 @@ export class Simulator extends EventEmitter {
     };
   }
 
-  private waypointAsTarget(): { tx: number; ty: number } {
-    const p = this.waypoint();
+  private waypointAsTarget(floorId: string): { tx: number; ty: number } {
+    const p = this.waypoint(floorId);
     return { tx: p.x, ty: p.y };
   }
 
@@ -150,9 +186,12 @@ export class Simulator extends EventEmitter {
     return tag ? { x: tag.x, y: tag.y } : null;
   }
 
-  // (x,y) 미터 좌표가 속한 구역 라벨.
-  zoneAt(x: number, y: number): string {
-    return zoneAt(this.map, x, y);
+  /**
+   * 이 태그가 있는 층. 주입기가 **그 층의 앵커로** 거리를 합성할 때 쓴다 —
+   * 실행 인자의 앵커 하나로 전부 합성하면 3층 태그의 낙상이 1층 사고로 기록된다.
+   */
+  floorIdOf(tagId: string): string | null {
+    return this.tags.find((t) => t.id === tagId)?.floor ?? null;
   }
 
   step(dt: number): void {
@@ -180,7 +219,7 @@ export class Simulator extends EventEmitter {
         }
         if (now >= tag.holdUntil) {
           tag.holdUntil = 0;
-          const next = this.waypoint();
+          const next = this.waypoint(tag.floor);
           tag.tx = next.x;
           tag.ty = next.y;
         }
@@ -202,6 +241,7 @@ export class Simulator extends EventEmitter {
         tagId: tag.id,
         name: tag.name,
         ts: now,
+        floor: tag.floor,
         pos: { x: round(tag.x), y: round(tag.y), z: 1.0 },
         err: { xy: 0.2, z: 1.2 }, // UWB 전형 오차(리서치 6-3): z가 xy보다 훨씬 큼
         accel: { x: round(accel.x), y: round(accel.y), z: round(accel.z) },

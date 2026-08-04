@@ -24,6 +24,8 @@ export interface EventSummary {
   peakAccel: unknown;
   freefall: unknown;
   aiScore: unknown;
+  /** 층 식별자. 구역명은 층마다 겹치므로("화장실(여)"는 전 층에 있다) 이게 없으면 어디였는지 못 짚는다. */
+  floor: unknown;
   zone: unknown;
   pos: unknown;
   trackCount: number;
@@ -183,6 +185,7 @@ export function summarize(record: EventRecord): EventSummary {
     peakAccel: alert.peakAccel,
     freefall: alert.freefall,
     aiScore: alert.aiScore,
+    floor: alert.floor,
     zone: alert.zone,
     pos: alert.pos,
     trackCount: record.track?.length ?? 0,

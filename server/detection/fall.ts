@@ -48,6 +48,8 @@ export interface FallEvent {
   freefall: boolean;
   aiScore?: number;
   pos?: { x: number; y: number; z?: number } | null;
+  /** 층 식별자(spec system 03 §2). 좌표를 지운 사생활 구역 경보에도 남는다. */
+  floor?: string | null;
   zone?: string | null;
   /** 사생활 구역에서 난 낙상. pos가 null인 이유가 측위 실패가 아니라는 표시다(spec 03 §1.1). */
   privacy?: boolean;
