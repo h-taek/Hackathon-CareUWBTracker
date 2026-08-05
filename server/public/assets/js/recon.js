@@ -40,7 +40,12 @@ const state = {
   /** 끝난 뒤 `다시 변환`이 쓸 마지막 대상. watching은 끝나면 비운다. */
   last: null,
   timer: null,
+  /** 전송 중인 업로드의 중지 손잡이. 변환이 아니라 **전송**을 끊는다. */
+  upload: null,
 };
+
+/** 더 볼 것이 없는 상태들. 폴링을 여기서 멈춘다. */
+const SETTLED = ['done', 'failed', 'cancelled'];
 
 /** 태그 이름표. 사고 기록에는 태그 ID만 있어 명부에서 이름을 끌어와야 한다. */
 const roster = new Map();
@@ -263,6 +268,7 @@ async function startUpload() {
   const go = $('go');
   go.dataset.busy = '1';
   updateGo();
+  state.upload = new AbortController();
   setSteps({ status: 'running', step: 'upload' });
   $('progressHint').textContent = `${mb(state.file.size)} 전송 중…`;
 
@@ -271,6 +277,7 @@ async function startUpload() {
       method: 'POST',
       headers: { 'Content-Type': state.file.type || 'application/octet-stream' },
       body: state.file,
+      signal: state.upload.signal,
     }));
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -278,10 +285,45 @@ async function startUpload() {
     state.last = state.watching;
     poll();
   } catch (error) {
-    setSteps({ status: 'failed', step: 'upload', error: String(error.message || error) });
+    // 중지로 끊은 전송은 실패가 아니다. 서버에는 반쪽짜리 첨부도 남지 않는다.
+    const ended = error.name === 'AbortError'
+      ? { status: 'cancelled', step: 'upload' }
+      : { status: 'failed', step: 'upload', error: String(error.message || error) };
+    setSteps(ended);
+    showResult(ended, null);
   } finally {
+    state.upload = null;
     go.dataset.busy = '0';
     updateGo();
+  }
+}
+
+/**
+ * 중지. 무엇을 끊는지는 지금 무엇이 도는지가 정한다 — 전송 중이면 전송을, 변환 중이면
+ * 서버가 띄운 도구를 끊는다. **화면에서 폴링만 멈추지 않는다** — 그러면 화면에서만
+ * 멈춘 것처럼 보이고 GPU는 계속 돈다.
+ */
+async function stopNow() {
+  if (state.upload) {
+    state.upload.abort();
+    return;
+  }
+  if (!state.watching || !requireOperator()) return;
+  const { eventId, attachmentId } = state.watching;
+  $('stop').disabled = true;
+  try {
+    const res = guard(await fetch(
+      `/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/recon`,
+      { method: 'DELETE' },
+    ));
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    // 끊긴 도구가 레코드에 `cancelled`로 적히기까지 한 박자 걸린다. 폴링이 그걸 가져온다.
+    poll();
+  } catch (error) {
+    $('progressHint').textContent = `중지하지 못했다 — ${error.message || error}`;
+    $('progressHint').className = 'panel-hint is-bad';
+  } finally {
+    $('stop').disabled = false;
   }
 }
 
@@ -317,20 +359,25 @@ function setSteps(recon) {
   if (!recon) {
     $('progressHint').textContent = '';
     $('progressHint').className = 'panel-hint';
+    $('stop').hidden = true;
     return;
   }
 
   const current = recon.step ?? null;
   const failed = recon.status === 'failed';
   const done = recon.status === 'done';
+  const halted = recon.status === 'cancelled';
   const at = STEPS.findIndex((s) => s.key === current);
+  // 도는 동안에만 중지가 있다. 끝난 뒤에 남아 있으면 뭘 끊는다는 것인지 알 수 없다.
+  $('stop').hidden = done || failed || halted;
 
   for (const [index, step] of STEPS.entries()) {
     const passed = done || (at >= 0 && index < at);
-    const running = !done && !failed && index === at;
+    const running = !done && !failed && !halted && index === at;
     const broke = failed && index === at;
-    const li = el('li', broke ? 'is-bad' : passed ? 'is-done' : running ? 'is-run' : '');
-    li.append(el('span', 'mk', broke ? '×' : passed ? '✓' : running ? '●' : '○'));
+    const cut = halted && index === at;
+    const li = el('li', broke ? 'is-bad' : cut ? 'is-cut' : passed ? 'is-done' : running ? 'is-run' : '');
+    li.append(el('span', 'mk', broke ? '×' : cut ? '■' : passed ? '✓' : running ? '●' : '○'));
     li.append(el('span', 's-name', `${index + 1}/${STEPS.length} ${step.label}`));
     li.append(el('span', 's-d', running ? runningDetail(recon) : detailFor(step.key, recon)));
     li.append(el('span', 's-what', step.what));
@@ -353,10 +400,11 @@ function setSteps(recon) {
   // 6단계(업로드 포함)와 어긋난다 — 섞으면 3/6인지 4/6인지 알 수 없어진다.
   const shown = at >= 0 ? at + 1 : 0;
   $('progressHint').textContent = failed ? `실패 — ${recon.error ?? '원인 불명'}`
-    : done ? '완료'
-      : recon.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
-        : recon.status === 'running' ? '진행 중…'
-          : recon.status === 'pending' ? '대기 중…' : '';
+    : halted ? '중지됨'
+      : done ? '완료'
+        : recon.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
+          : recon.status === 'running' ? '진행 중…'
+            : recon.status === 'pending' ? '대기 중…' : '';
   $('progressHint').className = `panel-hint${failed ? ' is-bad' : ''}`;
 }
 
@@ -377,6 +425,8 @@ function detailFor(key, recon) {
   return '';
 }
 
+const stepLabel = (key) => STEPS.find((s) => s.key === key)?.label ?? '';
+
 /**
  * 끝난 뒤의 한 줄. **여기서 3D를 띄우지 않는다** — 보는 자리는 관제 화면의 3D 탭이고,
  * 그 탭이 사고를 골라 여는 길(`/?scene=`)을 갖고 있다.
@@ -386,17 +436,23 @@ function showResult(recon, record) {
   box.innerHTML = '';
   const done = recon?.status === 'done';
   const failed = recon?.status === 'failed';
-  box.hidden = !(done || failed);
-  if (!done && !failed) return;
+  const halted = recon?.status === 'cancelled';
+  box.hidden = !(done || failed || halted);
+  if (!done && !failed && !halted) return;
 
-  const row = el('div', `result ${done ? 'is-ok' : 'is-bad'}`);
+  const row = el('div', `result ${done ? 'is-ok' : failed ? 'is-bad' : 'is-cut'}`);
   const ico = el('span', 'result-ico');
   ico.innerHTML = done
     ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12.5 2.5 2.5 4.5-5"></path></svg>'
-    : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg>';
+    : failed
+      ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg>'
+      : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><rect x="9" y="9" width="6" height="6"></rect></svg>';
 
   const main = el('div');
-  main.append(el('div', 'result-main', done ? '3D 현장이 이 사고에 붙었다' : '변환이 끝나지 못했다'));
+  main.append(el('div', 'result-main',
+    done ? '3D 현장이 이 사고에 붙었다'
+      : halted ? '변환을 중지했다'
+        : '변환이 끝나지 못했다'));
 
   const splat = (record?.attachments ?? []).find((a) => a.attachmentId === recon.outputAttachmentId);
   const took = recon.startedAt && recon.finishedAt ? span(recon.finishedAt - recon.startedAt) : null;
@@ -407,7 +463,10 @@ function showResult(recon, record) {
       splat ? mb(splat.bytes) : null,
       took,
     ].filter(Boolean).join(' · ')
-    : recon.error ?? '원인 불명'));
+    // 중지는 원인을 적을 것이 없다. 어디서 끊겼는지와 그때까지 쓴 시간만 남긴다.
+    : halted
+      ? [stepLabel(recon.step), took ? `${took} 지점` : null].filter(Boolean).join(' · ') || '영상 등록 전'
+      : recon.error ?? '원인 불명'));
 
   const acts = el('div', 'result-acts');
   if (done) {
@@ -417,10 +476,14 @@ function showResult(recon, record) {
     open.onclick = () => window.open(`/?scene=${encodeURIComponent(target)}`, '_blank', 'noopener');
     acts.append(open);
   }
-  const again = el('button', `act act-sm${done ? '' : ' act-primary'}`, '다시 변환');
-  again.type = 'button';
-  again.onclick = retryRecon;
-  acts.append(again);
+  // 전송이 끊긴 건에는 다시 걸 첨부가 없다. 그때는 위에서 다시 올리는 게 유일한 길이라
+  // 버튼을 만들지 않는다 — 눌러도 아무 일 없는 버튼이 제일 나쁘다.
+  if (state.last) {
+    const again = el('button', `act act-sm${done ? '' : ' act-primary'}`, '다시 변환');
+    again.type = 'button';
+    again.onclick = retryRecon;
+    acts.append(again);
+  }
 
   row.append(ico, main, el('span', 'spacer'), acts);
   box.append(row);
@@ -442,7 +505,7 @@ async function poll() {
   rememberWatching();
   await refreshLog();
 
-  if (recon && (recon.status === 'done' || recon.status === 'failed')) {
+  if (recon && SETTLED.includes(recon.status)) {
     state.watching = null;
     rememberWatching();
     // 첨부가 늘었으니 사고 카드(또는 목록의 `첨부 없음` 표기)도 같이 맞춘다.
@@ -496,6 +559,7 @@ async function start() {
   initOperatorGate();
   bindFilePicker();
   $('go').onclick = startUpload;
+  $('stop').onclick = stopNow;
   setSteps(null);
 
   const params = new URL(location.href).searchParams;

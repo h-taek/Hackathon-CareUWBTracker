@@ -148,6 +148,9 @@
     <div class="panel-head">
       <span class="panel-title">진행</span>
       <span class="panel-hint" id="progressHint"></span>
+      <span class="spacer"></span>
+      <!-- 업로드 중에는 전송을 끊고, 변환 중에는 서버의 도구를 끊는다. 끝난 뒤에는 없다. -->
+      <button class="act act-sm act-danger" id="stop" type="button" hidden>중지</button>
     </div>
     <div class="panel-body" id="resultBox" hidden></div>
     <ol class="steps" id="steps" hidden></ol>

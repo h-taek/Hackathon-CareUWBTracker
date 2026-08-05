@@ -776,6 +776,7 @@ function reconLabel(s) {
   if (status === 'running') return '변환 중';
   if (status === 'pending') return '대기';
   if (status === 'failed') return '실패';
+  if (status === 'cancelled') return '중지됨';
   return s.video ? '미변환' : '촬영 없음';
 }
 

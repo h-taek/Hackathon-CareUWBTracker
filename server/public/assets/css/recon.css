@@ -131,6 +131,11 @@ body {
 .act-primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
 .act-primary:hover:not(:disabled) { background: var(--color-accent-700); }
 .act-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.act-danger { color: var(--st-alarm); border-color: rgba(166, 71, 58, .45); }
+.act-danger:hover:not(:disabled) { background: rgba(166, 71, 58, .10); }
+
+/* 패널 머리에 앉는 버튼. 제목·부제가 baseline으로 서 있어 혼자 가운데로 내려온다. */
+.panel-head .act { align-self: center; }
 
 .pill {
   font-size: 10.5px;
@@ -278,6 +283,9 @@ body {
 .steps li.is-bad { color: var(--st-alarm); }
 .steps li.is-bad .mk,
 .steps li.is-bad .s-d { color: var(--st-alarm); }
+/* 중지는 실패가 아니다. 붉게 칠하지 않고 회색으로 끊긴 자리만 표시한다. */
+.steps li.is-cut { color: var(--color-neutral-700); }
+.steps li.is-cut .mk { color: var(--color-neutral-500); }
 
 /* 막대는 **지금 도는 단계에만** 붙는다. 전체 %로 합치지 않는 이유는 단계별 소요가
    입력에 따라 뒤집혀(학습 30000회 vs 프레임 500장) 없는 가중치를 지어내게 되기 때문이다. */
@@ -318,6 +326,7 @@ body {
 .result-ico { flex: none; display: flex; }
 .result.is-ok .result-ico { color: var(--st-ok); }
 .result.is-bad .result-ico { color: var(--st-alarm); }
+.result.is-cut .result-ico { color: var(--color-neutral-500); }
 .result-main { font-size: 14px; }
 .result-sub { margin-top: 2px; font-size: 11.5px; color: var(--color-neutral-600); }
 .result-acts { display: flex; gap: 8px; }
