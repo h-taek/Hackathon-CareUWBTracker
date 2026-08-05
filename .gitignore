@@ -39,6 +39,9 @@ ml/datasets/
 # 사고 기록(런타임 산출물). 실기기·주입 재생마다 쌓이고 재현 가능하다. 스키마는 docs/spec/03 §6.1
 server/data/
 
+# 학습 반출 수신 목업이 떨군 것(왕복 확인용 산출물). 스키마는 docs/spec/system/03 §7.1
+tools/sink-out/
+
 # 재구성 도구 소스·빌드(서드파티, 수 GB). 조달·빌드 절차는 tools/recon/README.md
 tools/recon/OpenSplat/
 

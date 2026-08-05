@@ -77,6 +77,62 @@ test('이벤트를 지워도 사건은 남는다 — 사본이라 원본에 매�
   assert.equal(incidents.read('evt-1')?.outcome, 'confirmed', '사건은 그대로다');
 });
 
+test('감지 이벤트를 지우기 직전에 학습 표본을 뽑는다', () => {
+  const collected: EventRecord[] = [];
+  const { store, retention } = bench({
+    exporter: { collect: (r: EventRecord) => collected.push(r), flushSoon: () => {} },
+  });
+  store.save(record('evt-1', T0, { outcome: 'confirmed', resolvedAt: T0 }));
+  store.save(record('evt-2', T0, { outcome: 'false_alarm', resolvedAt: T0 }));
+
+  retention.sweep(T0 + UNDO + 1);
+  // 목록 순서는 파일 시각이 정해 뒤집힐 수 있다. 무엇이 뽑혔는지만 본다.
+  assert.deepEqual(collected.map((r) => r.eventId).sort(), ['evt-1', 'evt-2']);
+  assert.deepEqual(collected.map((r) => r.outcome).sort(), ['confirmed', 'false_alarm']);
+  assert.equal(store.list(99).length, 0, '뽑고 나서 지운다');
+});
+
+test('확인 사건 삭제 경로에서는 안 뽑는다 — 24시간 시점에 이미 반출됐다', () => {
+  const collected: EventRecord[] = [];
+  const { incidents, retention } = bench({
+    exporter: { collect: (r: EventRecord) => collected.push(r), flushSoon: () => {} },
+  });
+  incidents.save(record('evt-1', T0, { outcome: 'confirmed', resolvedAt: T0 }));
+
+  retention.sweep(T0 + INCIDENT + 1);
+  assert.deepEqual(collected, [], '같은 표본이 두 번 나가지 않는다');
+});
+
+test('반출이 던져도 파기는 진행한다', () => {
+  const { store, retention } = bench({
+    exporter: {
+      collect: () => { throw new Error('큐를 못 쓴다'); },
+      flushSoon: () => {},
+    },
+  });
+  store.save(record('evt-1', T0, { outcome: 'confirmed', resolvedAt: T0 }));
+
+  // 전송 장애가 법정 파기 의무를 막으면 안 된다.
+  const actions = retention.sweep(T0 + UNDO + 1);
+  assert.deepEqual(actions.map((a) => a.action), ['delete']);
+  assert.equal(store.read('evt-1'), null);
+});
+
+test('dry-run에서는 뽑지도 보내지도 않는다', () => {
+  const collected: EventRecord[] = [];
+  let flushed = 0;
+  const { store, retention } = bench({
+    dryRun: true,
+    exporter: { collect: (r: EventRecord) => collected.push(r), flushSoon: () => { flushed += 1; } },
+  });
+  store.save(record('evt-1', T0, { outcome: 'confirmed', resolvedAt: T0 }));
+
+  retention.sweep(T0 + UNDO + 1);
+  assert.deepEqual(collected, []);
+  assert.equal(flushed, 0);
+  assert.ok(store.read('evt-1'), '지우지도 않는다');
+});
+
 test('확인 사건은 3년까지 남고 그 뒤에 파기된다', () => {
   const { incidents, retention } = bench();
   incidents.save(record('evt-1', T0, { outcome: 'confirmed', resolvedAt: T0 }));

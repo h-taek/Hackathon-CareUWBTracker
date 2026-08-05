@@ -171,6 +171,43 @@ server/data/events/<eventId>/
 
 삼각측량이 보류된 프레임(accel-only)은 **가속도만 남고 궤적에는 안 들어간다.** 없는 위치를 지어내지 않기 때문이며, 그 구간은 화면에서도 비어 보이는 게 맞다.
 
+## 학습 데이터 반출
+
+시설에 설치된 서비스가 판정 모델 학습용 표본을 공급자 서버로 보낸다. 계약은 `../docs/spec/system/03_data-interface.md` §7, 법적 근거는 `../docs/research/01_legal.md` §9. **받는 서버는 이 저장소에 없다** — 보내는 쪽까지가 범위다.
+
+**뽑는 자리는 파기 직전이다.** 감지 이벤트는 24시간이면 지워지는데(보관·파기), 지우기 직전에 표본을 뽑는다. 그 시점에는 번복 창이 닫혀 라벨이 확정돼 있고, 오경보 이벤트는 이 삭제로 완전히 사라져 마지막 기회다.
+
+나가는 것은 이것뿐이다. 태그 ID·절대 시각·좌표·구역은 없다.
+
+```json
+{"dt":[0,20,40],"ax":[…],"ay":[…],"az":[…],"label":1,"peakAccel":3.8,"freefall":true,"aiScore":0.91,"hz":50}
+```
+
+| 변수 | 기본 | 뜻 |
+| --- | --- | --- |
+| `EXPORT_URL` | 없음 | **없으면 전송하지 않고 큐만 쌓는다. 기본이 off다** |
+| `EXPORT_TOKEN` | 없음 | 있으면 `Authorization: Bearer` 헤더를 붙인다 |
+| `EXPORT_DIR` | `server/data/export` | 큐 위치 |
+| `EXPORT_KEEP_DAYS` | 7 | 보낸 배치를 며칠 두고 지울지 |
+
+```
+server/data/export/
+  pending/<YYYY-MM-DD>.jsonl   아직 못 보낸 표본. 한 줄 한 표본
+  sent/<YYYY-MM-DD>.jsonl      보낸 것(디스크 회수용으로만 남긴다)
+  state.json                   마지막 전송 · 연속 실패 · 누계
+```
+
+**파일 하나가 배치 하나다.** 보내면 이름만 바꾸므로 중간에 죽어도 두 번 보내거나 잃지 않는다. 실패하면 1분에서 시작해 두 배씩, 상한 6시간으로 다시 건다. 4xx도 버리지 않는다.
+
+**반출이 실패해도 파기는 진행한다.** 둘을 묶으면 전송 장애가 법정 파기 의무를 막는다.
+
+받는 서버 없이 왕복을 확인하려면 목업을 띄운다.
+
+```bash
+npm run export-sink                                        # 9100 포트. tools/sink-out/에 떨군다
+EXPORT_URL=http://localhost:9100/samples npm start -- …    # 서버를 여기로 붙인다
+```
+
 ## 테스트
 
 ```bash
@@ -223,6 +260,12 @@ server/                재사용 런타임
     recorder.ts        태그별 링버퍼 + 경보 전후 창을 모아 레코드로 닫기(파일 안 만짐)
     store.ts           레코드 1건 = 파일 1개. 저장·조회·목록 + eventId 경로 검증
     routes.ts          GET /events · /events/<id> 응답 생성(순수 함수)
+    outcome.ts         관제사 판정과 전이 규칙(파일 안 만짐)
+    retention.ts       보관기간 파기. 감지 이벤트를 지우기 직전에 학습 표본을 뽑는다
+    export/            학습 데이터 반출 — 시설 밖으로 나가는 유일한 경로
+      sample.ts        익명화. 레코드 → 가속도 창 + 라벨(순수 함수). 화이트리스트로 뽑는다
+      queue.ts         파일 큐. 배치 하나 = 파일 하나. 보내면 이름만 바꾼다
+      sender.ts        전송 + 백오프 재시도. 인증은 헤더로, 반출물은 본문으로
   detection/           낙상 감지
     fall.ts            고전 상태머신. 충격을 잡아 정점 뒤 1.5초에 fall_detected 1건 발행
     cascade.ts         고전 + LightGBM 2단계 캐스케이드(기본). 낙상 여부는 여기서만 정한다
@@ -252,6 +295,7 @@ server/                재사용 런타임
 
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
+  export-sink.ts       학습 반출 수신 목업(제품 아님 · 왕복 확인용)
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
@@ -260,6 +304,7 @@ test/                  모든 테스트 — 루트로 분리, 소스 구조 미�
 data/events/           사고 기록 산출물(런타임 생성 · git 제외). EVENTS_DIR로 옮길 수 있다
 data/tags/             태그 명부(런타임 생성 · git 제외). 모드별 파일. TAGS_DIR로 옮길 수 있다
 data/operators.json    관제사 명부(런타임 생성 · git 제외). OPERATORS_DIR로 옮길 수 있다
+data/export/           학습 반출 큐(런타임 생성 · git 제외). EXPORT_DIR로 옮길 수 있다
 ```
 
 런타임 경로: `server.ts` → `ingest/`(수신) + `positioning/`(측위) + `detection/`(낙상) + `events/`(사고 기록) + `inject/`(데모 주입) + `sim.ts`(배경 태그) + `lib/`(포맷). `tools/`·`test/`는 서버가 로드하지 않는다. 상대 import는 NodeNext 규칙상 `.ts` 확장자를 명시한다.

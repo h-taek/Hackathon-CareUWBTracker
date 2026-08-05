@@ -53,6 +53,7 @@ import { createEventStore, isValidEventId } from './events/store.ts';
 import { routeEvents, routeIncidents, parseOutcomePath, parsePurgeWorkdirPath } from './events/routes.ts';
 import { applyJudgment, isJudgment, outcomeOf, wantsIncident, type Judgment, type OutcomeFields } from './events/outcome.ts';
 import { createRetention, retentionOptionsFromEnv } from './events/retention.ts';
+import { createExporterFromEnv } from './events/export/sender.ts';
 import { createAuditLog, createCollectTracker } from './lib/audit.ts';
 import { attachmentLimitFromEnv, createAttachmentStore } from './events/attachments.ts';
 import { handleAttachmentUpload, parseAttachmentPath, parseReconTriggerPath } from './events/upload.ts';
@@ -287,12 +288,16 @@ const reconRunner = createReconRunner({
   },
 });
 
+// 학습 데이터 반출(spec 03 §7). EXPORT_URL이 없으면 큐만 쌓는다 — 기본이 off다.
+const exporter = createExporterFromEnv(dataDir);
+
 // 보관기간 파기(spec 11 §7). 기동 시 한 번 훑고 그 뒤로 주기 실행이다.
 const retention = createRetention({
   ...retentionOptionsFromEnv(),
   store: eventStore,
   incidents: incidentStore,
   audit: auditLog,
+  exporter,
   facilityDir: process.env.FACILITY_DIR || path.join(dataDir, 'facility'),
 });
 
@@ -1184,6 +1189,10 @@ server.listen(port, () => {
     + ' (UNDO_WINDOW_HOURS / INCIDENT_RETENTION_DAYS / SWEEP_INTERVAL_HOURS)',
   );
   console.log(`  확인자료   ${auditLog.dir} (위치정보법 제16조② · 파기 금지)`);
+  console.log(
+    `  학습 반출  ${exporter.config.url || '전송 꺼짐 · 큐만 쌓는다 (EXPORT_URL)'}`
+    + ' · 파기 직전 가속도 창 + 라벨만, 태그ID·시각·좌표 없음',
+  );
   console.log(
     `  현장 영상  POST /events/<eventId>/attachments?kind=video (본문=파일 바이트)`
     + ` · 최대 ${Math.round(attachmentLimitBytes / 1024 / 1024)}MB (ATTACHMENT_LIMIT_MB)`

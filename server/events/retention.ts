@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { EventStore } from './store.ts';
+import type { EventRecord } from './recorder.ts';
 import type { AuditLog } from '../lib/audit.ts';
 
 
@@ -60,12 +61,24 @@ export interface Retention {
   config: RetentionConfig;
 }
 
+/**
+ * 학습 표본을 받아 가는 쪽(spec system 03 §7). 파기가 반출의 내부를 알지 않도록 이만큼만
+ * 받는다 — 없으면 지금까지처럼 그냥 지운다.
+ */
+export interface TrainingExporter {
+  /** **던지지 않아야 한다.** 여기서 예외가 새면 전송 장애가 파기를 막는다. */
+  collect(record: EventRecord): void;
+  flushSoon(): void;
+}
+
 export interface RetentionOptions extends Partial<RetentionConfig> {
   /** 감지 이벤트 저장소. 24시간짜리 운영 로그다. */
   store: EventStore;
   /** 확인 사건 저장소. 이벤트의 사본이고 3년 산다. 첨부도 여기 붙는다. */
   incidents: EventStore;
   audit: AuditLog;
+  /** 있으면 감지 이벤트를 지우기 직전에 학습 표본을 뽑는다. */
+  exporter?: TrainingExporter;
   now?: () => number;
   onLog?: (line: string) => void;
 }
@@ -101,9 +114,14 @@ export function createRetention(options: RetentionOptions): Retention {
 
     // ① 감지 이벤트는 판정 여부와 무관하게 24시간이면 사라진다.
     //    판정이 confirmed였다면 그 사본이 사건 저장소에 이미 있으므로 잃는 것이 없다.
+    //
+    //    **학습 표본을 뽑는 자리가 여기다**(spec system 03 §7.2). 번복 창이 닫혀 라벨이
+    //    확정돼 있고, false_alarm 이벤트는 이 삭제로 완전히 사라져 마지막 기회다.
+    let collected = 0;
     for (const summary of store.list(Number.MAX_SAFE_INTEGER)) {
       if (at <= summary.ts + config.undoWindowMs) continue;
-      done.push(...deleteRecord(store, summary.eventId, '감지 이벤트 보관기간 경과', at, false));
+      done.push(...deleteRecord(store, summary.eventId, '감지 이벤트 보관기간 경과', at, false, true));
+      collected += 1;
     }
 
     // ② 확인 사건은 3년. 지울 때 현장 촬영물을 시설 자산으로 넘긴다.
@@ -122,19 +140,36 @@ export function createRetention(options: RetentionOptions): Retention {
       log(`[retention] ${done.length}건 처리${config.dryRun ? '(dry-run)' : ''}`
         + `${bytes > 0 ? ` · ${mb(bytes)}MB 회수` : ''}`);
     }
+    // 결과를 안 기다린다. **전송이 파기를 붙잡으면 안 된다.**
+    if (collected > 0 && !config.dryRun) options.exporter?.flushSoon();
     return done;
   }
 
-  /** 폴더째 지운다. `transfer`면 지우기 전에 촬영물을 시설 자산으로 넘긴다. */
+  /**
+   * 폴더째 지운다. `transfer`면 지우기 전에 촬영물을 시설 자산으로 넘기고,
+   * `exportTraining`이면 지우기 전에 학습 표본을 뽑는다.
+   */
   function deleteRecord(
     from: EventStore,
     id: string,
     reason: string,
     at: number,
     transfer: boolean,
+    exportTraining = false,
   ): RetentionAction[] {
     const done: RetentionAction[] = [];
     const record = from.read(id);
+    // **확인 사건 삭제 경로에서는 안 뽑는다.** 그 건은 24시간 시점에 이미 반출됐다.
+    //
+    // exporter가 안 던지는 것이 계약이지만(TrainingExporter) 여기서 한 번 더 막는다.
+    // 파기는 법이 "지체 없이"를 요구하는 의무이고, 학습 표본 한 건이 그보다 무겁지 않다.
+    if (exportTraining && record && !config.dryRun) {
+      try {
+        options.exporter?.collect(record);
+      } catch (error: unknown) {
+        log(`[retention] ⚠ 학습 표본 적재 실패 ${id} — ${describe(error)} · 파기는 계속한다`);
+      }
+    }
     if (transfer && config.facilityDir) done.push(...transferAssets(from, id, at));
 
     const bytes = dirBytes(from.eventDir(id));
