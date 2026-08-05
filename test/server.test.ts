@@ -228,6 +228,16 @@ test('식별 없이는 기록을 바꾸는 동작이 401이다', async () => {
     // 막혔으면 명부가 그대로여야 한다 — 401을 주면서 등록은 되는 게 제일 나쁘다.
     assert.deepEqual(await (await fetch(`${base}/tags`)).json(), [], '401인데 명부가 바뀌었다');
 
+    // 현장 영상 등록과 재구성 실행도 사건 기록을 바꾸는 조작이다. 게이트가 라우트보다
+    // 앞서므로 없는 사건을 대도 401이 먼저 나온다.
+    const upload = await fetch(`${base}/incidents/evt-none/attachments?kind=video`, {
+      method: 'POST',
+      body: 'x',
+    });
+    assert.equal(upload.status, 401, '영상 등록이 식별 없이 열려 있다');
+    const rerun = await fetch(`${base}/incidents/evt-none/attachments/att-1/recon`, { method: 'POST' });
+    assert.equal(rerun.status, 401, '재구성 실행이 식별 없이 열려 있다');
+
     // **조회와 측위는 막지 않는다.** 식별은 조작의 조건이지 감지의 조건이 아니다.
     assert.equal((await fetch(`${base}/tags`)).status, 200);
     assert.equal((await fetch(`${base}/events`)).status, 200);

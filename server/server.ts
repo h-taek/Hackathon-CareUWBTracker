@@ -369,14 +369,17 @@ const OPERATOR_REQUIRED_POSTS = ['/alerts/resolve', '/tags/register', '/tags/rel
 /**
  * 이 요청이 관제사 식별을 요구하는가(spec operation 03 §4).
  *
- * **조회는 하나도 막지 않는다.** 막는 것은 기록을 바꾸는 동작뿐이다. 첨부 업로드와 재구성
- * 실행은 아직 넣지 않았다 — `/recon` 화면이 통째로 재구성될 때 같은 세션에 붙인다.
+ * **조회는 하나도 막지 않는다.** 막는 것은 기록을 바꾸는 동작뿐이다.
+ *
+ * 첨부 업로드와 재구성 실행도 여기 든다 — 사건 기록에 영상을 붙이는 것은 그 기록을 바꾸는
+ * 일이고, 나중에 "이 3D는 누가 올린 영상으로 만들어졌나"를 물을 자리가 확인자료뿐이다.
  */
 function requiresOperator(method: string, pathname: string): boolean {
   // 수동 파기. 되돌릴 수 없는 동작이라 누가 눌렀는지가 특히 중요하다.
   if (method === 'DELETE') return pathname.startsWith('/events/') || pathname.startsWith('/incidents/');
   if (method !== 'POST') return false;
   if (OPERATOR_REQUIRED_POSTS.includes(pathname)) return true;
+  if (parseAttachmentPath(pathname) !== null || parseReconTriggerPath(pathname) !== null) return true;
   return parseOutcomePath(pathname) !== null || parsePurgeWorkdirPath(pathname) !== null;
 }
 
@@ -855,6 +858,13 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
       return sendJson(response, { ok: false, error: `재구성 대상은 영상뿐입니다: kind=${attachment.kind}` }, 400);
     }
     const queued = reconRunner.enqueue({ ...reconTarget, tuning: tuningFromParams(url.searchParams) });
+    if (queued) {
+      auditLog.record({
+        kind: 'access',
+        actor,
+        detail: `${reconTarget.eventId} 3D 재구성 실행 · ${reconTarget.attachmentId}`,
+      });
+    }
     return sendJson(response, {
       ok: true,
       queued,
@@ -867,6 +877,12 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
   const uploadTarget = parseAttachmentPath(pathname);
   if (uploadTarget !== null) {
     handleAttachmentUpload(request, uploadTarget, url.searchParams, eventAttachments, (attachment) => {
+      // 사건 기록에 영상이 붙는 것도 기록의 변경이다. 누가 올렸는지를 확인자료에 남긴다.
+      auditLog.record({
+        kind: 'access',
+        actor,
+        detail: `${attachment.eventId} 현장 ${attachment.kind} 등록 · ${attachment.bytes}바이트`,
+      });
       // 영상이 붙으면 그 자리에서 재구성 대기열로 보낸다. 실제 실행은 응답 밖에서 돈다.
       if (attachment.kind !== 'video' || !reconAuto) return;
       reconRunner.enqueue({
