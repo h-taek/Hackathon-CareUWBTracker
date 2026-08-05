@@ -1226,6 +1226,9 @@ server.listen(port, () => {
   }
   // 기동 시 한 번 훑는다. 서버가 꺼져 있던 사이에 만료된 것을 여기서 거둔다.
   retention.start();
+  // 지난 실행에서 못 보낸 배치를 여기서 거둔다. **파기 루프에만 매달면** 뽑을 것이 있을
+  // 때만 큐가 비워져, 수집 서버가 죽었다 살아나도 다음 파기까지 밀린 배치가 앉아 있다.
+  exporter.start();
 });
 
 // 열려 있는 수집 세션을 닫고 나간다. 안 닫으면 확인자료에 개시만 남고 종료가 없다.
@@ -1233,6 +1236,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     collectTracker.flush();
     retention.stop();
+    exporter.stop();
     process.exit(0);
   });
 }

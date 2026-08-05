@@ -149,6 +149,42 @@ test('큐를 못 써도 collect는 던지지 않는다 — 파기를 막으면 �
   assert.doesNotThrow(() => exporter.collect(record()));
 });
 
+test('기동하면 지난 실행에서 못 보낸 배치가 나간다', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sender-boot-'));
+  const queue = createExportQueue(root);
+  // 지난 실행이 남긴 자리를 그대로 만든다 — 401로 막혔고 백오프도 지났다.
+  queue.append({ dt: [0, 20], ax: [0, 0], ay: [0, 0], az: [9.8, 9.9], label: 1 }, T0);
+  queue.saveState({ ...queue.state(), failures: 1, lastError: 'HTTP 401', nextAttemptAt: T0 - 1 });
+
+  const calls: string[] = [];
+  const exporter = createExporter({
+    queue,
+    url: 'https://collector.example/samples',
+    now: () => T0,
+    onLog: () => {},
+    fetch: (async () => {
+      calls.push('sent');
+      return { ok: true, status: 200 } as Response;
+    }) as unknown as typeof globalThis.fetch,
+  });
+
+  // **파기가 한 건도 안 돌아도 나가야 한다.** 뽑을 것이 있을 때만 큐를 비우면
+  // 수집 서버가 죽었다 살아나도 다음 파기까지 밀린 배치가 앉아 있다.
+  exporter.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  exporter.stop();
+
+  assert.deepEqual(calls, ['sent']);
+  assert.deepEqual(queue.batches(), []);
+});
+
+test('URL이 없으면 기동해도 타이머를 안 건다', () => {
+  const { exporter, calls } = bench({ url: '' });
+  exporter.start();
+  exporter.stop();
+  assert.equal(calls.length, 0);
+});
+
 test('전송이 던져도 큐는 그대로 남는다', async () => {
   const { exporter, queue } = bench({
     fetch: (() => Promise.reject(new Error('ECONNREFUSED'))) as unknown as typeof globalThis.fetch,

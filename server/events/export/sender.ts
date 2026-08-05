@@ -25,6 +25,14 @@ export interface SenderConfig {
   backoffBaseMs: number;
   backoffMaxMs: number;
   requestTimeoutMs: number;
+  /**
+   * 큐를 들여다보는 주기.
+   *
+   * **백오프는 깨워 주는 쪽이 있어야 뜻이 있다.** 전송을 파기 루프에서만 걸면 뽑을 것이
+   * 있을 때만 큐가 비워진다 — 수집 서버가 하루 죽었다 살아나도 다음 파기(최대 24시간
+   * 뒤)까지 밀린 배치가 그대로 앉아 있다. 실서버 재기동으로 실제로 확인한 자리다.
+   */
+  retryIntervalMs: number;
 }
 
 export const SENDER_DEFAULTS: SenderConfig = {
@@ -33,6 +41,7 @@ export const SENDER_DEFAULTS: SenderConfig = {
   backoffBaseMs: 60_000,
   backoffMaxMs: 6 * 3_600_000,
   requestTimeoutMs: 30_000,
+  retryIntervalMs: 10 * 60_000,
 };
 
 export interface ExporterOptions extends Partial<SenderConfig> {
@@ -49,6 +58,9 @@ export interface Exporter {
   flush(): Promise<void>;
   /** 결과를 안 기다리는 flush. 파기 루프가 부른다. */
   flushSoon(): void;
+  /** 기동 시 1회 + 주기 재시도를 건다(spec system 03 §7.4). */
+  start(): void;
+  stop(): void;
   state(): ExportState;
   config: SenderConfig;
 }
@@ -60,6 +72,7 @@ export function createExporter(options: ExporterOptions): Exporter {
   const doFetch = options.fetch ?? globalThis.fetch;
   const log = options.onLog ?? ((line: string) => console.log(line));
   let running = false;
+  let timer: NodeJS.Timeout | null = null;
 
   function collect(record: EventRecord): void {
     try {
@@ -147,10 +160,25 @@ export function createExporter(options: ExporterOptions): Exporter {
     return Math.min(grown, config.backoffMaxMs);
   }
 
+  function start(): void {
+    if (!config.url || timer) return;
+    void flush(); // 기동 시 1회. 지난 실행에서 못 보낸 배치가 여기서 나간다
+    timer = setInterval(() => { void flush(); }, config.retryIntervalMs);
+    timer.unref?.(); // 재시도 타이머가 프로세스를 붙잡지 않게
+  }
+
+  function stop(): void {
+    if (!timer) return;
+    clearInterval(timer);
+    timer = null;
+  }
+
   return {
     collect,
     flush,
     flushSoon: () => { void flush(); },
+    start,
+    stop,
     state: () => queue.state(),
     config,
   };
@@ -193,7 +221,7 @@ function countLines(file: string): number {
 
 function stripUndefined(options: ExporterOptions): Partial<SenderConfig> {
   const picked: Partial<SenderConfig> = {};
-  for (const key of ['url', 'token', 'backoffBaseMs', 'backoffMaxMs', 'requestTimeoutMs'] as const) {
+  for (const key of ['url', 'token', 'backoffBaseMs', 'backoffMaxMs', 'requestTimeoutMs', 'retryIntervalMs'] as const) {
     if (options[key] !== undefined) (picked as Record<string, unknown>)[key] = options[key];
   }
   return picked;
