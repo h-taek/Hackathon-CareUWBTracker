@@ -1,146 +1,331 @@
-/* 사고 현장 3D 기록 페이지(/recon). 최소 구성 — 톤은 base.css가 쥐고, 여기는 배치만 한다.
-   디자인 폴리시는 나중에 한 번에 한다. */
+/* 사고 현장 3D 기록 화면(/recon). 바탕·타이포·간격은 관제·태그 명부와 같은
+   /_ds/styles.css(Industry) 토큰에서 온다 — 여기 있는 것은 그 시스템에 없는 치수와,
+   관제 화면에서 그대로 가져온 상단바·상태 필뿐이다.
+
+   이 화면은 **영상 등록과 변환 진행만** 맡는다. 사고 목록·상세·3D 뷰어는 관제 화면의
+   '사고 현장 3D' 탭에 있다 — 같은 목록을 두 곳에 두면 어느 쪽이 최신인지 알 수 없어진다. */
+
+:root {
+  --st-ok: #3f7d55;
+  --st-alarm: #a6473a;
+  --glass: rgba(251, 251, 252, .96);
+  --glass-line: rgba(29, 31, 32, .12);
+  --glass-shadow: 0 12px 32px rgba(43, 43, 45, .16), 0 1px 2px rgba(43, 43, 45, .10);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-bg);
+  /* 관제·태그 명부와 같은 청사진 모눈. 여기서는 고정 배경이라 스크립트가 안 건드린다. */
+  background-image:
+    linear-gradient(to right, rgba(89, 128, 166, .10) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(89, 128, 166, .10) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+}
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* ── 상단바 (관제·태그 명부와 같은 것) ───────────────────── */
 
 .topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  background: rgba(251, 251, 252, .92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(29, 31, 32, .14);
+  box-shadow: 0 1px 3px rgba(43, 43, 45, .08);
 }
-.topbar .title { font-size: 14px; font-weight: 600; }
-.topbar .title small { color: var(--faint); font-weight: 400; margin-left: 8px; }
-.topbar .spacer { flex: 1; }
-.topbar .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-.topbar .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
-a.btn { text-decoration: none; display: inline-block; }
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.brand-title { font-family: var(--font-heading); font-size: 16px; letter-spacing: .02em; }
+.brand-sub { font-size: 11.5px; letter-spacing: .04em; color: var(--color-neutral-600); }
+.spacer { flex: 1; }
 
-.wrap { max-width: 860px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 14px; }
-
-.step > h2 .n {
-  display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 7px;
-  border-radius: 50%; background: var(--accent); color: #0b0e14; font-size: 11px;
+.topbtn {
+  font-size: 12px;
+  letter-spacing: .03em;
+  color: var(--color-neutral-700);
+  text-decoration: none;
+  padding: 3px 9px;
+  border: 1px solid var(--glass-line);
+  border-radius: 6px;
 }
-.step > h2 .hint { color: var(--faint); font-weight: 400; letter-spacing: 0; }
-.step .body { padding: 13px; }
-.step .body.pad0 { padding: 0; }
-.note { margin: 11px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
-.note b { color: var(--ink); font-weight: 600; }
+.topbtn:hover { background: var(--color-neutral-200); color: var(--color-text); }
 
-/* 1. 파일 */
-.filepick { display: flex; align-items: center; gap: 12px; }
-.filemeta b { display: block; font-size: 13px; }
-.filemeta span { font-size: 12px; color: var(--muted); }
+/* ── 본문 ────────────────────────────────────────────────── */
 
-/* 2. 낙상 기록 */
-.evt {
-  display: flex; align-items: center; gap: 11px; padding: 11px 13px;
-  border-top: 1px solid var(--line); cursor: pointer;
+.wrap {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 26px 22px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
-.evt:first-child { border-top: none; }
-.evt:hover { background: var(--panel-2); }
-.evt.sel { background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.evtmain { flex: 1; }
-.evtmain b { font-size: 13px; }
-.evt .tag, .evt .zone { font-size: 12px; color: var(--muted); margin-left: 7px; }
-.evt .sub, .sub { font-size: 11px; color: var(--faint); }
-.evtmain .sub { margin-top: 3px; }
 
-.badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
-.badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
-.badge.bad { color: var(--alarm); border-color: color-mix(in srgb, var(--alarm) 45%, transparent); }
-
-/* 3. 설정 */
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
-.grid label {
-  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted);
+.panel {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
 }
-.grid label.wide { grid-column: 1 / -1; }
-.grid input {
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
-  color: var(--ink); padding: 6px 9px; font: inherit; font-size: 13px; width: 88px;
-  margin-left: auto;
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid var(--glass-line);
 }
-.grid label.wide input[type="text"] { flex: 1; margin-left: 0; width: auto; }
-.grid label.wide .mm { width: 78px; margin-left: 0; }
-.grid .u { color: var(--faint); font-size: 11px; width: 24px; }
-.btn.go { margin-top: 13px; width: 100%; padding: 10px; border-color: var(--accent); color: var(--accent); }
+.panel-title { font-family: var(--font-heading); font-size: 15px; letter-spacing: .02em; }
+.panel-hint { font-size: 11.5px; color: var(--color-neutral-600); }
+.panel-hint.is-bad { color: var(--st-alarm); }
+.panel-body { padding: 14px 16px 16px; }
 
-/* 진행 */
+/* 단계 번호. 사각 테두리는 이 디자인 시스템의 도면 어법이다(둥근 배지를 쓰지 않는다). */
+.step-n {
+  flex: none;
+  align-self: center;
+  width: 19px;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--color-accent-700);
+  border: 1px solid var(--color-accent-400);
+}
+
+.note { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: var(--color-neutral-600); }
+.note b { color: var(--color-text); font-weight: 500; }
+.note.is-bad { color: var(--st-alarm); }
+
+.empty { padding: 8px 0; font-size: 13px; color: var(--color-neutral-600); }
+
+/* 버튼·상태 필 (태그 명부와 같은 것) */
+.act {
+  height: 34px;
+  padding: 0 14px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.act:hover:not(:disabled) { background: var(--color-neutral-200); }
+.act:disabled { opacity: .45; cursor: not-allowed; }
+.act-primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.act-primary:hover:not(:disabled) { background: var(--color-accent-700); }
+.act-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+
+.pill {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  padding: 1px 6px 0;
+  white-space: nowrap;
+  color: var(--st, var(--color-neutral-600));
+  border: 1px solid var(--st, var(--color-neutral-400));
+}
+.pill.is-alarm { --st: var(--st-alarm); }
+.pill.is-accent { --st: var(--color-accent-700); }
+
+/* ── 1. 붙일 사고 ────────────────────────────────────────── */
+
+.incident { display: flex; align-items: center; gap: 10px; }
+.incident-name { font-size: 15px; }
+.incident-meta { font-size: 11.5px; color: var(--color-neutral-600); margin-top: 2px; }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-line);
+}
+.fact-k { font-size: 10.5px; letter-spacing: .06em; color: var(--color-neutral-600); margin-bottom: 2px; }
+.fact-v { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* 관제에서 사고를 지정하지 않고 주소로 직접 열었을 때만 나오는 선택기. */
+.pick { display: flex; gap: 10px; align-items: center; }
+.pick select {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+}
+
+/* ── 2. 현장 영상 ────────────────────────────────────────── */
+
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 26px 16px;
+  border: 1px dashed var(--color-accent-400);
+  background: rgba(89, 128, 166, .035);
+  color: var(--color-neutral-700);
+}
+.drop.is-over { background: rgba(89, 128, 166, .10); border-style: solid; }
+.drop-main { font-size: 13px; }
+.drop > svg { color: var(--color-accent); }
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-line);
+  background: #fff;
+}
+.file-ico { flex: none; display: flex; color: var(--color-accent); }
+.file-name { font-size: 14px; word-break: break-all; }
+.file-meta { margin-top: 2px; font-size: 11.5px; color: var(--color-neutral-600); font-variant-numeric: tabular-nums; }
+
+/* ── 3. 변환 설정 ────────────────────────────────────────── */
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > label { font-size: 11.5px; letter-spacing: .04em; color: var(--color-neutral-700); }
+.field .in { display: flex; align-items: center; gap: 6px; }
+.field input[type=number],
+.field input[type=text] {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.field input:focus-visible { border-color: var(--color-accent); }
+.field .u { flex: none; font-size: 11.5px; color: var(--color-neutral-600); }
+.field .sub { font-size: 11px; color: var(--color-neutral-500); }
+.field.wide { grid-column: span 2; }
+.field .in.pair input[type=text] { flex: 1 1 auto; }
+.field .in.pair input[type=number] { flex: 0 0 88px; }
+
+.check {
+  grid-column: span 3;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 2px;
+  font-size: 13px;
+}
+.check input { margin: 3px 0 0; accent-color: var(--color-accent); }
+.check .sub { display: block; margin-top: 1px; font-size: 11px; color: var(--color-neutral-500); }
+
+.go-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.go-row .act-primary { flex: 1; height: 38px; font-size: 14px; }
+.go-why { font-size: 11.5px; color: var(--color-neutral-600); text-align: right; }
+
+/* ── 4. 진행 ─────────────────────────────────────────────── */
+
 .steps { list-style: none; margin: 0; padding: 0; }
 .steps li {
-  display: flex; align-items: center; gap: 10px; padding: 9px 13px;
-  border-top: 1px solid var(--line); font-size: 13px; color: var(--faint);
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 10px 16px;
+  border-top: 1px solid var(--glass-line);
+  color: var(--color-neutral-500);
 }
-.steps li:first-child { border-top: none; }
-.steps li .mk { width: 14px; text-align: center; }
-.steps li .d { margin-left: auto; font-size: 11px; }
-.steps li.done { color: var(--muted); }
-.steps li.done .mk { color: var(--ok); }
-.steps li.run { color: var(--ink); }
-.steps li.run .mk { color: var(--accent); }
+.steps li:first-child { border-top: 0; }
+.steps .mk { font-size: 12px; line-height: 1.3; text-align: center; }
+.steps .s-name { font-size: 13.5px; }
+.steps .s-what { grid-column: 2; font-size: 11.5px; color: var(--color-neutral-500); }
+.steps .s-d {
+  grid-row: 1;
+  grid-column: 3;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-600);
+}
 
-/* 기존 기록 */
-.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
-.tbl th {
-  text-align: left; font-weight: 500; color: var(--faint); font-size: 11px;
-  padding: 8px 13px; border-bottom: 1px solid var(--line);
-}
-.tbl td { padding: 9px 13px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-.tbl tr:last-child td { border-bottom: none; }
-.tbl td.none { color: var(--faint); }
-.tbl td.act { text-align: right; white-space: nowrap; }
-.btn.sm { padding: 4px 9px; font-size: 11px; }
+.steps li.is-done { color: var(--color-text); }
+.steps li.is-done .mk { color: var(--st-ok); }
+.steps li.is-run { color: var(--color-text); }
+.steps li.is-run .mk { color: var(--color-accent); }
+.steps li.is-run .s-name { font-weight: 500; }
+.steps li.is-bad { color: var(--st-alarm); }
+.steps li.is-bad .mk,
+.steps li.is-bad .s-d { color: var(--st-alarm); }
 
-/* 뷰어 */
-.stage { height: 420px; background: var(--map-bg); position: relative; }
-.stage canvas { display: block; width: 100%; height: 100%; }
-.stagenote {
-  padding: 10px 13px; color: var(--muted); font-size: 12px; text-align: center;
-  border-top: 1px solid var(--line); min-height: 37px;
+/* 막대는 **지금 도는 단계에만** 붙는다. 전체 %로 합치지 않는 이유는 단계별 소요가
+   입력에 따라 뒤집혀(학습 30000회 vs 프레임 500장) 없는 가중치를 지어내게 되기 때문이다. */
+.bar {
+  grid-column: 2 / -1;
+  height: 3px;
+  margin-top: 6px;
+  background: var(--color-neutral-200);
+  overflow: hidden;
 }
-.stagenote b { color: var(--ink); }
+.bar .fill { height: 100%; background: var(--color-accent); }
+/* 도구가 진행률을 안 주는 단계. 막대를 채우는 대신 왕복시켜 "도는 중"만 말한다. */
+.bar .fill.is-unknown { width: 40%; animation: recon-slide 1.4s ease-in-out infinite; }
+@keyframes recon-slide { from { margin-left: -40%; } to { margin-left: 100%; } }
 
-/* 진행 — 실패 단계와 로그 */
-.steps li.bad { color: var(--alarm); }
-.steps li.bad .mk { color: var(--alarm); }
-.hint.bad { color: var(--alarm); }
-#logWrap { border-top: 1px solid var(--line); }
-#logWrap > summary {
-  padding: 8px 13px; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none;
+@media (prefers-reduced-motion: reduce) {
+  .bar .fill.is-unknown { animation: none; margin-left: 30%; }
 }
-#logWrap > summary::before { content: '▸ '; }
-#logWrap[open] > summary::before { content: '▾ '; }
+
+.logwrap { border-top: 1px solid var(--glass-line); }
+.logwrap > summary { padding: 10px 16px; font-size: 12px; color: var(--color-neutral-600); cursor: pointer; }
+.logwrap > summary:hover { color: var(--color-text); }
 .log {
-  margin: 0; padding: 10px 13px; max-height: 240px; overflow: auto;
-  background: #0b0e14; color: var(--muted); font-size: 11px; line-height: 1.5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
-  word-break: break-all; border-top: 1px solid var(--line);
+  margin: 0;
+  padding: 12px 16px 16px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-neutral-700);
+  background: rgba(29, 31, 32, .035);
+  white-space: pre-wrap;
 }
-.evt input[type=radio] { accent-color: var(--accent); }
-.btn:disabled { opacity: .45; cursor: default; border-color: var(--line); color: var(--muted); }
-.tbl td.act .btn { margin-left: 4px; }
-a.btn.sm { text-decoration: none; }
 
-/* base.css의 .card > h2는 space-between이라 제목 텍스트를 낱개로 두면 가운데로 밀린다.
-   왼쪽 묶음을 한 덩어리로 싼다. */
-.step > h2 .lbl { display: inline-flex; align-items: center; color: var(--ink); font-size: 13px; }
+/* 완료·실패 요약. 3D 자체는 여기서 안 띄운다 — 관제 화면의 3D 탭이 뷰어를 갖는다. */
+.result { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.result-ico { flex: none; display: flex; }
+.result.is-ok .result-ico { color: var(--st-ok); }
+.result.is-bad .result-ico { color: var(--st-alarm); }
+.result-main { font-size: 14px; }
+.result-sub { margin-top: 2px; font-size: 11.5px; color: var(--color-neutral-600); }
+.result-acts { display: flex; gap: 8px; }
 
-.grid label.check { gap: 7px; color: var(--ink); }
-.grid label.check input[type=checkbox] { width: auto; margin: 0; accent-color: var(--accent); }
-.grid label.check .sub { margin-left: auto; }
-
-.steps li b { font-weight: 500; }
-.steps li .what { color: var(--faint); font-size: 11px; margin-left: 6px; }
-.grid label.hintcell { color: var(--faint); font-size: 11px; justify-content: flex-start; }
-
-/* 단계별 진행 막대. 전체 %가 아니라 그 단계 안의 진행이다. */
-.steps .bar {
-  height: 3px; margin-top: 6px; border-radius: 2px; background: var(--line); overflow: hidden;
+@media (max-width: 640px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+  .field.wide { grid-column: span 2; }
+  .check { grid-column: span 2; }
+  .facts { grid-template-columns: repeat(2, 1fr); }
+  .go-row { flex-direction: column; align-items: stretch; }
+  .go-why { text-align: left; }
 }
-.steps .bar .fill { height: 100%; background: var(--accent); transition: width .4s ease; }
-/* 총량을 모르는 단계(자세 계산)는 채우는 대신 흐르게 둔다 — 가짜 %를 보이지 않는다. */
-.steps .bar .fill.unknown {
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  background-size: 40% 100%; background-repeat: no-repeat;
-  animation: flow 1.4s linear infinite;
-}
-@keyframes flow { from { background-position: -40% 0; } to { background-position: 140% 0; } }

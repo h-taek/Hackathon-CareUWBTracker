@@ -1467,6 +1467,30 @@ function bind() {
 
 const round1 = (n) => Math.round(n * 10) / 10;
 
+/**
+ * 주소로 지목된 사고를 3D 탭에서 연다(`/?scene=<eventId>`).
+ *
+ * 변환을 마친 `/recon`이 이 주소로 보낸다. 목록에서 다시 찾게 하면 방금 만든 것이 어느
+ * 줄인지 못 찾는다 — 사고 목록은 시각순이지 최근 변환순이 아니다.
+ *
+ * **주소는 한 번 쓰고 지운다.** 남겨두면 새로고침할 때마다 뷰어가 다시 뜬다.
+ */
+async function openSceneFromUrl() {
+  const url = new URL(location.href);
+  const id = url.searchParams.get('scene');
+  if (!id) return;
+  url.searchParams.delete('scene');
+  history.replaceState(null, '', url);
+
+  state.tab = 'scene';
+  render();
+  await loadScenes();
+  const scene = state.scenes.find((s) => s.id === id);
+  if (!scene) return;
+  if (!scene.expanded) await toggleDetail(scene);
+  if (scene.splat) openScene(scene);
+}
+
 // ── 시작 ───────────────────────────────────────────────────
 
 initOperatorGate();
@@ -1485,3 +1509,4 @@ setText($('clock'), fmtClock(Date.now()));
 loadMap();
 loadHistory();
 connect();
+openSceneFromUrl();

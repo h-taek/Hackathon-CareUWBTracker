@@ -1,12 +1,22 @@
-// 사고 현장 3D 기록 페이지(/recon) 동작.
+// 사고 현장 3D 기록 화면(/recon) 동작.
 //
-// 흐름: 영상 고르기 → 낙상 기록 고르기 → 설정 → 업로드(= 재구성 착수) → 폴링으로 진행 표시.
+// 이 화면이 하는 일은 둘뿐이다 — **어느 사고에 붙일지 정하고, 영상을 올려 변환을 건다.**
+// 사고 목록·상세·3D 뷰어는 관제 화면의 '사고 현장 3D' 탭에 있다. 같은 목록을 두 곳에
+// 두면 어느 쪽이 최신인지 알 수 없어지고, 1.4MB짜리 뷰어 라이브러리가 등록만 하러 온
+// 화면에도 딸려온다.
+//
+// 흐름: 붙일 사고 확정 → 영상 고르기 → 설정 → 업로드(= 재구성 착수) → 폴링으로 진행 표시.
 //
 // 실제 전송은 마지막 버튼 한 번이다. 화면에서는 영상을 먼저 고르지만 수백 MB를 보내는 건
-// 이벤트와 설정이 정해진 뒤다 — 먼저 올려두려면 임시 보관소가 필요한데 그럴 이유가 없다.
+// 사고와 설정이 정해진 뒤다 — 먼저 올려두려면 임시 보관소가 필요한데 그럴 이유가 없다.
 //
 // 진행은 SSE가 아니라 폴링이다. 재구성이 몇 분짜리라 실시간 스트림에 얹을 이유가 없고,
 // 관제(/stream)와 섞이면 안 된다.
+//
+// **영상 등록도 사건 기록을 바꾸는 조작이라 관제사 세션이 있어야 한다**(spec operation 03).
+// 서버도 같이 막는다 — 화면에서만 막으면 주소로 직접 올릴 수 있다.
+
+import { initOperatorGate, requireOperator, guard } from './operator.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -22,14 +32,20 @@ const STEPS = [
 
 const state = {
   file: null,
+  /** 붙일 사고. `fixed`면 관제에서 지정해 온 것이라 화면에서 못 바꾼다. */
   eventId: null,
-  events: [],
-  /** 지금 보고 있는 재구성 { eventId, attachmentId } */
+  fixed: false,
+  /** 지금 보고 있는 재구성 { eventId, attachmentId } — attachmentId는 **영상** 쪽이다. */
   watching: null,
+  /** 끝난 뒤 `다시 변환`이 쓸 마지막 대상. watching은 끝나면 비운다. */
+  last: null,
   timer: null,
-  viewer: null,
-  viewerLoading: null,
 };
+
+/** 태그 이름표. 사고 기록에는 태그 ID만 있어 명부에서 이름을 끌어와야 한다. */
+const roster = new Map();
+/** 층 이름. 사고 기록의 floor는 `F2` 같은 식별자뿐이다. */
+const floors = new Map();
 
 // ── 유틸 ──
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
@@ -44,6 +60,14 @@ const el = (tag, cls, text) => {
   if (text != null) node.textContent = text;
   return node;
 };
+const nameOf = (tagId) => roster.get(tagId) || tagId;
+const whereOf = (floor, zone) => [floors.get(floor) || floor, zone || '구역 미지정'].filter(Boolean).join(' — ');
+
+/** 초를 사람이 읽는 길이로. 15분짜리 작업에 `761초`는 안 읽힌다. */
+const span = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, '0')}초`;
+};
 
 async function getJson(path) {
   const res = await fetch(path, { cache: 'no-store' });
@@ -51,98 +75,169 @@ async function getJson(path) {
   return res.json();
 }
 
-// ── 1. 영상 ──
-function bindFilePicker() {
-  const input = $('file');
-  $('pick').onclick = () => input.click();
-  input.onchange = () => {
-    const file = input.files[0];
-    state.file = file || null;
-    const meta = $('filemeta');
-    meta.innerHTML = '';
-    if (!file) {
-      meta.append(el('span', null, '선택된 영상이 없다'));
-      return updateGo();
-    }
-    meta.append(el('b', null, file.name));
-    // 해상도·길이는 브라우저가 메타데이터만 읽어 채운다. 파일은 아직 안 보낸다.
-    const line = el('span', null, `${mb(file.size)} · 읽는 중…`);
-    meta.append(line);
-    const probe = document.createElement('video');
-    probe.preload = 'metadata';
-    probe.onloadedmetadata = () => {
-      line.textContent = `${mb(file.size)} · ${probe.videoWidth}×${probe.videoHeight} · ${Math.round(probe.duration)}초`;
-      URL.revokeObjectURL(probe.src);
-    };
-    probe.onerror = () => { line.textContent = `${mb(file.size)} · 브라우저가 못 읽는 코덱(변환은 서버가 한다)`; };
-    probe.src = URL.createObjectURL(file);
-    updateGo();
+// ── 1. 붙일 사고 ──
+//
+// 관제 화면의 `영상 등록`은 `/recon/?incident=<사고id>`로 이 화면을 연다. 그때는 그 사고에
+// **고정한다** — 고를 수 있게 두면 3번째 사고를 등록하러 들어와 첫 사고에 붙는다.
+
+async function loadNames() {
+  const [tags, map] = await Promise.all([
+    getJson('/tags').catch(() => []),
+    getJson('/map').catch(() => null),
+  ]);
+  for (const tag of tags) roster.set(tag.id, tag.name);
+  for (const floor of map?.floors ?? []) floors.set(floor.id, floor.name);
+}
+
+/** 레코드 전문에서 화면이 쓸 것만 뽑는다. 목록 요약과 필드 이름이 다르다(전문은 alert 밑에 있다). */
+function factsOf(record) {
+  const alert = record.alert ?? {};
+  const attachments = record.attachments ?? [];
+  return {
+    eventId: record.eventId,
+    tagId: record.tagId,
+    ts: record.ts,
+    floor: alert.floor,
+    zone: alert.zone,
+    peakAccel: alert.peakAccel,
+    trackCount: record.track?.length ?? 0,
+    video: attachments.find((a) => a.kind === 'video') ?? null,
+    splat: attachments.find((a) => a.kind === 'splat') ?? null,
   };
 }
 
-// ── 2. 낙상 기록 ──
-async function loadEvents() {
-  const list = $('events');
-  list.innerHTML = '';
-  let events = [];
+async function showFixed(eventId) {
+  let record = null;
   try {
-    events = (await getJson('/incidents?limit=100')).incidents;
+    record = await getJson(`/incidents/${encodeURIComponent(eventId)}`);
   } catch {
-    list.append(el('div', 'empty', '이벤트를 못 불러왔다'));
+    // 주소에 실려 온 사고가 없다(지워졌거나 오래된 주소다). 목록으로 떨어뜨린다.
+    $('incidentHint').textContent = '주소의 사고를 못 찾았다';
+    $('incidentHint').className = 'panel-hint is-bad';
+    state.fixed = false;
+    state.eventId = null;
+    await showPicker('주소에 실린 사고를 못 찾았다. 아래에서 고른다.');
     return;
   }
-  state.events = events;
-  $('eventCount').textContent = `${events.length}건`;
 
-  if (!events.length) {
-    list.append(el('div', 'empty', '확인된 사고가 없다. 관제 화면에서 경보를 낙상으로 판정하면 여기 뜬다'));
-    return updateGo();
-  }
+  const f = factsOf(record);
+  state.eventId = f.eventId;
+  state.fixed = true;
 
-  for (const [index, event] of events.entries()) {
-    const row = el('label', 'evt');
-    const radio = el('input');
-    radio.type = 'radio';
-    radio.name = 'evt';
-    radio.value = event.eventId;
-    if (index === 0) { radio.checked = true; state.eventId = event.eventId; }
-    radio.onchange = () => {
-      state.eventId = event.eventId;
-      for (const other of list.querySelectorAll('.evt')) other.classList.remove('sel');
-      row.classList.add('sel');
-      updateGo();
-    };
+  $('incName').textContent = `${nameOf(f.tagId)} · ${clock(f.ts)}`;
+  $('incWhere').textContent = whereOf(f.floor, f.zone);
 
-    const main = el('div', 'evtmain');
-    const head = el('div');
-    head.append(el('b', null, clock(event.ts)));
-    head.append(el('span', 'tag', event.tagId));
-    head.append(el('span', 'zone', event.zone ?? '미지정'));
-    main.append(head);
-    main.append(el('div', 'sub',
-      `${event.peakAccel}g · ${event.freefall ? '자유낙하' : '충격만'}`
-      + ` · AI ${event.aiScore != null ? Number(event.aiScore).toFixed(2) : '-'}`
-      + ` · 궤적 ${event.trackCount}점`));
+  const box = $('incFacts');
+  box.innerHTML = '';
+  const fact = (k, v) => {
+    const cell = el('div');
+    cell.append(el('div', 'fact-k', k));
+    cell.append(el('div', 'fact-v', v));
+    box.append(cell);
+  };
+  fact('태그', f.tagId);
+  fact('충격', f.peakAccel != null ? `${Number(f.peakAccel).toFixed(1)} g` : '—');
+  fact('궤적', `${f.trackCount} 점`);
+  fact('첨부', f.splat ? '영상 · 3D' : f.video ? '영상만' : '없음');
 
-    const has3d = event.attachmentCount > 0;
-    const badge = el('span', `badge ${has3d ? 'ok' : 'warn'}`, has3d ? `첨부 ${event.attachmentCount}` : '첨부 없음');
-
-    row.append(radio, main, badge);
-    if (index === 0) row.classList.add('sel');
-    list.append(row);
-  }
+  $('incidentHint').textContent = '관제 화면에서 지정';
+  $('incidentHint').className = 'panel-hint';
+  $('incidentLoading').hidden = true;
+  $('incidentPick').hidden = true;
+  $('incidentFixed').hidden = false;
   updateGo();
 }
 
+async function showPicker(reason, keep = null) {
+  let incidents = [];
+  try {
+    incidents = (await getJson('/incidents?limit=100')).incidents;
+  } catch {
+    $('incidentLoading').textContent = '사고를 못 불러왔다. 서버가 떠 있는지 본다.';
+    return;
+  }
+
+  const select = $('incidentSelect');
+  select.innerHTML = '';
+  // **아무것도 미리 고르지 않는다.** 기본 선택이 있으면 안 고른 채로 눌러 엉뚱한 사고에 붙는다.
+  select.append(el('option', null, '— 사고를 고른다 —'));
+  for (const e of incidents) {
+    const option = el('option', null,
+      `${nameOf(e.tagId)} · ${clock(e.ts)} · ${e.zone || '구역 미지정'}`
+      + ` · ${e.hasSplat ? '3D 있음' : e.attachmentCount ? '영상만' : '첨부 없음'}`);
+    option.value = e.eventId;
+    select.append(option);
+  }
+  // 다시 그릴 때(변환이 끝나 첨부 표기가 바뀐 때) 고른 것을 잃지 않는다.
+  if (keep) select.value = keep;
+  state.eventId = select.value || null;
+  select.onchange = () => { state.eventId = select.value || null; updateGo(); };
+
+  $('incidentCount').textContent = `확인된 사고 ${incidents.length}건`;
+  if (reason) $('pickNote').textContent = reason;
+  $('incidentHint').textContent = '주소로 직접 열었다';
+  $('incidentLoading').hidden = true;
+  $('incidentFixed').hidden = true;
+  $('incidentPick').hidden = false;
+  updateGo();
+}
+
+// ── 2. 현장 영상 ──
+
+function setFile(file) {
+  state.file = file || null;
+  $('drop').hidden = Boolean(file);
+  $('filePicked').hidden = !file;
+  if (!file) return updateGo();
+
+  $('fileName').textContent = file.name;
+  const meta = $('fileMeta');
+  meta.textContent = `${mb(file.size)} · 읽는 중…`;
+  // 해상도·길이는 브라우저가 메타데이터만 읽어 채운다. 파일은 아직 안 보낸다.
+  const probe = document.createElement('video');
+  probe.preload = 'metadata';
+  probe.onloadedmetadata = () => {
+    meta.textContent = `${mb(file.size)} · ${probe.videoWidth}×${probe.videoHeight} · ${Math.round(probe.duration)}초`;
+    URL.revokeObjectURL(probe.src);
+  };
+  probe.onerror = () => { meta.textContent = `${mb(file.size)} · 브라우저가 못 읽는 코덱(변환은 서버가 한다)`; };
+  probe.src = URL.createObjectURL(file);
+  updateGo();
+}
+
+function bindFilePicker() {
+  const input = $('file');
+  $('pick').onclick = () => input.click();
+  $('repick').onclick = () => input.click();
+  input.onchange = () => setFile(input.files[0] || null);
+
+  // 끌어다 놓기. 영역 밖에 떨어뜨렸을 때 브라우저가 그 영상을 **탭에 열어버리는** 것도
+  // 같이 막는다 — 업로드 중이었다면 화면째 날아간다.
+  const drop = $('drop');
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  for (const type of ['dragenter', 'dragover']) {
+    drop.addEventListener(type, (e) => { stop(e); drop.classList.add('is-over'); });
+  }
+  for (const type of ['dragleave', 'drop']) {
+    drop.addEventListener(type, (e) => { stop(e); drop.classList.remove('is-over'); });
+  }
+  drop.addEventListener('drop', (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file) setFile(file);
+  });
+  for (const type of ['dragover', 'drop']) window.addEventListener(type, (e) => e.preventDefault());
+}
+
 // ── 3. 설정 → 업로드 ──
+
 function tuningQuery() {
   const params = new URLSearchParams({ kind: 'video' });
   for (const [id, key] of [['frames', 'frames'], ['frameWidth', 'frameWidth'], ['iters', 'iters']]) {
     const value = $(id).value.trim();
     if (value !== '') params.set(key, value);
   }
-  // 라벨과 실측치는 둘 다 있을 때만 보낸다 — 하나만 가면 서버가 400으로 막는다.
   params.set('gpu', $('gpu').checked ? '1' : '0');
+  // 라벨과 실측치는 둘 다 있을 때만 보낸다 — 하나만 가면 서버가 400으로 막는다.
   const label = $('scaleLabel').value.trim();
   const mm = $('scaleMm').value.trim();
   if (label && mm) { params.set('scaleLabel', label); params.set('scaleMm', mm); }
@@ -154,15 +249,21 @@ function tuningQuery() {
 
 function updateGo() {
   const go = $('go');
+  const why = $('goWhy');
+  const busy = go.dataset.busy === '1';
   const ready = Boolean(state.file && state.eventId);
-  go.disabled = !ready || go.dataset.busy === '1';
-  go.textContent = go.dataset.busy === '1' ? '업로드 중…'
-    : !state.file ? '영상을 먼저 고른다'
-      : !state.eventId ? '사고를 고른다'
+
+  go.disabled = !ready || busy;
+  go.textContent = busy ? '업로드 중…'
+    : !state.eventId ? '붙일 사고를 고른다'
+      : !state.file ? '영상을 먼저 고른다'
         : '업로드하고 변환 시작';
+  why.textContent = !ready || busy ? '' : `${mb(state.file.size)}를 보낸 뒤 변환이 시작된다`;
 }
 
 async function startUpload() {
+  // 세션이 끊긴 채 수백 MB를 보내고 401을 받으면, 그 시간이 통째로 버려진다.
+  if (!requireOperator()) return;
   const go = $('go');
   go.dataset.busy = '1';
   updateGo();
@@ -170,14 +271,15 @@ async function startUpload() {
   $('progressHint').textContent = `${mb(state.file.size)} 전송 중…`;
 
   try {
-    const res = await fetch(`/incidents/${encodeURIComponent(state.eventId)}/attachments?${tuningQuery()}`, {
+    const res = guard(await fetch(`/incidents/${encodeURIComponent(state.eventId)}/attachments?${tuningQuery()}`, {
       method: 'POST',
       headers: { 'Content-Type': state.file.type || 'application/octet-stream' },
       body: state.file,
-    });
+    }));
     const body = await res.json();
     if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
     state.watching = { eventId: state.eventId, attachmentId: body.attachment.attachmentId };
+    state.last = state.watching;
     poll();
   } catch (error) {
     setSteps({ status: 'failed', step: 'upload', error: String(error.message || error) });
@@ -187,195 +289,17 @@ async function startUpload() {
   }
 }
 
-// ── 진행 폴링 ──
-function setSteps(recon) {
-  const list = $('steps');
-  list.innerHTML = '';
-  const current = recon?.step ?? null;
-  const failed = recon?.status === 'failed';
-  const done = recon?.status === 'done';
-  const at = STEPS.findIndex((s) => s.key === current);
-
-  for (const [index, step] of STEPS.entries()) {
-    const li = el('li');
-    const passed = done || (at >= 0 && index < at);
-    const running = !done && !failed && index === at;
-    const broke = failed && index === at;
-    li.className = broke ? 'bad' : passed ? 'done' : running ? 'run' : '';
-    li.append(el('span', 'mk', broke ? '×' : passed ? '✓' : running ? '●' : '○'));
-    const name = el('span');
-    name.append(el('b', null, `${index + 1}/${STEPS.length} ${step.label}`));
-    name.append(el('span', 'what', ` ${step.what}`));
-    // 지금 도는 단계에만 막대를 붙인다. 전체 %로 합치지 않는 이유는 단계별 소요가
-    // 입력에 따라 뒤집혀(학습 30000회 vs 프레임 500장) 없는 가중치를 지어내게 되기 때문이다.
-    if (running && recon?.progress) {
-      const bar = el('div', 'bar');
-      const fill = el('div', 'fill');
-      const pct = recon.progress.percent;
-      fill.style.width = pct == null ? '100%' : `${pct}%`;
-      if (pct == null) fill.classList.add('unknown');
-      bar.append(fill);
-      name.append(bar);
-    }
-    li.append(name);
-    li.append(el('span', 'd', running ? runningDetail(recon) : detailFor(step.key, recon)));
-    list.append(li);
-  }
-  // 상태 낱말을 앞에 박는다. 사유만 있으면 성공인지 실패인지가 한눈에 안 들어온다.
-  // 번호는 **화면 기준**으로만 센다. 서버의 stepIndex는 도구 5단계 기준이라 화면의
-  // 6단계(업로드 포함)와 어긋난다 — 섞으면 3/6인지 4/6인지 알 수 없어진다.
-  const shown = at >= 0 ? at + 1 : 0;
-  $('progressHint').textContent = failed ? `실패 — ${recon.error ?? '원인 불명'}`
-    : done ? '완료'
-      : recon?.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
-        : recon?.status === 'running' ? '진행 중…'
-          : recon?.status === 'pending' ? '대기 중…' : '';
-  $('progressHint').className = `hint${failed ? ' bad' : ''}`;
-}
-
-/** 지금 도는 단계의 오른쪽 숫자. 막대는 근사여도 이 값은 도구가 준 그대로다. */
-function runningDetail(recon) {
-  const p = recon?.progress;
-  if (!p) return '…';
-  return p.percent == null ? p.label : `${p.label} · ${p.percent}%`;
-}
-
-function detailFor(key, recon) {
-  if (!recon) return '';
-  if (key === 'frames' && recon.frames) return `${recon.frames}장`;
-  if (key === 'colmap:map' && recon.registeredImages == null && recon.tuning?.targetFrames) return '';
-  if (key === 'colmap:map' && recon.registeredImages != null) {
-    return `등록 ${recon.registeredImages}장 · 점 ${recon.points ?? 0}`;
-  }
-  if (key === 'opensplat' && recon.tuning?.numIters) return `${recon.tuning.numIters}회`;
-  if (key === 'colmap:extract' && recon.tuning?.useGpu != null) return recon.tuning.useGpu ? 'GPU' : 'CPU';
-  return '';
-}
-
-async function poll() {
-  clearTimeout(state.timer);
-  if (!state.watching) return;
-  const { eventId, attachmentId } = state.watching;
-  let recon = null;
-  try {
-    const record = await getJson(`/incidents/${encodeURIComponent(eventId)}`);
-    recon = (record.attachments || []).find((a) => a.attachmentId === attachmentId)?.recon ?? null;
-  } catch { /* 서버가 잠깐 안 받으면 다음 차례에 다시 본다 */ }
-
-  setSteps(recon);
-  rememberWatching();
-  await refreshLog();
-
-  if (recon && (recon.status === 'done' || recon.status === 'failed')) {
-    state.watching = null;
-    rememberWatching();
-    await loadEvents();
-    await loadRecords();
-    if (recon.status === 'done' && recon.outputAttachmentId) {
-      openViewer(eventId, recon.outputAttachmentId);
-    }
-    return;
-  }
-  state.timer = setTimeout(poll, 3000);
-}
-
-async function refreshLog() {
-  if (!state.watching) return;
-  const { eventId, attachmentId } = state.watching;
-  try {
-    // 로그는 첫 단계가 뭔가 쓰기 전까지 없다. 404는 정상이라 조용히 넘긴다.
-    const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=40`, { cache: 'no-store' });
-    if (!res.ok) return;
-    const text = await res.text();
-    const box = $('log');
-    box.textContent = text;
-    box.scrollTop = box.scrollHeight;
-  } catch { /* 로그는 있으면 좋은 것뿐이다 */ }
-}
-
-// ── 기존 기록 ──
-async function loadRecords() {
-  const body = $('records');
-  body.innerHTML = '';
-  let events = [];
-  try {
-    events = (await getJson('/incidents?limit=100')).incidents;
-  } catch {
-    return;
-  }
-
-  // 목록 요약에는 첨부 상세가 없다. 첨부가 있는 것만 전문을 열어 본다.
-  const rows = await Promise.all(events.map(async (event) => {
-    if (!event.attachmentCount) return { event, attachments: [] };
-    try {
-      const record = await getJson(`/incidents/${encodeURIComponent(event.eventId)}`);
-      return { event, attachments: record.attachments || [] };
-    } catch {
-      return { event, attachments: [] };
-    }
-  }));
-
-  if (!rows.length) {
-    body.append(el('tr')).append(Object.assign(el('td', 'none', '기록이 없다'), { colSpan: 6 }));
-    return;
-  }
-
-  for (const { event, attachments } of rows) {
-    const video = attachments.find((a) => a.kind === 'video');
-    const splat = attachments.find((a) => a.kind === 'splat');
-    const tr = el('tr');
-    tr.append(el('td', null, clock(event.ts)));
-    tr.append(el('td', null, event.tagId));
-    tr.append(el('td', null, event.zone ?? '미지정'));
-    tr.append(video ? el('td', null, mb(video.bytes)) : el('td', 'none', '없음'));
-
-    const cell = el('td');
-    const recon = video?.recon;
-    if (splat) {
-      cell.append(el('span', 'badge ok', mb(splat.bytes)));
-      if (recon?.registeredImages != null) {
-        cell.append(el('span', 'sub', ` 등록 ${recon.registeredImages}/${recon.frames ?? '?'}장`));
-      }
-    } else if (recon?.status === 'failed') {
-      cell.append(el('span', 'badge bad', '실패'));
-      cell.append(el('span', 'sub', ` ${recon.error ?? ''}`));
-    } else if (recon?.status === 'running' || recon?.status === 'pending') {
-      cell.append(el('span', 'badge warn', recon.status === 'running' ? '변환 중' : '대기'));
-    } else {
-      cell.append(el('span', 'none', '—'));
-    }
-    tr.append(cell);
-
-    const act = el('td', 'act');
-    if (splat) {
-      const view = el('button', 'btn sm', '3D 보기');
-      view.onclick = () => openViewer(event.eventId, splat.attachmentId);
-      const get = el('a', 'btn sm', '받기');
-      get.href = `/incidents/${encodeURIComponent(event.eventId)}/attachments/${encodeURIComponent(splat.attachmentId)}`;
-      get.download = '';
-      act.append(view, get);
-    }
-    if (video) {
-      const retry = el('button', 'btn sm', splat ? '다시 변환' : '변환');
-      retry.onclick = () => retryRecon(event.eventId, video.attachmentId);
-      act.append(retry);
-      if (recon?.status === 'failed' || recon?.status === 'done') {
-        const logBtn = el('button', 'btn sm', '로그');
-        logBtn.onclick = () => showLog(event.eventId, video.attachmentId);
-        act.append(logBtn);
-      }
-    }
-    tr.append(act);
-    body.append(tr);
-  }
-}
-
-async function retryRecon(eventId, attachmentId) {
+async function retryRecon() {
+  if (!state.last || !requireOperator()) return;
+  const { eventId, attachmentId } = state.last;
   const params = tuningQuery();
   params.delete('kind');
   params.delete('name');
   try {
-    const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/recon?${params}`, { method: 'POST' });
+    const res = guard(await fetch(
+      `/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/recon?${params}`,
+      { method: 'POST' },
+    ));
     const body = await res.json();
     if (!body.ok) throw new Error(body.error);
     state.watching = { eventId, attachmentId };
@@ -387,36 +311,173 @@ async function retryRecon(eventId, attachmentId) {
   }
 }
 
-async function showLog(eventId, attachmentId) {
-  const res = await fetch(`/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=200`, { cache: 'no-store' });
-  $('log').textContent = res.ok ? await res.text() : '로그가 없다';
-  $('logWrap').open = true;
-  $('progress').scrollIntoView({ behavior: 'smooth', block: 'center' });
+// ── 4. 진행 ──
+
+function setSteps(recon) {
+  const list = $('steps');
+  list.innerHTML = '';
+  list.hidden = !recon;
+  $('logWrap').hidden = !recon;
+  if (!recon) {
+    $('progressHint').textContent = '아직 시작하지 않았다';
+    $('progressHint').className = 'panel-hint';
+    return;
+  }
+
+  const current = recon.step ?? null;
+  const failed = recon.status === 'failed';
+  const done = recon.status === 'done';
+  const at = STEPS.findIndex((s) => s.key === current);
+
+  for (const [index, step] of STEPS.entries()) {
+    const passed = done || (at >= 0 && index < at);
+    const running = !done && !failed && index === at;
+    const broke = failed && index === at;
+    const li = el('li', broke ? 'is-bad' : passed ? 'is-done' : running ? 'is-run' : '');
+    li.append(el('span', 'mk', broke ? '×' : passed ? '✓' : running ? '●' : '○'));
+    li.append(el('span', 's-name', `${index + 1}/${STEPS.length} ${step.label}`));
+    li.append(el('span', 's-d', running ? runningDetail(recon) : detailFor(step.key, recon)));
+    li.append(el('span', 's-what', step.what));
+    // 지금 도는 단계에만 막대를 붙인다. 전체 %로 합치지 않는 이유는 단계별 소요가
+    // 입력에 따라 뒤집혀(학습 30000회 vs 프레임 500장) 없는 가중치를 지어내게 되기 때문이다.
+    if (running && recon.progress) {
+      const bar = el('div', 'bar');
+      const fill = el('div', 'fill');
+      const pct = recon.progress.percent;
+      if (pct == null) fill.classList.add('is-unknown');
+      else fill.style.width = `${pct}%`;
+      bar.append(fill);
+      li.append(bar);
+    }
+    list.append(li);
+  }
+
+  // 상태 낱말을 앞에 박는다. 사유만 있으면 성공인지 실패인지가 한눈에 안 들어온다.
+  // 번호는 **화면 기준**으로만 센다. 서버의 stepIndex는 도구 5단계 기준이라 화면의
+  // 6단계(업로드 포함)와 어긋난다 — 섞으면 3/6인지 4/6인지 알 수 없어진다.
+  const shown = at >= 0 ? at + 1 : 0;
+  $('progressHint').textContent = failed ? `실패 — ${recon.error ?? '원인 불명'}`
+    : done ? '완료'
+      : recon.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
+        : recon.status === 'running' ? '진행 중…'
+          : recon.status === 'pending' ? '대기 중…' : '';
+  $('progressHint').className = `panel-hint${failed ? ' is-bad' : ''}`;
 }
 
-// ── 뷰어 ──
-async function openViewer(eventId, attachmentId) {
-  const url = `/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}`;
-  const note = $('stagenote');
-  $('viewerHint').textContent = clock(state.events.find((e) => e.eventId === eventId)?.ts ?? Date.now());
-  note.textContent = '3D 현장 불러오는 중…';
-  try {
-    // three·gaussian-splats-3d는 무거워서(약 1.4MB) 볼 때 처음 받는다.
-    if (!state.viewerLoading) state.viewerLoading = import('./splat-view.js');
-    const mod = await state.viewerLoading;
-    await mod.show($('stage'), url, (text) => { note.textContent = text; });
-    note.textContent = '';
-  } catch (error) {
-    note.textContent = `3D를 못 띄웠다 — ${error.message || error}`;
-    console.error('[recon] viewer', error);
+/** 지금 도는 단계의 오른쪽 숫자. 막대는 근사여도 이 값은 도구가 준 그대로다. */
+function runningDetail(recon) {
+  const p = recon.progress;
+  if (!p) return '…';
+  return p.percent == null ? p.label : `${p.label} · ${p.percent}%`;
+}
+
+function detailFor(key, recon) {
+  if (key === 'frames' && recon.frames) return `${recon.frames}장`;
+  if (key === 'colmap:map' && recon.registeredImages != null) {
+    return `등록 ${recon.registeredImages}장 · 점 ${(recon.points ?? 0).toLocaleString()}`;
   }
+  if (key === 'opensplat' && recon.tuning?.numIters) return `${recon.tuning.numIters}회`;
+  if (key === 'colmap:extract' && recon.tuning?.useGpu != null) return recon.tuning.useGpu ? 'GPU' : 'CPU';
+  return '';
+}
+
+/**
+ * 끝난 뒤의 한 줄. **여기서 3D를 띄우지 않는다** — 보는 자리는 관제 화면의 3D 탭이고,
+ * 그 탭이 사고를 골라 여는 길(`/?scene=`)을 갖고 있다.
+ */
+function showResult(recon, record) {
+  const box = $('resultBox');
+  box.innerHTML = '';
+  const done = recon?.status === 'done';
+  const failed = recon?.status === 'failed';
+  box.hidden = !(done || failed);
+  if (!done && !failed) return;
+
+  const row = el('div', `result ${done ? 'is-ok' : 'is-bad'}`);
+  const ico = el('span', 'result-ico');
+  ico.innerHTML = done
+    ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12.5 2.5 2.5 4.5-5"></path></svg>'
+    : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg>';
+
+  const main = el('div');
+  main.append(el('div', 'result-main', done ? '3D 현장이 이 사고에 붙었다' : '변환이 끝나지 못했다'));
+
+  const splat = (record?.attachments ?? []).find((a) => a.attachmentId === recon.outputAttachmentId);
+  const took = recon.startedAt && recon.finishedAt ? span(recon.finishedAt - recon.startedAt) : null;
+  main.append(el('div', 'result-sub', done
+    ? [
+      `등록 ${recon.registeredImages ?? '?'}/${recon.frames ?? '?'}장`,
+      `점 ${(recon.points ?? 0).toLocaleString()}`,
+      splat ? mb(splat.bytes) : null,
+      took,
+    ].filter(Boolean).join(' · ')
+    : recon.error ?? '원인 불명'));
+
+  const acts = el('div', 'result-acts');
+  if (done) {
+    const open = el('button', 'act act-sm act-primary', '관제에서 3D 보기');
+    open.type = 'button';
+    const target = record?.eventId ?? state.last?.eventId ?? state.eventId ?? '';
+    open.onclick = () => window.open(`/?scene=${encodeURIComponent(target)}`, '_blank', 'noopener');
+    acts.append(open);
+  }
+  const again = el('button', `act act-sm${done ? '' : ' act-primary'}`, '다시 변환');
+  again.type = 'button';
+  again.onclick = retryRecon;
+  acts.append(again);
+
+  row.append(ico, main, el('span', 'spacer'), acts);
+  box.append(row);
+}
+
+async function poll() {
+  clearTimeout(state.timer);
+  if (!state.watching) return;
+  const { eventId, attachmentId } = state.watching;
+  let record = null;
+  let recon = null;
+  try {
+    record = await getJson(`/incidents/${encodeURIComponent(eventId)}`);
+    recon = (record.attachments || []).find((a) => a.attachmentId === attachmentId)?.recon ?? null;
+  } catch { /* 서버가 잠깐 안 받으면 다음 차례에 다시 본다 */ }
+
+  setSteps(recon);
+  showResult(recon, record);
+  rememberWatching();
+  await refreshLog();
+
+  if (recon && (recon.status === 'done' || recon.status === 'failed')) {
+    state.watching = null;
+    rememberWatching();
+    // 첨부가 늘었으니 사고 카드(또는 목록의 `첨부 없음` 표기)도 같이 맞춘다.
+    if (state.fixed) await showFixed(eventId);
+    else await showPicker(null, state.eventId);
+    return;
+  }
+  state.timer = setTimeout(poll, 3000);
+}
+
+async function refreshLog() {
+  if (!state.last) return;
+  const { eventId, attachmentId } = state.last;
+  try {
+    // 로그는 첫 단계가 뭔가 쓰기 전까지 없다. 404는 정상이라 조용히 넘긴다.
+    const res = await fetch(
+      `/incidents/${encodeURIComponent(eventId)}/attachments/${encodeURIComponent(attachmentId)}/log?tail=60`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) return;
+    const box = $('log');
+    box.textContent = await res.text();
+    box.scrollTop = box.scrollHeight;
+  } catch { /* 로그는 있으면 좋은 것뿐이다 */ }
 }
 
 // ── 시작 ──
-/**
- * 보고 있던 재구성을 주소에 남긴다. 15분짜리 작업 중에 새로고침하거나 창을 닫으면
- * 진행 화면을 통째로 잃는데, 주소만 있으면 다시 붙는다.
- */
+//
+// 보고 있던 재구성을 주소에 남긴다. 15분짜리 작업 중에 새로고침하거나 창을 닫으면 진행
+// 화면을 통째로 잃는데, 주소만 있으면 다시 붙는다.
+
 function rememberWatching() {
   const url = new URL(location.href);
   if (state.watching) {
@@ -427,19 +488,34 @@ function rememberWatching() {
   history.replaceState(null, '', url);
 }
 
-function restoreWatching() {
-  const raw = new URL(location.href).searchParams.get('watch');
-  if (!raw) return;
+function parseWatch(raw) {
+  if (!raw) return null;
   const slash = raw.lastIndexOf('/');
-  if (slash <= 0) return;
-  state.watching = { eventId: raw.slice(0, slash), attachmentId: raw.slice(slash + 1) };
-  poll();
+  if (slash <= 0) return null;
+  return { eventId: raw.slice(0, slash), attachmentId: raw.slice(slash + 1) };
 }
 
-bindFilePicker();
-$('go').onclick = startUpload;
-$('reload').onclick = () => { loadEvents(); loadRecords(); };
-setSteps(null);
-loadEvents();
-loadRecords();
-restoreWatching();
+async function start() {
+  // 세션이 없으면 이 호출이 화면을 관문(/operator)으로 넘긴다.
+  initOperatorGate();
+  bindFilePicker();
+  $('go').onclick = startUpload;
+  setSteps(null);
+
+  const params = new URL(location.href).searchParams;
+  const watching = parseWatch(params.get('watch'));
+  // 보고 있던 재구성이 있으면 그 사고가 곧 붙일 사고다. 두 주소가 어긋날 일은 없다.
+  const fixedId = params.get('incident') || watching?.eventId || null;
+
+  await loadNames();
+  if (fixedId) await showFixed(fixedId);
+  else await showPicker(null);
+
+  if (watching) {
+    state.watching = watching;
+    state.last = watching;
+    poll();
+  }
+}
+
+start();
