@@ -54,7 +54,6 @@
           <span class="pill is-alarm">낙상 확정</span>
         </div>
         <div class="facts" id="incFacts"></div>
-        <p class="note">다른 사고에 붙이려면 <b>관제 화면 → 사고 현장 3D</b>에서 그 건의 <b>영상 등록</b>으로 들어온다.</p>
       </div>
 
       <!-- (나) 주소로 직접 열어 지정이 없는 상태 -->
@@ -87,17 +86,17 @@
         <input type="file" id="file" accept="video/*,.mov,.MOV,.mp4,.MP4" hidden>
       </div>
 
+      <!-- 고른 파일은 드롭 영역 아래에 붙는다. `바꾸기` 버튼은 두지 않는다 —
+           위 영역이 그대로 다시 고르는 자리다. -->
       <div class="file" id="filePicked" hidden>
         <span class="file-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></svg></span>
         <div>
           <div class="file-name" id="fileName">—</div>
           <div class="file-meta" id="fileMeta">—</div>
         </div>
-        <span class="spacer"></span>
-        <button class="act act-sm" id="repick" type="button">바꾸기</button>
       </div>
 
-      <p class="note">치수를 실측한 물건(A4 종이·자)이 화면에 나와야 절대 크기를 잡는다. <b>흰 벽·천장만 오래 비추거나 빨리 움직이면 자세를 못 푼다.</b></p>
+      <p class="note">절대 크기 확보 — 실측 물건(A4 종이·자)이 화면에 있어야 함. <b>흰 벽·천장 위주 촬영과 빠른 이동은 자세 계산 실패 원인.</b></p>
     </div>
   </section>
 
@@ -133,16 +132,13 @@
         <label class="check">
           <input id="gpu" type="checkbox" checked>
           <span>COLMAP에 GPU 사용
-            <span class="sub">빠르지만 특징점을 덜 찾는다. 자세를 못 풀면 꺼본다</span>
+            <span class="sub">빠르지만 특징점을 덜 찾는다. 자세를 못 풀면 끈다</span>
           </span>
         </label>
       </div>
 
-      <p class="note"><b>기본값은 전부 상류(Nerfstudio·OpenSplat·COLMAP) 그대로다.</b> 이 장비에서는 1건에 10~15분쯤 걸린다 — 급하면 목표 프레임과 학습 반복을 낮춘다. 자세를 못 풀면 목표 프레임을 올리고 GPU를 꺼본다.</p>
-
       <div class="go-row">
         <button class="act act-primary" id="go" type="button" disabled>영상을 먼저 고른다</button>
-        <span class="go-why" id="goWhy"></span>
       </div>
     </div>
   </section>
@@ -151,7 +147,7 @@
   <section class="panel" id="progress">
     <div class="panel-head">
       <span class="panel-title">진행</span>
-      <span class="panel-hint" id="progressHint">아직 시작하지 않았다</span>
+      <span class="panel-hint" id="progressHint"></span>
     </div>
     <div class="panel-body" id="resultBox" hidden></div>
     <ol class="steps" id="steps" hidden></ol>

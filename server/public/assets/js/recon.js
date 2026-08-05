@@ -186,7 +186,7 @@ async function showPicker(reason, keep = null) {
 
 function setFile(file) {
   state.file = file || null;
-  $('drop').hidden = Boolean(file);
+  // 드롭 영역은 고른 뒤에도 남는다. 그 자리가 곧 다시 고르는 자리라 `바꾸기`가 따로 없다.
   $('filePicked').hidden = !file;
   if (!file) return updateGo();
 
@@ -208,7 +208,6 @@ function setFile(file) {
 function bindFilePicker() {
   const input = $('file');
   $('pick').onclick = () => input.click();
-  $('repick').onclick = () => input.click();
   input.onchange = () => setFile(input.files[0] || null);
 
   // 끌어다 놓기. 영역 밖에 떨어뜨렸을 때 브라우저가 그 영상을 **탭에 열어버리는** 것도
@@ -249,16 +248,13 @@ function tuningQuery() {
 
 function updateGo() {
   const go = $('go');
-  const why = $('goWhy');
   const busy = go.dataset.busy === '1';
-  const ready = Boolean(state.file && state.eventId);
 
-  go.disabled = !ready || busy;
+  go.disabled = !(state.file && state.eventId) || busy;
   go.textContent = busy ? '업로드 중…'
     : !state.eventId ? '붙일 사고를 고른다'
       : !state.file ? '영상을 먼저 고른다'
         : '업로드하고 변환 시작';
-  why.textContent = !ready || busy ? '' : `${mb(state.file.size)}를 보낸 뒤 변환이 시작된다`;
 }
 
 async function startUpload() {
@@ -319,7 +315,7 @@ function setSteps(recon) {
   list.hidden = !recon;
   $('logWrap').hidden = !recon;
   if (!recon) {
-    $('progressHint').textContent = '아직 시작하지 않았다';
+    $('progressHint').textContent = '';
     $('progressHint').className = 'panel-hint';
     return;
   }
