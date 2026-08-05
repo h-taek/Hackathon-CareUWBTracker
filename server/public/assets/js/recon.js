@@ -42,6 +42,8 @@ const state = {
   timer: null,
   /** 전송 중인 업로드의 중지 손잡이. 변환이 아니라 **전송**을 끊는다. */
   upload: null,
+  /** 파일 메타를 읽는 중인 <video>. 여기서 안 붙들면 수거돼 이벤트가 안 온다. */
+  probe: null,
 };
 
 /** 더 볼 것이 없는 상태들. 폴링을 여기서 멈춘다. */
@@ -198,14 +200,22 @@ function setFile(file) {
   $('fileName').textContent = file.name;
   const meta = $('fileMeta');
   meta.textContent = `${mb(file.size)} · 읽는 중…`;
+
   // 해상도·길이는 브라우저가 메타데이터만 읽어 채운다. 파일은 아직 안 보낸다.
+  //
+  // **읽는 요소를 state가 붙들고 있어야 한다.** 지역 변수로만 두면 이 함수가 끝난 뒤
+  // 아무도 안 가리키게 되고, 수거되면 걸어둔 이벤트가 영영 안 온다 — 화면이 `읽는 중…`에
+  // 멈춘 채로 남는다. 실제로 그렇게 멈춰 있었다.
   const probe = document.createElement('video');
+  state.probe = probe;
   probe.preload = 'metadata';
-  probe.onloadedmetadata = () => {
-    meta.textContent = `${mb(file.size)} · ${probe.videoWidth}×${probe.videoHeight} · ${Math.round(probe.duration)}초`;
+  const finish = (text) => {
+    meta.textContent = `${mb(file.size)} · ${text}`;
     URL.revokeObjectURL(probe.src);
+    if (state.probe === probe) state.probe = null;
   };
-  probe.onerror = () => { meta.textContent = `${mb(file.size)} · 브라우저가 못 읽는 코덱(변환은 서버가 한다)`; };
+  probe.onloadedmetadata = () => finish(`${probe.videoWidth}×${probe.videoHeight} · ${Math.round(probe.duration)}초`);
+  probe.onerror = () => finish('브라우저가 못 읽는 코덱(변환은 서버가 한다)');
   probe.src = URL.createObjectURL(file);
   updateGo();
 }
@@ -356,10 +366,10 @@ function setSteps(recon) {
   list.innerHTML = '';
   list.hidden = !recon;
   $('logWrap').hidden = !recon;
+  showActions(recon);
   if (!recon) {
     $('progressHint').textContent = '';
     $('progressHint').className = 'panel-hint';
-    $('stop').hidden = true;
     return;
   }
 
@@ -368,8 +378,6 @@ function setSteps(recon) {
   const done = recon.status === 'done';
   const halted = recon.status === 'cancelled';
   const at = STEPS.findIndex((s) => s.key === current);
-  // 도는 동안에만 중지가 있다. 끝난 뒤에 남아 있으면 뭘 끊는다는 것인지 알 수 없다.
-  $('stop').hidden = done || failed || halted;
 
   for (const [index, step] of STEPS.entries()) {
     const passed = done || (at >= 0 && index < at);
@@ -398,8 +406,9 @@ function setSteps(recon) {
   // 상태 낱말을 앞에 박는다. 사유만 있으면 성공인지 실패인지가 한눈에 안 들어온다.
   // 번호는 **화면 기준**으로만 센다. 서버의 stepIndex는 도구 5단계 기준이라 화면의
   // 6단계(업로드 포함)와 어긋난다 — 섞으면 3/6인지 4/6인지 알 수 없어진다.
+  // 사유는 아래 결과 줄이 적는다. 여기까지 사유를 실으면 같은 문장이 두 번 나온다.
   const shown = at >= 0 ? at + 1 : 0;
-  $('progressHint').textContent = failed ? `실패 — ${recon.error ?? '원인 불명'}`
+  $('progressHint').textContent = failed ? '실패'
     : halted ? '중지됨'
       : done ? '완료'
         : recon.status === 'running' && shown ? `${shown}/${STEPS.length} 단계 진행 중…`
@@ -425,68 +434,41 @@ function detailFor(key, recon) {
   return '';
 }
 
-const stepLabel = (key) => STEPS.find((s) => s.key === key)?.label ?? '';
-
 /**
- * 끝난 뒤의 한 줄. **여기서 3D를 띄우지 않는다** — 보는 자리는 관제 화면의 3D 탭이고,
- * 그 탭이 사고를 골라 여는 길(`/?scene=`)을 갖고 있다.
+ * 끝난 뒤 남기는 한 줄. **여기에 문장을 쓰지 않는다** — 상태 낱말은 위 바가 이미 말했고,
+ * 여기 적을 것은 숫자와 사유뿐이다. 중지는 적을 것이 없어 줄 자체가 안 뜬다.
+ *
+ * **3D를 여기서 띄우지 않는다** — 보는 자리는 관제 화면의 3D 탭이고, 그 탭이 사고를
+ * 골라 여는 길(`/?scene=`)을 갖고 있다.
  */
 function showResult(recon, record) {
   const box = $('resultBox');
   box.innerHTML = '';
   const done = recon?.status === 'done';
   const failed = recon?.status === 'failed';
-  const halted = recon?.status === 'cancelled';
-  box.hidden = !(done || failed || halted);
-  if (!done && !failed && !halted) return;
-
-  const row = el('div', `result ${done ? 'is-ok' : failed ? 'is-bad' : 'is-cut'}`);
-  const ico = el('span', 'result-ico');
-  ico.innerHTML = done
-    ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12.5 2.5 2.5 4.5-5"></path></svg>'
-    : failed
-      ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16h.01"></path></svg>'
-      : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><rect x="9" y="9" width="6" height="6"></rect></svg>';
-
-  const main = el('div');
-  main.append(el('div', 'result-main',
-    done ? '3D 현장이 이 사고에 붙었다'
-      : halted ? '변환을 중지했다'
-        : '변환이 끝나지 못했다'));
+  box.hidden = !(done || failed);
+  if (box.hidden) return;
 
   const splat = (record?.attachments ?? []).find((a) => a.attachmentId === recon.outputAttachmentId);
   const took = recon.startedAt && recon.finishedAt ? span(recon.finishedAt - recon.startedAt) : null;
-  main.append(el('div', 'result-sub', done
+  box.append(el('div', 'result', done
     ? [
       `등록 ${recon.registeredImages ?? '?'}/${recon.frames ?? '?'}장`,
       `점 ${(recon.points ?? 0).toLocaleString()}`,
       splat ? mb(splat.bytes) : null,
       took,
     ].filter(Boolean).join(' · ')
-    // 중지는 원인을 적을 것이 없다. 어디서 끊겼는지와 그때까지 쓴 시간만 남긴다.
-    : halted
-      ? [stepLabel(recon.step), took ? `${took} 지점` : null].filter(Boolean).join(' · ') || '영상 등록 전'
-      : recon.error ?? '원인 불명'));
+    : recon.error ?? '원인 불명'));
+}
 
-  const acts = el('div', 'result-acts');
-  if (done) {
-    const open = el('button', 'act act-sm act-primary', '관제에서 3D 보기');
-    open.type = 'button';
-    const target = record?.eventId ?? state.last?.eventId ?? state.eventId ?? '';
-    open.onclick = () => window.open(`/?scene=${encodeURIComponent(target)}`, '_blank', 'noopener');
-    acts.append(open);
-  }
-  // 전송이 끊긴 건에는 다시 걸 첨부가 없다. 그때는 위에서 다시 올리는 게 유일한 길이라
-  // 버튼을 만들지 않는다 — 눌러도 아무 일 없는 버튼이 제일 나쁘다.
-  if (state.last) {
-    const again = el('button', `act act-sm${done ? '' : ' act-primary'}`, '다시 변환');
-    again.type = 'button';
-    again.onclick = retryRecon;
-    acts.append(again);
-  }
-
-  row.append(ico, main, el('span', 'spacer'), acts);
-  box.append(row);
+/** 진행 바 우측의 단추. 지금 상태에서 할 수 있는 한 걸음만 띄운다. */
+function showActions(recon) {
+  const status = recon?.status ?? null;
+  const running = status === 'running' || status === 'pending';
+  $('stop').hidden = !running;
+  // 전송이 끊긴 건에는 다시 걸 첨부가 없다. 눌러도 아무 일 없는 버튼은 안 만든다.
+  $('again').hidden = running || status === null || status === 'done' || !state.last;
+  $('open3d').hidden = status !== 'done';
 }
 
 async function poll() {
@@ -560,6 +542,11 @@ async function start() {
   bindFilePicker();
   $('go').onclick = startUpload;
   $('stop').onclick = stopNow;
+  $('again').onclick = retryRecon;
+  $('open3d').onclick = () => {
+    const target = state.last?.eventId ?? state.eventId;
+    if (target) window.open(`/?scene=${encodeURIComponent(target)}`, '_blank', 'noopener');
+  };
   setSteps(null);
 
   const params = new URL(location.href).searchParams;

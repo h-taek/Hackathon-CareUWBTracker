@@ -15,6 +15,11 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden`은 `display: none`을 아주 약한 우선순위로 건다. 아래 컴포넌트들이 자기
+   `display`를 가지고 있어서 그대로 두면 숨겼다고 생각한 것이 계속 보인다 —
+   실제로 빈 파일 줄과 드롭 영역이 겹쳐 뜬 적이 있다. 여기서 한 번에 막는다. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -89,7 +94,8 @@ body {
 }
 .panel-title { font-family: var(--font-heading); font-size: 15px; letter-spacing: .02em; }
 .panel-hint { font-size: 11.5px; color: var(--color-neutral-600); }
-.panel-hint.is-bad { color: var(--st-alarm); }
+/* 실패 사유. 눈에 걸리되 경보는 아니다 — 본문색까지만 진해진다. */
+.panel-hint.is-bad { color: var(--color-text); }
 .panel-body { padding: 14px 16px 16px; }
 
 /* 단계 번호. 사각 테두리는 이 디자인 시스템의 도면 어법이다(둥근 배지를 쓰지 않는다). */
@@ -110,7 +116,7 @@ body {
 
 .note { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: var(--color-neutral-600); }
 .note b { color: var(--color-text); font-weight: 500; }
-.note.is-bad { color: var(--st-alarm); }
+.note.is-bad { color: var(--color-text); }
 
 .empty { padding: 8px 0; font-size: 13px; color: var(--color-neutral-600); }
 
@@ -131,9 +137,6 @@ body {
 .act-primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
 .act-primary:hover:not(:disabled) { background: var(--color-accent-700); }
 .act-sm { height: 28px; padding: 0 10px; font-size: 12px; }
-.act-danger { color: var(--st-alarm); border-color: rgba(166, 71, 58, .45); }
-.act-danger:hover:not(:disabled) { background: rgba(166, 71, 58, .10); }
-
 /* 패널 머리에 앉는 버튼. 제목·부제가 baseline으로 서 있어 혼자 가운데로 내려온다. */
 .panel-head .act { align-self: center; }
 
@@ -280,11 +283,12 @@ body {
 .steps li.is-run { color: var(--color-text); }
 .steps li.is-run .mk { color: var(--color-accent); }
 .steps li.is-run .s-name { font-weight: 500; }
-.steps li.is-bad { color: var(--st-alarm); }
-.steps li.is-bad .mk,
-.steps li.is-bad .s-d { color: var(--st-alarm); }
-/* 중지는 실패가 아니다. 붉게 칠하지 않고 회색으로 끊긴 자리만 표시한다. */
+/* 실패도 중지도 붉게 칠하지 않는다. **경보색은 낙상 경보 자리 색이다** — 변환이
+   끝나지 못한 것과 사람이 넘어진 것을 같은 무게로 말하면 진짜 경보가 묻힌다.
+   끊긴 자리는 색이 아니라 부호(× · ■)와 낱말이 말한다. */
+.steps li.is-bad,
 .steps li.is-cut { color: var(--color-neutral-700); }
+.steps li.is-bad .mk,
 .steps li.is-cut .mk { color: var(--color-neutral-500); }
 
 /* 막대는 **지금 도는 단계에만** 붙는다. 전체 %로 합치지 않는 이유는 단계별 소요가
@@ -322,14 +326,8 @@ body {
 }
 
 /* 완료·실패 요약. 3D 자체는 여기서 안 띄운다 — 관제 화면의 3D 탭이 뷰어를 갖는다. */
-.result { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.result-ico { flex: none; display: flex; }
-.result.is-ok .result-ico { color: var(--st-ok); }
-.result.is-bad .result-ico { color: var(--st-alarm); }
-.result.is-cut .result-ico { color: var(--color-neutral-500); }
-.result-main { font-size: 14px; }
-.result-sub { margin-top: 2px; font-size: 11.5px; color: var(--color-neutral-600); }
-.result-acts { display: flex; gap: 8px; }
+/* 끝난 뒤의 한 줄. 숫자 아니면 사유뿐이고 문장은 없다 — 상태 낱말은 위 바가 말한다. */
+.result { font-size: 13px; line-height: 1.6; color: var(--color-neutral-700); }
 
 @media (max-width: 640px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
