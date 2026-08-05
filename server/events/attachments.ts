@@ -14,7 +14,11 @@ import type { EventStore } from './store.ts';
 export const ATTACHMENT_KINDS = ['video', 'photo', 'splat'] as const;
 export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
 
-export type ReconStatus = 'pending' | 'running' | 'done' | 'failed';
+/**
+ * `cancelled`는 실패가 아니다. 관제사가 중지한 것이라 원인을 캐물을 자리가 없고, 화면도
+ * 붉게 칠하지 않는다 — 실패로 뭉뚱그리면 나중에 로그를 열어 "무엇이 잘못됐나"를 찾게 된다.
+ */
+export type ReconStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
 
 export interface ReconState {
   status: ReconStatus;

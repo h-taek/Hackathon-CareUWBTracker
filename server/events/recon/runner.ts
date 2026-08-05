@@ -50,11 +50,21 @@ export type RunCommand = (
   step: ReconStep,
   workDir: string,
   onOutput: (chunk: string) => void,
+  /** 중지 신호. 진행 중인 도구를 여기서 끊는다 — 안 끊으면 COLMAP이 30분을 더 돈다. */
+  signal?: AbortSignal,
 ) => Promise<{ code: number | null }>;
+
+/** 중지 요청의 결말. `null`은 그런 작업이 큐에도 없고 돌고 있지도 않다는 뜻이다. */
+export type CancelResult = 'stopping' | 'dequeued' | null;
 
 export interface ReconRunner {
   /** 큐에 넣는다. 이미 대기·진행 중이면 false. */
   enqueue(job: ReconJob): boolean;
+  /**
+   * 중지한다. 진행 중이면 도구를 끊고(`stopping`), 대기 중이면 큐에서 뺀다(`dequeued`).
+   * 둘 다 레코드에 `cancelled`로 남는다 — 끊긴 자리를 모르면 다시 걸 수도 없다.
+   */
+  cancel(job: ReconJob): CancelResult;
   /** 현재 큐 길이(진행 중인 1건 포함) */
   size(): number;
   /** 진행 중인 작업. 없으면 null */
@@ -71,13 +81,16 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
 
   const queue: ReconJob[] = [];
   let active: ReconJob | null = null;
+  /** 진행 중인 작업의 중지 손잡이. 도구 프로세스가 이 신호를 받는다. */
+  let activeStop: AbortController | null = null;
   let draining: Promise<void> | null = null;
 
+  const same = (a: ReconJob, b: ReconJob) =>
+    a.eventId === b.eventId && a.attachmentId === b.attachmentId;
+
   function enqueue(job: ReconJob): boolean {
-    const known = (entry: ReconJob) =>
-      entry.eventId === job.eventId && entry.attachmentId === job.attachmentId;
-    if (active && known(active)) return false;
-    if (queue.some(known)) return false;
+    if (active && same(active, job)) return false;
+    if (queue.some((entry) => same(entry, job))) return false;
 
     queue.push(job);
     log(`[recon] 대기열 추가 ${job.eventId}/${job.attachmentId} (대기 ${queue.length}건)`);
@@ -85,20 +98,42 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     return true;
   }
 
+  function cancel(job: ReconJob): CancelResult {
+    if (active && same(active, job)) {
+      // 레코드는 여기서 안 건드린다. 끊긴 도구가 실패로 돌아오면 runOne이 `cancelled`로
+      // 적는다 — 두 곳에서 쓰면 어느 쪽이 마지막인지에 따라 상태가 갈린다.
+      activeStop?.abort();
+      log(`[recon] 중지 요청 ${job.eventId}/${job.attachmentId} — 진행 중인 도구를 끊는다`);
+      return 'stopping';
+    }
+    const at = queue.findIndex((entry) => same(entry, job));
+    if (at < 0) return null;
+    queue.splice(at, 1);
+    options.attachments.patchRecon(job.eventId, job.attachmentId, {
+      status: 'cancelled',
+      finishedAt: now(),
+      error: undefined,
+    });
+    log(`[recon] 대기열에서 뺐다 ${job.eventId}/${job.attachmentId} (대기 ${queue.length}건)`);
+    return 'dequeued';
+  }
+
   async function drain(): Promise<void> {
     while (queue.length > 0) {
       active = queue.shift()!;
+      activeStop = new AbortController();
       try {
-        await runOne(active);
+        await runOne(active, activeStop.signal);
       } catch (error: unknown) {
         // runOne이 이미 실패를 레코드에 남긴다. 여기까지 온 건 그것마저 실패한 경우다.
         log(`[recon] ⚠ ${active.eventId}/${active.attachmentId} 처리 중 예외: ${describe(error)}`);
       }
       active = null;
+      activeStop = null;
     }
   }
 
-  async function runOne(job: ReconJob): Promise<void> {
+  async function runOne(job: ReconJob, signal: AbortSignal): Promise<void> {
     const attachment = options.attachments.get(job.eventId, job.attachmentId);
     if (!attachment) {
       log(`[recon] ⚠ 없는 첨부 ${job.eventId}/${job.attachmentId} — 건너뛴다`);
@@ -158,14 +193,17 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     appendLog(`\n=== [0/5] ${probe.name} — ${probe.what}\n$ ${probe.command} ${probe.args.join(' ')}\n`);
     try {
       let probed = '';
-      const result = await run(probe, workDir, (chunk) => { probed += chunk; appendLog(chunk); });
+      const result = await run(probe, workDir, (chunk) => { probed += chunk; appendLog(chunk); }, signal);
       if (result.code === 0) durationSec = parseDuration(probed);
     } catch { /* ffprobe가 없어도 재구성 자체는 돌아야 한다 */ }
+    if (signal.aborted) return stopped(job, probe, appendLog, startedAt);
     appendLog(durationSec ? `영상 길이 ${durationSec.toFixed(1)}초\n` : '길이를 못 쟀다 — 폴백 간격으로 뽑는다\n');
 
     const steps = reconSteps({ video, workDir }, jobTuning, durationSec);
     let frameCount = 0;
     for (const [index, step] of steps.entries()) {
+      // 단계 사이에 눌렀을 수도 있다. 다음 도구를 띄우기 전에 한 번 더 본다.
+      if (signal.aborted) return stopped(job, step, appendLog, startedAt);
       appendLog(`\n=== [${index + 1}/${steps.length}] ${step.name} — ${step.what}\n$ ${step.command} ${step.args.join(' ')}\n`);
       log(`[recon] ${job.attachmentId} ${index + 1}/${steps.length} ${step.name} — ${step.what}`);
       options.attachments.patchRecon(job.eventId, job.attachmentId, {
@@ -196,12 +234,15 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
 
       let result: { code: number | null };
       try {
-        result = await run(step, workDir, onOutput);
+        result = await run(step, workDir, onOutput, signal);
         // 마지막 값은 간격에 걸려 빠질 수 있다. 끝난 뒤 한 번 더 쓴다.
         if (pending) options.attachments.patchRecon(job.eventId, job.attachmentId, { progress: pending });
       } catch (error: unknown) {
+        // 끊어서 죽은 것을 실패로 적으면 안 된다. 원인을 캐물을 자리가 없는 결말이다.
+        if (signal.aborted) return stopped(job, step, appendLog, startedAt);
         return fail(job, step, `실행 실패: ${describe(error)}`, appendLog, startedAt);
       }
+      if (signal.aborted) return stopped(job, step, appendLog, startedAt);
       if (result.code !== 0) {
         return fail(job, step, `${step.command} 종료코드 ${result.code}`, appendLog, startedAt);
       }
@@ -297,11 +338,31 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
     log(`[recon] ⚠ 실패 ${job.eventId}/${job.attachmentId} — ${error} (${elapsed}초). 전문은 recon/${job.attachmentId}/recon.log`);
   }
 
+  /**
+   * 관제사가 끊었다. **실패와 같은 자리에 적지 않는다** — 실패는 원인을 찾아야 하는 결말이고
+   * 중지는 사람이 정한 결말이다. 어디서 끊겼는지는 남긴다(다시 걸 때 그 자리가 근거다).
+   */
+  function stopped(
+    job: ReconJob,
+    step: ReconStep,
+    appendLog: (chunk: string) => void,
+    startedAt: number,
+  ): void {
+    appendLog(`\n중지 — ${step.name}에서 끊었다\n`);
+    options.attachments.patchRecon(job.eventId, job.attachmentId, {
+      status: 'cancelled',
+      finishedAt: now(),
+      error: undefined,
+    });
+    const elapsed = Math.round((now() - startedAt) / 1000);
+    log(`[recon] ■ 중지 ${job.eventId}/${job.attachmentId} — ${step.name} (${elapsed}초)`);
+  }
+
   async function idle(): Promise<void> {
     while (draining) await draining;
   }
 
-  return { enqueue, size: () => queue.length + (active ? 1 : 0), current: () => active, idle };
+  return { enqueue, cancel, size: () => queue.length + (active ? 1 : 0), current: () => active, idle };
 }
 
 /** 이만큼도 안 나오면 COLMAP이 어차피 못 푼다. 미리 끊어 30분을 아낀다. */
@@ -325,20 +386,43 @@ function linkImages(workDir: string): void {
   fs.symlinkSync(framesDir(workDir), target);
 }
 
-function spawnCommand(
+/**
+ * 실제 도구를 띄우는 기본 실행기. 테스트가 중지 신호로 진짜 프로세스가 죽는지 보려고
+ * 이것만 따로 부른다 — 가짜 실행기로는 그 자리를 못 지나간다.
+ */
+export function spawnCommand(
   step: ReconStep,
   workDir: string,
   onOutput: (chunk: string) => void,
+  signal?: AbortSignal,
 ): Promise<{ code: number | null }> {
   return new Promise((resolve, reject) => {
     const child = spawn(step.command, step.args, { cwd: workDir, stdio: ['ignore', 'pipe', 'pipe'] });
     const collect = (chunk: Buffer) => onOutput(chunk.toString());
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
-    child.on('error', reject); // 도구가 아예 없을 때 여기로 온다
-    child.on('close', (code) => resolve({ code }));
+
+    // 중지. 먼저 정중히 끊고, 그래도 안 죽으면 잡아 죽인다 — COLMAP·OpenSplat은 GPU를
+    // 쥔 채로 도는 물건이라 살아남으면 다음 재구성이 메모리 부족으로 죽는다.
+    let kill: NodeJS.Timeout | null = null;
+    const stop = () => {
+      child.kill('SIGTERM');
+      kill = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+    };
+    if (signal?.aborted) stop();
+    else signal?.addEventListener('abort', stop, { once: true });
+
+    const settle = () => {
+      if (kill) clearTimeout(kill);
+      signal?.removeEventListener('abort', stop);
+    };
+    child.on('error', (error) => { settle(); reject(error); }); // 도구가 아예 없을 때 여기로 온다
+    child.on('close', (code) => { settle(); resolve({ code }); });
   });
 }
+
+/** SIGTERM 뒤 SIGKILL까지의 유예(ms). 도구가 쓰던 파일을 닫을 시간만 준다. */
+const KILL_GRACE_MS = 3000;
 
 function stripUndefined(options: ReconRunnerOptions): Partial<ReconTuning> {
   const keys = [

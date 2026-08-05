@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 
 import { createEventStore } from '../../server/events/store.ts';
 import { createAttachmentStore } from '../../server/events/attachments.ts';
-import { createReconRunner, MIN_FRAMES, type RunCommand } from '../../server/events/recon/runner.ts';
+import { createReconRunner, MIN_FRAMES, spawnCommand, type RunCommand } from '../../server/events/recon/runner.ts';
 import { RECON_DEFAULTS, framesDir, modelDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
 import type { EventRecord } from '../../server/events/recorder.ts';
 
@@ -347,4 +347,108 @@ test('진행 단계와 지표가 기록에 실린다 — 화면이 이걸로 표
   assert.equal(recon.registeredImages, 90);
   assert.equal(recon.points, 7000);
   assert.equal(recon.step, 'opensplat', '마지막으로 돌던 단계가 남는다');
+});
+
+// ── 중지 ──────────────────────────────────────────────────
+//
+// 화면에서 폴링만 멈추는 것으로는 부족하다. 도구가 GPU를 쥔 채 계속 돌면 다음 재구성이
+// 메모리 부족으로 죽고, 레코드는 영영 `running`으로 남아 다시 걸 수도 없다.
+
+test('진행 중인 재구성을 중지하면 도구가 끊기고 cancelled로 남는다', async () => {
+  const { store, attachments, video } = await setup();
+  const calls: string[] = [];
+  let runner: ReturnType<typeof createReconRunner>;
+
+  runner = createReconRunner({
+    store,
+    attachments,
+    onLog: () => {},
+    // colmap:extract가 도는 중에 중지를 누른 상황. 도구는 신호를 받고 스스로 끝난다.
+    run: async (step, workDir, _onOutput, signal) => {
+      calls.push(step.name);
+      if (step.name === 'probe') return { code: 0 };
+      if (step.name === 'frames') {
+        fs.mkdirSync(framesDir(workDir), { recursive: true });
+        for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(framesDir(workDir), `f${i}.jpg`), 'x');
+        return { code: 0 };
+      }
+      if (step.name === 'colmap:extract') {
+        runner.cancel({ eventId: 'evt-1', attachmentId: video.attachmentId });
+        assert.equal(signal?.aborted, true, '도는 도구에 중지 신호가 안 갔다');
+        return { code: null }; // SIGTERM으로 죽은 프로세스의 종료코드
+      }
+      return { code: 0 };
+    },
+  });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  await runner.idle();
+
+  const source = attachments.get('evt-1', video.attachmentId)!;
+  assert.equal(source.recon?.status, 'cancelled');
+  assert.equal(source.recon?.error, undefined, '중지는 실패가 아니라 원인이 없다');
+  assert.ok(source.recon?.finishedAt, '끝난 시각이 없으면 화면이 계속 도는 줄 안다');
+  assert.equal(calls.includes('colmap:match'), false, '중지했는데 뒷 단계가 돌았다');
+});
+
+test('대기 중인 재구성을 중지하면 큐에서 빠진다', async () => {
+  const { store, attachments, video } = await setup();
+  const second = await attachments.receive('evt-1', { kind: 'video' }, Readable.from([Buffer.from('영상2')]));
+  const started: string[] = [];
+  let release: (() => void) | null = null;
+  const firstRunning = new Promise<void>((resolve) => { release = resolve; });
+
+  const runner = createReconRunner({
+    store,
+    attachments,
+    onLog: () => {},
+    run: async (step) => {
+      if (step.name === 'probe') { release?.(); await new Promise((r) => setTimeout(r, 30)); return { code: 0 }; }
+      started.push(step.name);
+      return { code: 1 }; // 첫 건은 아무렇게나 끝나도 된다. 여기서 보는 건 두 번째다
+    },
+  });
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  runner.enqueue({ eventId: 'evt-1', attachmentId: second.attachmentId });
+  await firstRunning;
+
+  const result = runner.cancel({ eventId: 'evt-1', attachmentId: second.attachmentId });
+  assert.equal(result, 'dequeued');
+  await runner.idle();
+
+  assert.equal(attachments.get('evt-1', second.attachmentId)?.recon?.status, 'cancelled');
+  assert.equal(runner.size(), 0);
+});
+
+test('대기·진행 중이 아닌 건을 중지하면 아무 일도 없다', async () => {
+  const { runner, attachments, video } = await setup();
+
+  runner.enqueue({ eventId: 'evt-1', attachmentId: video.attachmentId });
+  await runner.idle();
+
+  // 이미 끝난 건이다. 되돌릴 것이 없으므로 done을 cancelled로 덮지 않는다.
+  assert.equal(runner.cancel({ eventId: 'evt-1', attachmentId: video.attachmentId }), null);
+  assert.equal(attachments.get('evt-1', video.attachmentId)?.recon?.status, 'done');
+});
+
+test('중지 신호를 받으면 실제 프로세스가 죽는다', async () => {
+  const stop = new AbortController();
+  const step: ReconStep = {
+    name: 'opensplat',
+    what: '안 끝나는 도구 흉내',
+    command: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1000)'],
+  };
+
+  const started = Date.now();
+  const running = spawnCommand(step, os.tmpdir(), () => {}, stop.signal);
+  // 프로세스가 실제로 뜬 뒤에 끊는다.
+  await new Promise((r) => setTimeout(r, 50));
+  stop.abort();
+
+  const result = await running;
+  // SIGTERM으로 죽으면 종료코드가 없다. 신호까지 3초 유예를 다 쓰지 않고 끝나야 한다.
+  assert.equal(result.code, null);
+  assert.ok(Date.now() - started < 2000, '중지가 유예 끝까지 걸렸다 — SIGTERM이 안 먹었다');
 });

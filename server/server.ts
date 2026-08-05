@@ -851,7 +851,22 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
 
   const reconTarget = parseReconTriggerPath(pathname);
   if (reconTarget) {
-    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    // 중지. **아래 수동 파기(DELETE)보다 먼저다** — 그쪽은 `/incidents/` 뒤를 통째로
+    // id로 읽어서, 늦게 두면 이 주소가 "잘못된 id"로 떨어진다.
+    if (request.method === 'DELETE') {
+      const result = reconRunner.cancel(reconTarget);
+      if (!result) {
+        return sendJson(response, { ok: false, error: '대기·진행 중인 재구성이 아닙니다' }, 409);
+      }
+      auditLog.record({
+        kind: 'access',
+        actor,
+        detail: `${reconTarget.eventId} 3D 재구성 중지 · ${reconTarget.attachmentId}`,
+      });
+      console.log(`[recon] ${reconTarget.eventId}/${reconTarget.attachmentId} 중지 요청 (${result})`);
+      return sendJson(response, { ok: true, result });
+    }
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST·DELETE만 받습니다' }, 405);
     const attachment = eventAttachments.get(reconTarget.eventId, reconTarget.attachmentId);
     if (!attachment) return sendJson(response, { ok: false, error: '없는 첨부' }, 404);
     if (attachment.kind !== 'video') {
