@@ -1273,6 +1273,41 @@ function inject(tagId, whenMissing) {
 }
 
 /**
+ * 학습 데이터 반출 시연. 지금 이벤트 로그에 있는 것을 **제품과 같은 파이프라인**에 태운다 —
+ * 뽑는 것도(익명화) 보내는 것도 파기 때 도는 코드 그대로이고, 다른 것은 부르는 시점뿐이다.
+ *
+ * 제품 경로는 파기 직전 하나뿐이라 하루를 기다려야 보인다. 이 버튼은 그 자리를 앞당길 뿐,
+ * 나가는 내용을 바꾸지 않는다.
+ */
+async function exportRun() {
+  if (!requireOperator()) return;
+  state.demoNote = '반출 중…';
+  render();
+  try {
+    const res = guard(await fetch('/export/run', { method: 'POST' }));
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.status);
+
+    if (body.queued === 0) {
+      // 판정이 없으면 라벨이 없고, 라벨이 없으면 표본이 아니다.
+      state.demoNote = body.skipped > 0
+        ? `반출할 것이 없다 — 판정된 기록이 없다(${body.skipped}건 건너뜀)`
+        : '반출할 것이 없다 — 이벤트 로그가 비어 있다';
+    } else if (!body.configured) {
+      state.demoNote = `${body.queued}건 큐에 담김 · 전송 꺼짐(EXPORT_URL 없음)`;
+    } else if (body.pending > 0) {
+      state.demoNote = `${body.queued}건 큐에 담김 · 전송 실패(${body.lastError || '사유 없음'})`;
+    } else {
+      state.demoNote = `${body.queued}건 반출 완료`;
+    }
+    render();
+  } catch (err) {
+    state.demoNote = `반출 실패: ${err.message}`;
+    render();
+  }
+}
+
+/**
  * 사생활 구역 시연. 화장실에 아무도 없으면 먼저 한 명을 들여보내고, 좌표가 지워진 채로
  * 프레임이 오기 시작하면 그때 낙상을 주입한다.
  *
@@ -1456,6 +1491,7 @@ function bind() {
     privacyInject.cancel();
     inject(target.tagId, '');
   };
+  $('exportRun').onclick = () => exportRun();
 
   // 층 메뉴 바깥을 누르면 닫는다.
   document.addEventListener('pointerdown', (e) => {

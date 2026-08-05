@@ -52,8 +52,11 @@ export interface ExporterOptions extends Partial<SenderConfig> {
 }
 
 export interface Exporter {
-  /** 레코드에서 표본을 뽑아 큐에 넣는다. **절대 던지지 않는다.** */
-  collect(record: EventRecord): void;
+  /**
+   * 레코드에서 표본을 뽑아 큐에 넣는다. **절대 던지지 않는다.**
+   * 뽑혔으면 true — 시연용 수동 반출이 이 값으로 건수를 센다.
+   */
+  collect(record: EventRecord): boolean;
   /** 대기 중인 배치를 보낸다. 백오프 중이거나 URL이 없으면 아무것도 안 한다. */
   flush(): Promise<void>;
   /** 결과를 안 기다리는 flush. 파기 루프가 부른다. */
@@ -61,6 +64,8 @@ export interface Exporter {
   /** 기동 시 1회 + 주기 재시도를 건다(spec system 03 §7.4). */
   start(): void;
   stop(): void;
+  /** 아직 못 보낸 배치 수. 전송이 실제로 끝났는지 화면이 이걸로 가른다. */
+  pending(): number;
   state(): ExportState;
   config: SenderConfig;
 }
@@ -74,7 +79,7 @@ export function createExporter(options: ExporterOptions): Exporter {
   let running = false;
   let timer: NodeJS.Timeout | null = null;
 
-  function collect(record: EventRecord): void {
+  function collect(record: EventRecord): boolean {
     try {
       const state = queue.state();
       const result = toSample(record);
@@ -82,14 +87,16 @@ export function createExporter(options: ExporterOptions): Exporter {
         if (result.reason === 'unjudged') state.skippedUnjudged += 1;
         else state.skippedTooShort += 1;
         queue.saveState(state);
-        return;
+        return false;
       }
       queue.append(result.sample, now());
       state.totalQueued += 1;
       queue.saveState(state);
+      return true;
     } catch (error: unknown) {
       // 큐를 못 써도 파기는 계속돼야 한다. 표본 한 건이 파기 의무보다 무겁지 않다.
       log(`[export] 표본 적재 실패 ${record.eventId} — ${describe(error)}`);
+      return false;
     }
   }
 
@@ -179,6 +186,7 @@ export function createExporter(options: ExporterOptions): Exporter {
     flushSoon: () => { void flush(); },
     start,
     stop,
+    pending: () => queue.batches().length,
     state: () => queue.state(),
     config,
   };

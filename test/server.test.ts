@@ -5,6 +5,7 @@
 import * as assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
+import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -410,5 +411,104 @@ test('모르는 클립·태그는 400으로 거절한다', async () => {
     assert.match((await badTag.json()).error, /알 수 없는 태그/);
   } finally {
     server.kill();
+  }
+});
+
+// ── 학습 데이터 반출 버튼이 실제 파이프라인을 타는가 ────────────────────────────
+// 주입 버튼과 같은 이유로 여기 있다. 버튼이 제 코드를 따로 갖고 있으면 화면에서 도는 것과
+// 제품이 도는 것이 달라진다. 서버를 띄우고 눌러서, 나가는 것이 익명화를 거친 표본인지 본다.
+
+/** 받은 본문을 모아 두는 최소 수신 서버. tools/export-sink.ts와 같은 자리를 테스트 안에 둔다. */
+function sink(): Promise<{ url: string; bodies: string[]; close: () => void }> {
+  const bodies: string[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      bodies.push(Buffer.concat(chunks).toString('utf8'));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"received":true}\n');
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        url: `http://127.0.0.1:${port}/samples`,
+        bodies,
+        close: () => server.close(),
+      });
+    });
+  });
+}
+
+/** 판정이 붙은 감지 이벤트를 이벤트 폴더에 직접 심는다. 화면이 보는 그 목록이 된다. */
+function seedEvent(dataDir: string, eventId: string, outcome: string): void {
+  const folder = path.join(dataDir, 'events', eventId);
+  fs.mkdirSync(folder, { recursive: true });
+  const ts = Date.now() - 60_000;
+  fs.writeFileSync(path.join(folder, 'record.json'), JSON.stringify({
+    eventId,
+    tagId: 'tag-101',
+    ts,
+    alert: {
+      eventId, tagId: 'tag-101', ts, type: 'fall_detected',
+      peakAccel: 3.8, freefall: true, aiScore: 0.9,
+      floor: '2F', zone: '화장실(여)', pos: { x: 3.1, y: 4.2 },
+    },
+    track: [{ ts, x: 3.1, y: 4.2 }],
+    accel: Array.from({ length: 30 }, (_, i) => ({ ts: ts + i * 20, x: 0.1 * i, y: 0.2, z: 9.8 })),
+    attachments: [],
+    outcome,
+    ...(outcome === 'detected' ? {} : { resolvedAt: ts + 1000, resolvedBy: 'op-1' }),
+  }), 'utf8');
+}
+
+test('반출 버튼은 이벤트 로그를 익명화해 실제 전송 경로로 보낸다', async () => {
+  const collector = await sink();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-btn-'));
+  seedEvent(dataDir, 'evt-fall', 'confirmed');
+  seedEvent(dataDir, 'evt-false', 'false_alarm');
+  seedEvent(dataDir, 'evt-none', 'detected'); // 판정이 없어 표본이 될 수 없다
+
+  const server = await start([...ANCHOR_ARGS, '--source', 'live'], {
+    DATA_DIR: dataDir,
+    EXPORT_URL: collector.url,
+    EXPORT_TOKEN: 'facility-secret',
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+
+    // 데이터를 시설 밖으로 내보내는 동작이다. 누가 눌렀는지가 남아야 한다.
+    assert.equal((await fetch(`${base}/export/run`, { method: 'POST' })).status, 401);
+
+    const cookie = await openSession(server.port);
+    const body = await (await fetch(`${base}/export/run`, { method: 'POST', headers: { cookie } })).json();
+    assert.equal(body.ok, true);
+    assert.equal(body.queued, 2, '판정된 둘만 나가야 한다');
+    assert.equal(body.skipped, 1);
+    assert.equal(body.pending, 0, '전송까지 끝나야 한다');
+
+    assert.equal(collector.bodies.length, 1);
+    const lines = collector.bodies[0].trim().split('\n');
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines.map((l) => JSON.parse(l).label).sort(), [0, 1]);
+
+    // **버튼을 거쳐도 익명화는 같은 코드다.** 여기가 무너지면 화면에서만 안전해 보인다.
+    for (const leak of ['tag-101', 'evt-fall', 'evt-false', '화장실', '2F', 'pos', 'track', 'op-1']) {
+      assert.ok(!collector.bodies[0].includes(leak), `반출물에 ${leak}가 남아 있다`);
+    }
+    assert.ok(!collector.bodies[0].includes('facility-secret'), '토큰이 본문에 새면 안 된다');
+
+    // 이벤트는 그대로 남는다 — 반출은 파기가 아니다.
+    const { events } = await (await fetch(`${base}/events`)).json();
+    assert.equal(events.length, 3, '반출이 기록을 지우면 안 된다');
+
+    const trace = readAudit(dataDir).filter((l) => l.detail.includes('학습 표본 수동 반출'));
+    assert.equal(trace.length, 1);
+    assert.match(trace[0].actor, /^op-/);
+  } finally {
+    server.kill();
+    collector.close();
   }
 });

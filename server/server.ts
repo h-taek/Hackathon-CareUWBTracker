@@ -369,7 +369,7 @@ const publicOperator = (entry: { operatorId: string; name: string }) => ({
 });
 
 /** 세션 없이는 못 하는 POST들. 경로가 고정된 것만 여기 두고, id가 낀 것은 아래 파서로 본다. */
-const OPERATOR_REQUIRED_POSTS = ['/alerts/resolve', '/tags/register', '/tags/release'];
+const OPERATOR_REQUIRED_POSTS = ['/alerts/resolve', '/tags/register', '/tags/release', '/export/run'];
 
 /**
  * 이 요청이 관제사 식별을 요구하는가(spec operation 03 §4).
@@ -948,6 +948,42 @@ const server = http.createServer((request: IncomingMessage, response: ServerResp
     const bytes = actions.reduce((sum, a) => sum + a.bytes, 0);
     auditLog.record({ kind: 'access', actor, detail: `${purgeTarget} 재구성 중간물 정리 요청` });
     return sendJson(response, { ok: true, eventId: purgeTarget, purged: actions.length, bytes });
+  }
+
+  // 학습 표본 수동 반출 — **시연용이다**(spec system 03 §7.2).
+  //
+  // 제품 경로는 파기 직전 하나뿐이다. 그 자리를 고른 이유가 번복 창이 닫혀 라벨이
+  // 확정됐기 때문인데, 이 버튼은 **그 창을 건너뛴다** — 지금 로그에 있는 건은 아직
+  // 뒤집힐 수 있고, 뒤집혀도 이미 나간 표본은 회수할 수 없다. 하루를 기다리지 않고
+  // 파이프라인이 도는 것을 보이려고 둔 자리이며, 뽑는 것도 보내는 것도 제품과 같은 코드다.
+  if (pathname === '/export/run') {
+    if (request.method !== 'POST') return sendJson(response, { ok: false, error: 'POST만 받습니다' }, 405);
+    let queued = 0;
+    let skipped = 0;
+    for (const summary of eventStore.list(Number.MAX_SAFE_INTEGER)) {
+      const record = eventStore.read(summary.eventId);
+      if (!record) continue;
+      // 같은 건을 다시 눌러도 막지 않는다. 시연에서 두 번 나가는 것은 문제가 아니고,
+      // 제품 경로에는 이 버튼이 없다.
+      if (exporter.collect(record)) queued += 1;
+      else skipped += 1;
+    }
+    auditLog.record({ kind: 'access', actor, detail: `학습 표본 수동 반출 · ${queued}건` });
+    console.log(`[export] 수동 반출 ${queued}건 (판정 없음·창 미달 ${skipped}건 제외)`);
+    exporter.flush()
+      .catch(() => { /* flush는 안 던지지만, 던져도 응답은 나가야 한다 */ })
+      .then(() => {
+        const state = exporter.state();
+        sendJson(response, {
+          ok: true,
+          queued,
+          skipped,
+          pending: exporter.pending(),
+          configured: Boolean(exporter.config.url),
+          ...(state.lastError ? { lastError: state.lastError } : {}),
+        });
+      });
+    return;
   }
 
   // 수동 파기. **감지 이벤트와 확인 사건은 서로를 건드리지 않는다** — 사건은 사본이라

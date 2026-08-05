@@ -228,58 +228,63 @@ server/data/export/
             └ queue.sweepSent()             sender.ts:133   보관 지난 sent 정리
 SIGINT/SIGTERM
   └ exporter.stop()                         server.ts:1239  주기 타이머 해제
+
+관제 화면 `학습 데이터 반출` 버튼 (시연용)
+  └ POST /export/run                        server.ts        세션 필요 · 확인자료에 남는다
+       ├ eventStore.list() ── 건마다 exporter.collect(record)   ← 위와 같은 함수다
+       └ await exporter.flush()                                  응답에 결과를 실어 보낸다
 ```
 
 `collect`는 동기이고 `flush`는 비동기다. **파기가 전송을 기다리지 않는다** — `flushSoon`은 결과를 안 기다린다. 기동 직후에는 파기가 건 flush가 아직 도는 중이라 `exporter.start()`의 flush가 `running` 가드에 막히고 그냥 반환한다. 같은 배치를 두 번 보내지 않는 자리다.
 
-### 직접 확인하는 법
+### 시연용 수동 반출 (`POST /export/run`)
 
-반출은 사고 발생 24시간 뒤에 일어나므로, 하루를 기다리지 않으려면 **이미 만료된 이벤트**를 심어야 한다. 터미널 셋이면 된다.
+자동 경로는 사고 24시간 뒤라 하루를 기다려야 보인다. 관제 화면 하단 DEMO 줄의 **`학습 데이터 반출`** 버튼이 그 자리를 앞당긴다 — 지금 이벤트 로그에 있는 판정된 건을 **같은 파이프라인**에 태운다. 익명화도 전송도 파기 때 도는 코드 그대로다.
+
+| | 자동(제품) | 버튼(시연) |
+|---|---|---|
+| 시점 | 파기 직전 | 누를 때 |
+| 번복 창 | 닫혀 있다 | **열려 있다.** 뒤집혀도 나간 표본은 회수 못 한다 |
+| 이벤트 | 뽑고 지운다 | 그대로 둔다 |
+| 중복 | 없다 | **허용한다.** 여러 번 눌러도 막지 않는다 |
+
+번복 창을 건너뛰는 것이 이 경로의 값이자 한계다. **제품 경로로 승격하지 않는다.**
 
 ```bash
-# 1) 만료된 이벤트 4건을 격리된 자리에 심는다 (낙상 2 · 오경보 1 · 미판정 1)
-npm run export-demo
+npm run export-sink        # 1번 터미널 — 수신 목업(9100). tools/sink-out/에 떨군다
 
-# 2) 수신 목업을 띄운다 (9100 포트)
-npm run export-sink
-
-# 3) 심은 자리를 DATA_DIR로 주고 서버를 띄운다 — 기동 시 파기가 돌면서 반출된다
-DATA_DIR="server/data/export-demo" EXPORT_URL=http://localhost:9100/samples \
+EXPORT_URL=http://localhost:9100/samples \
   npm start -- --main-anchor-id phoneMain --sub-anchor-id phoneSub \
                --anchor-distance 3 --half-plane positive
 ```
 
-서버 쪽에 이렇게 뜬다.
+화면에서 `복도 낙상 주입` → 경보에 `낙상`/`오보` 판정 → `학습 데이터 반출`. 버튼 옆에 결과가 뜬다.
 
 ```
-[retention] 4건 처리 · 0.0MB 회수
-[export] 3건 전송
+1건 반출 완료                             전송까지 끝났다
+2건 큐에 담김 · 전송 실패(HTTP 401)       배치는 pending에 남는다
+3건 큐에 담김 · 전송 꺼짐(EXPORT_URL 없음)
+반출할 것이 없다 — 판정된 기록이 없다      라벨이 없으면 표본이 아니다
 ```
 
-목업 쪽에는 이렇게 뜬다. **미판정 1건은 안 온다** — 라벨이 없어 표본이 될 수 없다.
+서버와 목업 쪽은 이렇게 뜬다.
 
 ```
-[sink] 3건 수신 · 낙상 2 · 오경보 1 → tools/sink-out/2026-08-05.jsonl
+[export] 수동 반출 1건 (판정 없음·창 미달 0건 제외)
+[export] 1건 전송
+[sink]   1건 수신 · 낙상 1 · 오경보 0 → tools/sink-out/2026-08-05.jsonl
 ```
 
-받은 파일을 열어보면 나간 것의 전부가 보인다. `demo-fall-2`는 모델이 0.44를 줬는데 사람이 낙상이라고 판정한 건이다 — 그런 표본이 학습 재료로 값이 제일 크다.
+받은 파일을 열어보면 나간 것의 전부가 보인다.
 
 ```bash
 cat tools/sink-out/*.jsonl | head -1
-cat server/data/export-demo/export/state.json    # 누계 · 미판정으로 버린 건수
+cat server/data/export/state.json          # 누계 · 판정 없어 버린 건수
 ```
 
-**전송이 막히는 자리를 보려면** `EXPORT_TOKEN`을 목업이 요구하는 값과 다르게 준다.
+**전송이 막히는 자리를 보려면** 토큰을 어긋나게 준다 — `SINK_TOKEN=facility-secret npm run export-sink`에 `EXPORT_TOKEN=wrong`으로 서버를 붙인다. 401을 받고 배치는 `export/pending/`에 남으며, 토큰을 고쳐 다시 띄우면 기동 1회 시도에서 밀린 배치가 나간다.
 
-```bash
-SINK_TOKEN=facility-secret npm run export-sink                       # 2번 터미널
-DATA_DIR="server/data/export-demo" EXPORT_URL=http://localhost:9100/samples \
-  EXPORT_TOKEN=wrong npm start -- …                                  # 3번 터미널
-```
-
-`[export] 전송 실패(1회) — HTTP 401 · 다음 시도 1분 뒤`가 뜨고 배치는 `export/pending/`에 남는다. **이벤트는 그래도 파기된다.** 토큰을 고쳐 다시 띄우면 기동 1회 시도에서 밀린 배치가 나간다.
-
-`server/data/export-demo`는 진짜 사고 기록(`server/data/events`)과 떨어진 자리다. 지우려면 폴더째 지우면 되고, 다시 심으려면 `npm run export-demo`를 다시 돌린다.
+이 버튼은 관제사 세션을 요구하고, 누가 눌렀는지 확인자료에 남는다(spec operation 03 §4). 데이터를 시설 밖으로 내보내는 동작이기 때문이다.
 
 ## 테스트
 
@@ -369,7 +374,6 @@ server/                재사용 런타임
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
   export-sink.ts       학습 반출 수신 목업(제품 아님 · 왕복 확인용)
-  export-demo.ts       만료된 이벤트 심기(반출을 하루 안 기다리고 보는 용)
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
