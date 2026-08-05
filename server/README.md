@@ -203,12 +203,83 @@ server/data/export/
 
 **반출이 실패해도 파기는 진행한다.** 둘을 묶으면 전송 장애가 법정 파기 의무를 막는다.
 
-받는 서버 없이 왕복을 확인하려면 목업을 띄운다.
+### 런타임 흐름
+
+전송을 거는 자리가 셋이고, 뽑는 자리는 하나다.
+
+```
+서버 기동
+  └ createExporterFromEnv(dataDir)          server.ts:292   큐 + 전송기 조립(아직 아무것도 안 한다)
+  └ retention.start()                       server.ts:1228  기동 시 파기 1회 + 24시간 주기
+       └ sweep() ── 만료된 감지 이벤트마다
+            ├ store.read(eventId)           retention.ts:137
+            ├ exporter.collect(record)      retention.ts:168  ← 뽑는 자리는 여기 하나뿐
+            │    ├ toSample(record)         sample.ts         판정 없으면 여기서 끝(건수만 센다)
+            │    └ queue.append()           sender.ts:87      pending/<날짜>.jsonl에 한 줄
+            └ store.remove(eventId)         retention.ts:177  뽑은 다음에 지운다
+       └ exporter.flushSoon()               retention.ts:144  뽑은 게 있을 때만
+  └ exporter.start()                        server.ts:1231  기동 1회 + 10분 주기
+       └ flush()                            sender.ts:96
+            ├ URL 없음 / 이미 도는 중 / 백오프 중이면 즉시 반환
+            ├ queue.batches()               sender.ts:103   pending의 배치 파일 목록(오래된 것부터)
+            ├ postBatch(file)               sender.ts:139   fetch POST · 헤더에 토큰
+            ├ 2xx → queue.markSent(file)    sender.ts:113   pending → sent로 이름만 바꾼다
+            ├ 실패 → nextAttemptAt 갱신     sender.ts:126   1분→2분→4분… 상한 6시간
+            └ queue.sweepSent()             sender.ts:133   보관 지난 sent 정리
+SIGINT/SIGTERM
+  └ exporter.stop()                         server.ts:1239  주기 타이머 해제
+```
+
+`collect`는 동기이고 `flush`는 비동기다. **파기가 전송을 기다리지 않는다** — `flushSoon`은 결과를 안 기다린다. 기동 직후에는 파기가 건 flush가 아직 도는 중이라 `exporter.start()`의 flush가 `running` 가드에 막히고 그냥 반환한다. 같은 배치를 두 번 보내지 않는 자리다.
+
+### 직접 확인하는 법
+
+반출은 사고 발생 24시간 뒤에 일어나므로, 하루를 기다리지 않으려면 **이미 만료된 이벤트**를 심어야 한다. 터미널 셋이면 된다.
 
 ```bash
-npm run export-sink                                        # 9100 포트. tools/sink-out/에 떨군다
-EXPORT_URL=http://localhost:9100/samples npm start -- …    # 서버를 여기로 붙인다
+# 1) 만료된 이벤트 4건을 격리된 자리에 심는다 (낙상 2 · 오경보 1 · 미판정 1)
+npm run export-demo
+
+# 2) 수신 목업을 띄운다 (9100 포트)
+npm run export-sink
+
+# 3) 심은 자리를 DATA_DIR로 주고 서버를 띄운다 — 기동 시 파기가 돌면서 반출된다
+DATA_DIR="server/data/export-demo" EXPORT_URL=http://localhost:9100/samples \
+  npm start -- --main-anchor-id phoneMain --sub-anchor-id phoneSub \
+               --anchor-distance 3 --half-plane positive
 ```
+
+서버 쪽에 이렇게 뜬다.
+
+```
+[retention] 4건 처리 · 0.0MB 회수
+[export] 3건 전송
+```
+
+목업 쪽에는 이렇게 뜬다. **미판정 1건은 안 온다** — 라벨이 없어 표본이 될 수 없다.
+
+```
+[sink] 3건 수신 · 낙상 2 · 오경보 1 → tools/sink-out/2026-08-05.jsonl
+```
+
+받은 파일을 열어보면 나간 것의 전부가 보인다. `demo-fall-2`는 모델이 0.44를 줬는데 사람이 낙상이라고 판정한 건이다 — 그런 표본이 학습 재료로 값이 제일 크다.
+
+```bash
+cat tools/sink-out/*.jsonl | head -1
+cat server/data/export-demo/export/state.json    # 누계 · 미판정으로 버린 건수
+```
+
+**전송이 막히는 자리를 보려면** `EXPORT_TOKEN`을 목업이 요구하는 값과 다르게 준다.
+
+```bash
+SINK_TOKEN=facility-secret npm run export-sink                       # 2번 터미널
+DATA_DIR="server/data/export-demo" EXPORT_URL=http://localhost:9100/samples \
+  EXPORT_TOKEN=wrong npm start -- …                                  # 3번 터미널
+```
+
+`[export] 전송 실패(1회) — HTTP 401 · 다음 시도 1분 뒤`가 뜨고 배치는 `export/pending/`에 남는다. **이벤트는 그래도 파기된다.** 토큰을 고쳐 다시 띄우면 기동 1회 시도에서 밀린 배치가 나간다.
+
+`server/data/export-demo`는 진짜 사고 기록(`server/data/events`)과 떨어진 자리다. 지우려면 폴더째 지우면 되고, 다시 심으려면 `npm run export-demo`를 다시 돌린다.
 
 ## 테스트
 
@@ -298,6 +369,7 @@ server/                재사용 런타임
 tools/                 개발 전용 도구(서버 런타임과 무관) — 루트로 분리
   cli.ts generator.ts replay.ts sender.ts csv.ts evaluate.ts report.ts
   export-sink.ts       학습 반출 수신 목업(제품 아님 · 왕복 확인용)
+  export-demo.ts       만료된 이벤트 심기(반출을 하루 안 기다리고 보는 용)
   samples/  results/  README.md
 
 test/                  모든 테스트 — 루트로 분리, 소스 구조 미러
