@@ -233,19 +233,20 @@ server/                재사용 런타임
     resolve.ts         요청 경로 → public/ 파일 해석 + MIME(순수 함수)
     handler.ts         스트리밍 응답 · 304 재검증 · HEAD
   public/              브라우저가 받는 것 전부 (디스크 배치 = URL)
-    index.html         대시보드 마크업(실시간 관제)
-    recon/index.html   사고 현장 3D 기록 페이지 — /recon. 관제 상단 버튼으로 넘어간다
-    registry/index.html 태그 등록·반납 페이지 — /registry. 관제 화면과 같은 _ds 토큰을 쓴다
-    operator/index.html 관제사 관문 — /operator. 여기를 지나야 위 두 화면이 열린다
-    assets/css/        base.css(공통 토큰·리셋) · dashboard.css(대시보드 레이아웃)
+    index.html         관제 화면 마크업(실시간 관제 + 사고 현장 3D 탭)
+    recon/index.html   사고 현장 3D 기록 — /recon. 영상 등록과 변환 진행만 맡는다
+    registry/index.html 태그 등록·반납 페이지 — /registry
+    operator/index.html 관제사 관문 — /operator. 여기를 지나야 위 화면들이 열린다
+    _ds/               Industry 디자인 시스템 — 모든 화면이 이 토큰을 쓴다
+    assets/css/        console.css(관제 레이아웃 · 상태색 --st-*) · recon.css · registry.css
                        operator.css(관문 페이지·상단바 칩·만료 팝업)
-    assets/js/         dashboard.js(캔버스 렌더 · SSE 구독 · 경보 상태머신)
-                       scene3d.js(관제용 3D 패널 — 씬 설정 · 마커 · 좌표 정합, ESM)
-                       recon.js(사고 기록 화면 — 업로드 · 설정 · 진행 폴링 · 기록 조회)
+    assets/js/         console.js(관제 — 도면·마커·SSE 구독·경보·3D 탭)
+                       recon.js(3D 기록 화면 — 업로드 · 설정 · 진행 폴링)
                        splat-view.js(URL 하나로 스플랫만 띄우는 얇은 뷰어)
                        registry.js(태그 명부 화면 — 등록·반납 요청과 목록 그리기)
-                       operator.js(관문 가드 — 세션 확인·상단바·만료 팝업. 보호된 두 화면이 같이 쓴다)
+                       operator.js(관문 가드 — 세션 확인·상단바·만료 팝업. 보호된 화면들이 같이 쓴다)
                        operator-page.js(관문 페이지 — 명부 선택·추가·삭제)
+    assets/floorplan/  층별 2D 도면 SVG. 층 하나에 파일 하나다
     assets/splat/      스플랫 씬(git 제외 — README의 curl로 조달) + scene.json(씬·정합 설정, git 포함)
     vendor/            three.js · gaussian-splats-3d 정적 동봉(빌드 없음, README 참조)
 
@@ -277,7 +278,8 @@ API 라우트(`/ingest` `/stream` `/map` `/clips` `/inject-fall` `/tags` `/event
 | `public/vendor/…` `public/assets/scene.ply` | 같은 경로 그대로 |
 
 - 확장자가 없으면 `<경로>.html` → `<경로>/index.html` 순으로 찾는다.
-- 새 페이지는 `assets/css/base.css`만 링크하면 공통 토큰·버튼·카드가 붙는다.
+- 새 페이지는 `/_ds/styles.css`를 먼저 링크하고 그 위에 자기 CSS를 올린다. 색·서체·간격은
+  전부 그 토큰에서 가져온다(`public/_ds/readme.md`).
 - 디렉터리 목록은 내주지 않고, `public/` 밖으로 나가는 경로는 거부한다.
 - 응답은 스트리밍이고 `Last-Modified` 기반 304 재검증을 한다(대용량 스플랫 대비).
 - 새 확장자를 쓰려면 `static/resolve.ts`의 MIME 표에만 한 줄 추가한다.
