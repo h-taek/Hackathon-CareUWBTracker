@@ -75,7 +75,6 @@ const fmtClock = (ms) => {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 };
 const fmtG = (v) => (Number.isFinite(v) ? `${v.toFixed(1)} g` : '—');
-const errOf = (f) => (f.err && typeof f.err.xy === 'number' ? f.err.xy : 0.3);
 const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
 const isOffline = (f, now) => (f.seenAt != null ? now - f.seenAt > OFFLINE_MS : !!f.offline);
@@ -206,9 +205,6 @@ function renderMarkers(list, now) {
     if (el.className !== cls) el.className = cls;
     setVar(el, '--mx', `${((f.pos.x - bx0) / bw * planSize.w).toFixed(1)}px`);
     setVar(el, '--my', `${((by1 - f.pos.y) / bh * planSize.h).toFixed(1)}px`);
-    // 후광 크기. 백분율이라 실제로는 테두리만 남는다 — 오차 반경을 원으로 키우지
-    // 않는 것은 의도한 선택이다(디자인 원본과 같다).
-    setVar(el, '--err-w', `${(errOf(f) * 2 / bw * 100).toFixed(2)}%`);
     setText(el.$name, f.name || f.tagId);
     setText(el.$state, LABEL[st]);
   }
@@ -277,7 +273,7 @@ function detailOf(f, now) {
   // 사생활 구역은 정상 동작이고 측위 실패는 경고다. 둘을 문구로 갈라놓는다(A-P4).
   if (f.privacy) return `${f.zone || '구역'} · 체류 중 · 위치 미기록`;
   if (isOffline(f, now)) return `측위 끊김 · 마지막 수신 ${f.seenAt ? fmtClock(f.seenAt) : '미상'}`;
-  return (f.zone || '구역 미지정') + (f.pos ? ` · ±${errOf(f).toFixed(1)}m` : '');
+  return f.zone || '구역 미지정';
 }
 
 // ── 이벤트 로그 ────────────────────────────────────────────

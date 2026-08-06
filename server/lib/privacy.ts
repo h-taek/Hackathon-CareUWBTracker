@@ -14,7 +14,6 @@ import { findZone, type ZoneMap } from './zone.ts';
 export interface PositionLike {
   tagId: string;
   pos: { x: number; y: number; z?: number };
-  err?: unknown;
   ranges?: unknown;
   [key: string]: unknown;
 }
@@ -23,7 +22,6 @@ export interface PositionLike {
 export interface ZonedPosition {
   tagId: string;
   pos: { x: number; y: number; z?: number } | null;
-  err: unknown;
   zone: string;
   privacy: boolean;
   [key: string]: unknown;
@@ -39,11 +37,11 @@ export interface ZonedPosition {
 export function applyZonePolicy<T extends PositionLike>(map: ZoneMap, position: T): ZonedPosition {
   const zone = findZone(map, position.pos.x, position.pos.y);
   const label = zone?.label ?? '미지정';
-  if (!zone?.privacy) return { ...position, zone: label, privacy: false, err: position.err ?? null };
+  if (!zone?.privacy) return { ...position, zone: label, privacy: false };
 
   // 좌표를 되짚을 수 있는 값은 전부 뺀다. 남는 것은 태그·시각·가속도·구역명이다.
-  const { pos: _pos, err: _err, ranges: _ranges, geom: _geom, estimate: _estimate, hold: _hold, ...rest } = position;
-  return { ...rest, tagId: position.tagId, pos: null, err: null, zone: label, privacy: true };
+  const { pos: _pos, ranges: _ranges, geom: _geom, estimate: _estimate, hold: _hold, ...rest } = position;
+  return { ...rest, tagId: position.tagId, pos: null, zone: label, privacy: true };
 }
 
 /** 이 프레임은 사생활 정책으로 좌표가 지워진 것인가(측위 실패와 구분한다). */

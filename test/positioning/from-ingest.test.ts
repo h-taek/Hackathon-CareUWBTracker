@@ -38,7 +38,6 @@ test('앵커 배열 순서와 무관하게 ID로 거리를 찾아 position을 �
   assertClose(position.pos.x, 1);
   assertClose(position.pos.y, 2);
   assert.equal(position.pos.z, 0);
-  assert.deepEqual(position.err, { xy: 0.2, z: 1.2 });
   assert.deepEqual(position.accel, { x: 0, y: 0, z: 9.81 });
   assert.equal(position.source, 'uwb+imu');
 });
@@ -69,14 +68,13 @@ test('accel-only ingest(빈/없는 ranges)면 크래시 없이 좌표 계산을 
   assert.equal(positionFromIngest(noRanges as never, OPTIONS), null);
 });
 
-test('음수 반평면과 사용자 지정 오차 반경을 전달한다', () => {
+test('음수 반평면이면 y가 음수로 나온다', () => {
   const position = positionFromIngest(ingest([
     { anchorId: 'phoneMain', distance: Math.sqrt(5) },
     { anchorId: 'phoneSub', distance: Math.sqrt(13) },
-  ]), { ...OPTIONS, halfPlane: 'negative', xyError: 0.3, zError: 1.5 })!;
+  ]), { ...OPTIONS, halfPlane: 'negative' })!;
 
   assertClose(position.pos.y, -2);
-  assert.deepEqual(position.err, { xy: 0.3, z: 1.5 });
 });
 
 test('앵커 설정 누락과 동일한 앵커 ID를 거부한다', () => {

@@ -12,7 +12,6 @@ const frame = (x: number, y: number): Record<string, unknown> => ({
   tagId: 'tag-101',
   ts: 1_700_000_000_000,
   pos: { x, y, z: 1.0 },
-  err: { xy: 0.2, z: 1.2 },
   accel: { x: 0.1, y: 0.2, z: 9.8 },
   source: 'uwb+imu',
 });
@@ -24,10 +23,9 @@ test('일반 구역은 좌표를 그대로 두고 구역명을 붙인다', () =>
   assert.strictEqual(out.privacy, false);
 });
 
-test('사생활 구역은 좌표와 오차를 지우고 구역명만 남긴다', () => {
+test('사생활 구역은 좌표를 지우고 구역명만 남긴다', () => {
   const out = applyZonePolicy(map, frame(2, 11) as never);
   assert.strictEqual(out.pos, null);
-  assert.strictEqual(out.err, null);
   assert.strictEqual(out.zone, '화장실(여)');
   assert.strictEqual(out.privacy, true);
 });

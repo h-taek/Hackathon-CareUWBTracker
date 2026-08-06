@@ -243,7 +243,6 @@ export class Simulator extends EventEmitter {
         ts: now,
         floor: tag.floor,
         pos: { x: round(tag.x), y: round(tag.y), z: 1.0 },
-        err: { xy: 0.2, z: 1.2 }, // UWB 전형 오차(리서치 6-3): z가 xy보다 훨씬 큼
         accel: { x: round(accel.x), y: round(accel.y), z: round(accel.z) },
         source: 'sim',
       };

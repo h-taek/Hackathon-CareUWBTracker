@@ -18,8 +18,6 @@ export interface PositionFromIngestOptions {
   subAnchorId: string;
   anchorDistance: number;
   halfPlane?: 'positive' | 'negative';
-  xyError?: number;
-  zError?: number;
   /**
    * 켜면 서브 앵커 거리가 없을 때 메인 거리 하나로 좌표를 만든다(테스트 전용, 기본 꺼짐).
    * 거리 1개는 앵커를 중심으로 한 원일 뿐이라 방향이 없다 — 이 각도로 방향을 고정한다.
@@ -31,7 +29,6 @@ export interface PositionResult {
   tagId: string;
   ts: number;
   pos: { x: number; y: number; z: number };
-  err: { xy: number; z: number };
   accel?: { x: number; y: number; z: number };
   source: 'sim' | 'uwb+imu';
   /**
@@ -74,7 +71,6 @@ export function positionFromIngest(payload: IngestPayload, options: PositionFrom
     tagId: payload.tagId,
     ts: payload.ts,
     pos: { x, y, z: 0 },
-    err: { xy: options.xyError ?? 0.2, z: options.zError ?? 1.2 },
     accel: payload.accel,
     source: payload.source === 'sim' ? 'sim' : 'uwb+imu',
     // 정상해에는 안 싣는다 — 필드가 있다는 것 자체가 이상 신호가 되게 한다.
@@ -102,7 +98,6 @@ function positionFromSingleAnchor(
     tagId: payload.tagId,
     ts: payload.ts,
     pos: { x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 },
-    err: { xy: options.xyError ?? 0.2, z: options.zError ?? 1.2 },
     accel: payload.accel,
     source: payload.source === 'sim' ? 'sim' : 'uwb+imu',
     // 좌표만 보면 진짜 측위와 구분되지 않으므로 프레임마다 꼬리표를 남긴다.

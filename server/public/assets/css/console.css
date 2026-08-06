@@ -154,7 +154,7 @@ body {
 
 .marker {
   --st: var(--st-ok);
-  --err-w: 2%;
+  --halo-w: 2%;
   --mx: 0px;
   --my: 0px;
   position: absolute;
@@ -182,10 +182,10 @@ body {
   border-radius: 50%;
 }
 /* 마커를 두르는 후광. 숨 쉬듯 흐려졌다 진해진다.
-   --err-w는 백분율이고 마커 자체가 0×0이라 지름은 사실상 테두리 두께로만 남는다.
-   오차 반경을 원으로 키워 그리지 않는 것은 의도한 선택이다 — 고치지 말 것. */
+   백분율이고 마커 자체가 0×0이라 지름은 사실상 테두리 두께로만 남는다. 모든 마커가
+   같은 크기이며, 측위 오차를 원의 크기로 나타내지 않는다. */
 .marker-err {
-  width: var(--err-w);
+  width: var(--halo-w);
   aspect-ratio: 1;
   background: rgba(89, 126, 163, .13);
   border: 1px solid var(--st);
@@ -194,7 +194,7 @@ body {
 .marker.is-alarm .marker-err { background: rgba(166, 71, 58, .20); }
 
 .marker-ping {
-  width: var(--err-w);
+  width: var(--halo-w);
   aspect-ratio: 1;
   border: 2px solid var(--st);
   opacity: 0;
@@ -913,7 +913,6 @@ body {
 .swatch.is-ok { background: var(--st-ok); }
 .swatch.is-alarm { background: var(--st-alarm); }
 .swatch.is-off { background: var(--st-off); }
-.swatch.is-err { border: 1px solid var(--color-accent-600); }
 .swatch.is-priv {
   border-radius: 0;
   border: 1px solid var(--color-accent);
