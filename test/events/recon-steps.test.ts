@@ -7,6 +7,8 @@ import {
   BUNDLED_OPENSPLAT,
   FALLBACK_SAMPLE_FPS,
   RECON_DEFAULTS,
+  isToolAvailable,
+  missingTools,
   parseDuration,
   probeStep,
   resolveOpenSplatBin,
@@ -247,6 +249,57 @@ test('opensplat은 환경변수 → 프로젝트 빌드본 → PATH 순으로 �
 test('빌드본 경로는 빌드 절차가 만드는 자리와 같다', () => {
   // tools/recon/README.md의 cmake 산출 위치. 둘이 어긋나면 자동 탐색이 조용히 실패한다.
   assert.equal(path.resolve('/proj/server', BUNDLED_OPENSPLAT), '/proj/tools/recon/OpenSplat/build/opensplat');
+});
+
+test('경로가 섞인 실행 파일은 그 자리를 그대로 본다', () => {
+  const at = (want: string) => (f: string) => f === want;
+
+  assert.equal(isToolAvailable('/opt/bin/colmap', {}, at('/opt/bin/colmap')), true);
+  assert.equal(isToolAvailable('/opt/bin/colmap', {}, () => false), false);
+  // 윈도우 경로도 경로다. 구분자를 '/'로만 보면 있는 도구를 없다고 한다.
+  assert.equal(isToolAvailable('C:\\tools\\opensplat.exe', {}, at('C:\\tools\\opensplat.exe')), true);
+  assert.equal(isToolAvailable('./opensplat', {}, at('./opensplat')), true);
+});
+
+test('이름만 온 실행 파일은 PATH를 뒤진다', () => {
+  const env = { PATH: ['/usr/bin', '/opt/homebrew/bin'].join(path.delimiter) };
+
+  assert.equal(isToolAvailable('ffmpeg', env, (f) => f === path.join('/opt/homebrew/bin', 'ffmpeg')), true);
+  assert.equal(isToolAvailable('ffmpeg', env, () => false), false);
+  // PATH 자체가 없으면 뒤질 자리가 없다. 있다고 우기면 spawn이 ENOENT로 죽는다.
+  assert.equal(isToolAvailable('ffmpeg', {}, () => true), false);
+});
+
+test('윈도우는 PATHEXT의 확장자를 붙여 가며 찾는다', () => {
+  // 윈도우 PATH에는 확장자 없는 `ffmpeg`가 없다. `ffmpeg.exe`가 있다.
+  // PATH 값에 `C:\`를 안 쓰는 이유: 이 테스트가 POSIX 호스트에서도 도는데, 거기서는
+  // `path.delimiter`가 `:`라 드라이브 문자가 쪼개진다. 여기서 보려는 것은 PATHEXT다.
+  const env = { PATH: '/tools', PATHEXT: '.COM;.EXE;.BAT' };
+  assert.equal(isToolAvailable('ffmpeg', env, (f) => f === path.join('/tools', 'ffmpeg.EXE')), true);
+  assert.equal(isToolAvailable('ffmpeg', env, (f) => f === path.join('/tools', 'ffmpeg')), true);
+  assert.equal(isToolAvailable('ffmpeg', env, () => false), false);
+});
+
+test('없는 도구를 파이프라인 순서대로 알려준다', () => {
+  const env = { PATH: '/usr/bin' };
+  const has = (...names: string[]) => (f: string) => names.some((n) => f === path.join('/usr/bin', n));
+
+  assert.deepEqual(missingTools(RECON_DEFAULTS, env, () => true), []);
+  assert.deepEqual(
+    missingTools(RECON_DEFAULTS, env, has('ffmpeg', 'ffprobe')),
+    ['colmap', 'opensplat'],
+    '순서는 파이프라인 순서다 — 어디서 막히는지 그대로 읽힌다',
+  );
+  assert.deepEqual(
+    missingTools(RECON_DEFAULTS, env, () => false),
+    ['ffmpeg', 'ffprobe', 'colmap', 'opensplat'],
+  );
+  // 이름이 아니라 설정된 실행 파일을 보고한다. OPENSPLAT_BIN을 준 자리에서 'opensplat'이
+  // 없다고 하면 어느 경로를 고쳐야 하는지 알 수 없다.
+  assert.deepEqual(
+    missingTools({ ...RECON_DEFAULTS, openSplatBin: '/build/opensplat' }, env, has('ffmpeg', 'ffprobe', 'colmap')),
+    ['/build/opensplat'],
+  );
 });
 
 test('화면 폼 기본값과 서버 기본값이 같다', () => {

@@ -5,7 +5,7 @@
 // 밖으로 나간 것에 태그 ID도 시각도 좌표도 없다는 걸 눈으로 볼 수 있게 한다.
 //
 //   node tools/export-sink.ts                                 (기본 9100 포트)
-//   EXPORT_URL=http://localhost:9100/samples npm start        서버를 여기로 붙인다
+//   .env에 EXPORT_URL=http://localhost:9100/samples           서버를 여기로 붙인다
 //
 // 받은 것은 `tools/sink-out/<YYYY-MM-DD>.jsonl`에 쌓인다.
 
@@ -14,10 +14,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { loadEnvFile } from '../server/config/env-file.ts';
+
+// 서버와 같은 설정 파일을 본다. EXPORT_TOKEN과 SINK_TOKEN이 짝을 이뤄야 하므로
+// 두 파일로 갈라 두면 그 대조가 어려워진다.
+const here = path.dirname(fileURLToPath(import.meta.url));
+loadEnvFile(path.join(here, '..', 'server'));
+
 const port = Number(process.env.SINK_PORT) || 9100;
 const token = process.env.SINK_TOKEN || '';
 const outDir = process.env.SINK_DIR
-  || path.join(path.dirname(fileURLToPath(import.meta.url)), 'sink-out');
+  || path.join(here, 'sink-out');
 
 const server = http.createServer((req, res) => {
   if (req.method !== 'POST') {
@@ -50,7 +57,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, () => {
   console.log(`[sink] 학습 반출 수신 목업 http://localhost:${port} → ${outDir}`);
-  console.log(`[sink] 서버를 붙이려면: EXPORT_URL=http://localhost:${port}/samples npm start`);
+  console.log(`[sink] 서버를 붙이려면 .env에: EXPORT_URL=http://localhost:${port}/samples`);
 });
 
 function safeLabel(line: string): unknown {

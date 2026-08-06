@@ -4,13 +4,31 @@
 // 없는데 세션만 살아남아, 어제 사람의 이름으로 오늘의 판정이 찍힌다. 재기동하면 다시
 // 고르는 것이 맞는 동작이다.
 //
-// **3시간 절대 만료다.** 마지막 조작이 아니라 발급 시각부터 잰다 — 조용한 관제사가 영원히
-// 로그인 상태로 남는 것을 막는다. 한 교대를 넘기지 않는 길이다.
+// **절대 만료다.** 마지막 조작이 아니라 발급 시각부터 잰다 — 조용한 관제사가 영원히
+// 로그인 상태로 남는 것을 막는다. 기본 3시간은 한 교대를 넘기지 않는 길이이고,
+// `SESSION_TTL_HOURS`로 줄이면 만료 화면을 기다리지 않고 확인할 수 있다.
 
 import { randomUUID } from 'node:crypto';
 
 export const SESSION_COOKIE = 'op_sid';
 export const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * 세션 수명(ms). 기본은 한 교대를 넘기지 않는 3시간이다.
+ *
+ * **환경변수로 여는 이유는 만료 화면 때문이다.** 만료 팝업과 `연장`은 이 시간이 차야
+ * 보이는데, 3시간이 고정이면 그 경로를 확인할 방법이 없다. 보관·파기 변수와 같은
+ * 규칙으로 시간 단위 소수를 받는다 — `0.01`은 36초다.
+ *
+ * **0과 음수는 거부한다.** 0을 그대로 받으면 발급하자마자 만료된 세션이 나와
+ * 아무도 화면에 못 들어가고, 원인이 설정에 있다는 것도 드러나지 않는다.
+ */
+export function sessionTtlFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const hours = Number(env.SESSION_TTL_HOURS);
+  return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : SESSION_TTL_MS;
+}
 
 export interface Session {
   sid: string;

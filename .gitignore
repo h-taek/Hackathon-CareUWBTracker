@@ -65,3 +65,7 @@ ml/_out/
 # Node / TypeScript
 node_modules/
 .gstack/
+
+# 로컬 설정(server/.env). 기기마다 다르므로 커밋하지 않는다 —
+# 형식과 기본값은 커밋된 server/.env.example에 있다
+.env

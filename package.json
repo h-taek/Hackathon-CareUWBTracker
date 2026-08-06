@@ -6,8 +6,6 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "start": "node server/server.ts",
-    "export-sink": "node tools/export-sink.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },

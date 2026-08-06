@@ -8,6 +8,7 @@
 // 순수 함수로 둔 이유: 인자 한 글자가 틀리면 30분 뒤에 실패한다. 실행 없이 명령줄을
 // 그대로 검증할 수 있어야 한다.
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export interface ReconPaths {
@@ -249,6 +250,51 @@ export function resolveOpenSplatBin(
   if (env.OPENSPLAT_BIN) return env.OPENSPLAT_BIN;
   const bundled = path.resolve(serverDir, BUNDLED_OPENSPLAT);
   return exists(bundled) ? bundled : RECON_DEFAULTS.openSplatBin;
+}
+
+/**
+ * 이 실행 파일이 이 기기에 있는가.
+ *
+ * **`spawn`이 찾는 방식과 같아야 한다.** 다르면 "있다고 해놓고 ENOENT로 죽는" 자리가
+ * 생기고, 그건 COLMAP을 몇 분 돌린 뒤에 드러난다.
+ *
+ * - 경로가 섞인 값(`/opt/bin/colmap`, `C:\tools\opensplat.exe`, `./opensplat`)은 그 자리를 본다.
+ *   **구분자를 `/`로만 보면 안 된다** — 윈도우 경로가 전부 "이름"으로 분류돼 PATH를 뒤지게 된다.
+ * - 이름만 온 값(`ffmpeg`)은 `PATH`를 뒤진다. 윈도우는 확장자가 없는 실행 파일이 없으므로
+ *   `PATHEXT`를 붙여 가며 본다.
+ *
+ * `exists`는 테스트가 갈아끼운다.
+ */
+export function isToolAvailable(
+  bin: string,
+  env: Record<string, string | undefined> = process.env,
+  exists: (file: string) => boolean = fs.existsSync,
+): boolean {
+  if (bin.includes('/') || bin.includes('\\')) return exists(bin);
+
+  const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  // 확장자 없는 이름도 후보에 남긴다(POSIX는 이쪽이 정상이다).
+  // **PATHEXT는 `path.delimiter`로 나누지 않는다** — 윈도우 전용 변수라 구분자가 늘 `;`인데,
+  // POSIX 호스트에서 이 함수를 부르면 `path.delimiter`가 `:`라 통째로 한 덩어리가 된다.
+  const suffixes = ['', ...(env.PATHEXT ?? '').split(';').filter(Boolean)];
+
+  return dirs.some((dir) => suffixes.some((ext) => exists(path.join(dir, bin + ext))));
+}
+
+/**
+ * 재구성이 부를 도구 중 이 기기에 없는 것. **파이프라인 순서대로** 돌려준다 —
+ * 어디서 막히는지가 그대로 읽힌다.
+ *
+ * 이름이 아니라 **설정된 실행 파일 값**을 그대로 담는다. `OPENSPLAT_BIN`을 준 자리에서
+ * `opensplat`이 없다고 하면 어느 경로를 고쳐야 하는지 알 수 없다.
+ */
+export function missingTools(
+  tuning: ReconTuning,
+  env: Record<string, string | undefined> = process.env,
+  exists: (file: string) => boolean = fs.existsSync,
+): string[] {
+  const pipeline = [tuning.ffmpegBin, tuning.ffprobeBin, tuning.colmapBin, tuning.openSplatBin];
+  return pipeline.filter((bin) => !isToolAvailable(bin, env, exists));
 }
 
 /** 화면이 실행마다 넘기는 값. 실행 파일 경로는 여기로 안 받는다 — 브라우저가 정할 일이 아니다. */

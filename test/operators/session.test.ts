@@ -7,6 +7,7 @@ import {
   clearedSessionCookie,
   SESSION_COOKIE,
   SESSION_TTL_MS,
+  sessionTtlFromEnv,
 } from '../../server/operators/session.ts';
 
 /** 시계를 손으로 돌린다. 만료를 실제 3시간 기다릴 수는 없다. */
@@ -87,6 +88,31 @@ test('쿠키 헤더에서 세션만 골라낸다', () => {
   assert.strictEqual(readCookie('a=1', SESSION_COOKIE), null);
   assert.strictEqual(readCookie(undefined, SESSION_COOKIE), null);
   assert.strictEqual(readCookie(`${SESSION_COOKIE}=`, SESSION_COOKIE), null);
+});
+
+test('세션 수명을 환경변수로 조절한다', () => {
+  // 만료 화면을 3시간 기다리지 않고 확인할 수 있어야 한다.
+  assert.strictEqual(sessionTtlFromEnv({}), SESSION_TTL_MS);
+  assert.strictEqual(sessionTtlFromEnv({ SESSION_TTL_HOURS: '1' }), 60 * 60 * 1000);
+  // 소수를 받는다 — 0.01시간은 36초다. 보관·파기 변수와 같은 규칙이다.
+  assert.strictEqual(sessionTtlFromEnv({ SESSION_TTL_HOURS: '0.01' }), 36 * 1000);
+
+  // 0과 음수, 숫자가 아닌 값은 기본값으로 돌린다. 0을 그대로 받으면 발급하자마자
+  // 만료된 세션이 나와 아무도 화면에 못 들어간다.
+  for (const bad of ['0', '-1', 'abc', '']) {
+    assert.strictEqual(sessionTtlFromEnv({ SESSION_TTL_HOURS: bad }), SESSION_TTL_MS, `거부: ${bad}`);
+  }
+});
+
+test('환경변수로 준 수명이 실제 만료 시각이 된다', () => {
+  const time = clock();
+  const store = createSessionStore({ now: time.now, ttlMs: sessionTtlFromEnv({ SESSION_TTL_HOURS: '0.01' }) });
+  const session = store.open('op-1');
+
+  time.advance(35_000);
+  assert.ok(store.get(session.sid), '36초 전에는 살아 있다');
+  time.advance(2_000);
+  assert.strictEqual(store.get(session.sid), null, '36초가 지나면 만료다');
 });
 
 test('쿠키는 스크립트가 읽지 못한다', () => {

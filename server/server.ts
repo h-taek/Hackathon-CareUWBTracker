@@ -9,6 +9,7 @@ import {
   wantsHelp,
   type ServerConfig,
 } from './config/cli.ts';
+import { loadEnvFile } from './config/env-file.ts';
 import {
   createPositionSmoother,
   smootherOptionsFromEnv,
@@ -43,6 +44,7 @@ import {
   readCookie,
   sessionCookie,
   clearedSessionCookie,
+  sessionTtlFromEnv,
   SESSION_COOKIE,
 } from './operators/session.ts';
 import { createTokenMailbox, parseTokenMessage, isPeerId } from './ni/mailbox.ts';
@@ -65,11 +67,15 @@ import {
 } from './events/download.ts';
 import { createReconRunner } from './events/recon/runner.ts';
 import {
+  missingTools,
   resolveOpenSplatBin,
   tuningFromEnv,
   tuningFromParams,
   RECON_DEFAULTS,
 } from './events/recon/steps.ts';
+
+// **설정을 읽는 첫 줄이다.** 아래 어떤 설정도 이보다 먼저 읽히면 안 된다.
+const envFile = loadEnvFile(import.meta.dirname);
 
 const args = process.argv.slice(2);
 if (wantsHelp(args)) {
@@ -156,6 +162,7 @@ const collectTracker = createCollectTracker(auditLog);
 // **모드로 나누지 않는다.** 시뮬이든 실기기든 화면 앞에 앉은 사람은 같은 사람이다.
 const operatorRegistry = createOperatorRegistry(process.env.OPERATORS_DIR || dataDir);
 const sessions = createSessionStore({
+  ttlMs: sessionTtlFromEnv(),
   // 만료는 조회하는 순간 발견된다. 화면이 만료 시각에 `GET /session`을 부르므로
   // 실질적으로는 만료된 그때 남는다.
   onExpire: (session) => auditLog.record({
@@ -265,9 +272,6 @@ const eventRecorder = createEventRecorder({
 const attachmentLimitBytes = attachmentLimitFromEnv();
 // 영상·3D는 **사건에** 붙는다. 이벤트는 24시간이라 거기 붙이면 같이 사라진다.
 const eventAttachments = createAttachmentStore(incidentStore, { limitBytes: attachmentLimitBytes });
-// 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
-// 실패 기록만 쌓인다. 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 건다.
-const reconAuto = process.env.RECON_AUTO !== '0';
 const reconTuning = {
   ...RECON_DEFAULTS,
   ...tuningFromEnv(),
@@ -275,6 +279,19 @@ const reconTuning = {
   // COLMAP을 몇 분 돌린 끝에 마지막 단계에서 죽는다.
   openSplatBin: resolveOpenSplatBin(import.meta.dirname, process.env, fs.existsSync),
 };
+// 도구가 안 깔린 자리에서는 업로드만 받고 재구성은 걸지 않는다. 안 그러면 올릴 때마다
+// 실패 기록만 쌓인다 — 도구를 못 갖춘 사람이 이 서버에서 처음 보는 3D가 붉은 실패가 된다.
+// 나중에 POST /events/<id>/attachments/<attId>/recon으로 손수 걸 수는 있다(그건 막지 않는다.
+// 도구를 방금 깔았을 수 있고, 그때는 실패해도 누른 사람이 이유를 안다).
+const reconMissing = missingTools(reconTuning);
+const reconAuto = process.env.RECON_AUTO !== '0' && reconMissing.length === 0;
+
+/** 배너에 자동 실행이 왜 꺼졌는지까지 적는다. "수동"만 적으면 껐는지 못 찾은 건지 모른다. */
+function reconAutoLabel(): string {
+  if (reconAuto) return '업로드 시 자동';
+  if (process.env.RECON_AUTO === '0') return '수동(RECON_AUTO=0)';
+  return `수동 — 도구 ${reconMissing.length}개 없음`;
+}
 const reconRunner = createReconRunner({
   ...reconTuning,
   store: incidentStore,
@@ -1196,6 +1213,8 @@ server.listen(port, () => {
   const address = server.address();
   const shown = typeof address === 'object' && address !== null ? address.port : port;
   console.log(`시물 스트림 서버 실행: http://localhost:${shown}`);
+  // 설정이 반영됐는지 확인할 자리. 없으면 전 항목이 기본값이라는 뜻이다.
+  console.log(`  설정       ${envFile ?? '기본값 (server/.env 없음)'}`);
   console.log(`  대시보드   http://localhost:${shown}/`);
   console.log(`  SSE 스트림 http://localhost:${shown}/stream`);
   console.log(`  ingest     POST http://localhost:${shown}/ingest`);
@@ -1230,9 +1249,9 @@ server.listen(port, () => {
     + ' · 파기 직전 가속도 창 + 라벨만, 태그ID·시각·좌표 없음',
   );
   console.log(
-    `  현장 영상  POST /events/<eventId>/attachments?kind=video (본문=파일 바이트)`
+    `  현장 영상  POST /incidents/<eventId>/attachments?kind=video (본문=파일 바이트)`
     + ` · 최대 ${Math.round(attachmentLimitBytes / 1024 / 1024)}MB (ATTACHMENT_LIMIT_MB)`
-    + ` · 재구성 ${reconAuto ? '업로드 시 자동' : '수동(RECON_AUTO=0)'}`,
+    + ` · 재구성 ${reconAutoLabel()}`,
   );
   console.log(
     `  재구성     ${reconTuning.ffmpegBin} → ${reconTuning.colmapBin} → ${reconTuning.openSplatBin}`
@@ -1241,10 +1260,19 @@ server.listen(port, () => {
     + ` · 학습 ${reconTuning.numIters}회 (화면에서 실행마다 바꾼다)`,
   );
   // 도구가 없으면 지금 알려준다. 재구성을 걸고 나서 알면 COLMAP을 몇 분 돌린 뒤다.
-  if (!reconTuning.openSplatBin.includes('/') || !fs.existsSync(reconTuning.openSplatBin)) {
+  // **없는 도구를 다 센다** — 하나씩 알려주면 깔고 다시 띄우기를 네 번 한다.
+  if (reconMissing.length > 0) {
     console.warn(
-      `  ⚠ opensplat을 못 찾았습니다(${reconTuning.openSplatBin}).`
-      + ' 빌드는 tools/recon/README.md, 다른 자리면 OPENSPLAT_BIN으로 지정하세요.',
+      `  ⚠ 재구성 도구를 못 찾았습니다: ${reconMissing.join(', ')}.`
+      + ' 영상 업로드와 3D 조회는 그대로 되고, 변환만 자동으로 걸지 않습니다.',
+    );
+    console.warn(
+      '    조달·빌드는 tools/recon/README.md, 다른 자리에 있으면'
+      + ' FFMPEG_BIN / FFPROBE_BIN / COLMAP_BIN / OPENSPLAT_BIN으로 지정하세요.',
+    );
+    console.warn(
+      '    도구 없이 3D 화면만 보려면 이미 만들어진 .ply를 올리면 됩니다 —'
+      + ' POST /incidents/<eventId>/attachments?kind=splat',
     );
   }
   console.log(`  주입 클립  ${clips.map((clip) => clip.id).join(', ')} (실제 파이프라인 통과)`);
@@ -1252,7 +1280,10 @@ server.listen(port, () => {
   // 어느 장부를 들고 있는지 밝힌다. 모드마다 다른 파일이라, 명부가 비어 보이는 게
   // 고장인지 다른 장부를 연 것인지 여기서 갈린다.
   console.log(`  태그 명부  ${tagRegistry.file} · 수집 중 ${tagRegistry.active().length}명`);
-  console.log(`  관제사     ${operatorRegistry.file} · ${operatorRegistry.active().length}명`);
+  console.log(
+    `  관제사     ${operatorRegistry.file} · ${operatorRegistry.active().length}명`
+    + ` · 세션 ${sessions.ttlMs / 3_600_000}시간 (SESSION_TTL_HOURS)`,
+  );
   if (anchorConfig.singleAnchorBearingDeg !== undefined) {
     console.warn(
       `  ⚠ 1앵커 테스트 모드 — 서브 앵커 거리가 없으면 ${anchorConfig.mainAnchorId} 거리를`
