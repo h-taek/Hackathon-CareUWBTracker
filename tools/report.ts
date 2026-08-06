@@ -1,14 +1,9 @@
 // 평가/스윕 결과를 콘솔 텍스트 표로 포매팅(순수 함수).
 
-import type { ConfusionMetrics, EvaluationResult, SweepResult } from './evaluate.ts';
+import type { EvaluationResult, SweepResult } from './evaluate.ts';
 
 export function pct(x: number | null | undefined): string {
   return x == null ? '  -  ' : `${(x * 100).toFixed(1)}%`.padStart(5);
-}
-
-// 혼동행렬 지표 한 줄.
-export function metricsLine(m: ConfusionMetrics): string {
-  return `민감도 ${pct(m.sens)}  특이도 ${pct(m.spec)}  정밀도 ${pct(m.prec)}  헛경보 ${pct(m.fa)}  F1 ${pct(m.f1)}  균형정확도 ${pct(m.bacc)}  [tp${m.tp} fp${m.fp} fn${m.fn} tn${m.tn}]`;
 }
 
 // 데이터셋×위치 그룹 + 전체 혼동행렬 표. 판정 수준은 하나(fall_detected)다.

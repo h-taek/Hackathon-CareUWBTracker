@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { IngestGenerator } from './generator.ts';
 import { ReplayPlayer, loadNdjson, type ReplayRecord } from './replay.ts';
-import { createHttpWriter, type HttpWriter } from './sender.ts';
+import { createHttpWriter } from './sender.ts';
 import { streamTrialsFromFile } from './csv.ts';
 import {
   detectTrial, feedTyped, trialFeed, makeConfusion, sweepAll, type TrialLike, type SweepResult,

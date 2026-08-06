@@ -26,11 +26,6 @@ const state = {
 let ui = null;
 let expiryTimer = null;
 
-/** 지금 화면 앞에 앉은 관제사. 없으면 null. */
-export function currentOperator() {
-  return state.operator;
-}
-
 /**
  * 쓰기 동작 앞에 둔다. 세션이 끊겼으면 만료 팝업을 띄우고 `false`를 준다.
  *
