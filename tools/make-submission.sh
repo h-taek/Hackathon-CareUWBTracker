@@ -62,6 +62,7 @@ rsync -a \
   --exclude='tools/make-submission.sh' \
   --exclude='server/public/README.md' \
   --exclude='server/public/_ds/readme.md' \
+  --exclude='server/public/**/*.d.ts' \
   "$ROOT/" "$PKG/"
 
 # tools/에는 README가 실제로 쓰는 수신 목업 하나만 남긴다. 나머지(ingest 생성·재생·평가
@@ -112,6 +113,14 @@ for forbidden in docs test ml server/.env HANDOFF.md node_modules server/data .g
                  server/public/README.md server/public/_ds/readme.md; do
   [ ! -e "$PKG/$forbidden" ] || { echo "들어가면 안 된다: $forbidden" >&2; exit 1; }
 done
+
+# 화면 코드는 브라우저가 그대로 받는 .js이고, 그 옆의 .d.ts는 정적 검사에만 쓰인다.
+# 제출본에는 그 검사가 없으므로(devDependencies·scripts 제거) 실행되지 않는 파일이다.
+# 이름을 열거하지 않고 훑는다 — 새 화면 모듈이 생겨도 규칙이 따라온다.
+if find "$PKG/server/public" -name '*.d.ts' -print -quit | grep -q .; then
+  echo "들어가면 안 된다: server/public 아래 .d.ts" >&2
+  exit 1
+fi
 
 rm -f "$OUT"
 ( cd "$STAGE" && zip -qr "$OUT" "$NAME" -x '*/.DS_Store' )
