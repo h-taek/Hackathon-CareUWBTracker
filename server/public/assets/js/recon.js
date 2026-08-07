@@ -17,6 +17,7 @@
 // 서버도 같이 막는다 — 화면에서만 막으면 주소로 직접 올릴 수 있다.
 
 import { initOperatorGate, requireOperator, guard } from './operator.js';
+import { pickScene } from './attachments.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -100,6 +101,7 @@ async function loadNames() {
 function factsOf(record) {
   const alert = record.alert ?? {};
   const attachments = record.attachments ?? [];
+  const picked = pickScene(attachments);
   return {
     eventId: record.eventId,
     tagId: record.tagId,
@@ -108,8 +110,12 @@ function factsOf(record) {
     zone: alert.zone,
     peakAccel: alert.peakAccel,
     trackCount: record.track?.length ?? 0,
-    video: attachments.find((a) => a.kind === 'video') ?? null,
-    splat: attachments.find((a) => a.kind === 'splat') ?? null,
+    // 최신 것을 집는다(attachments.js). 여기서는 있나 없나만 쓰지만, 규칙이 화면마다
+    // 다르면 언젠가 한쪽만 옛것을 가리킨다.
+    video: picked.video,
+    splat: picked.splat,
+    videoCount: attachments.filter((a) => a.kind === 'video').length,
+    splatCount: attachments.filter((a) => a.kind === 'splat').length,
   };
 }
 
@@ -145,7 +151,12 @@ async function showFixed(eventId) {
   fact('태그', f.tagId);
   fact('충격', f.peakAccel != null ? `${Number(f.peakAccel).toFixed(1)} g` : '—');
   fact('궤적', `${f.trackCount} 점`);
-  fact('첨부', f.splat ? '영상 · 3D' : f.video ? '영상만' : '없음');
+  // 몇 벌이 이미 붙어 있는지를 숫자로 보인다. `영상 · 3D`만 뜨던 때는 같은 사건에
+  // 다섯 번을 올려도 표기가 그대로라, 방금 올린 것이 붙었는지를 이 화면에서 알 수 없었다.
+  fact('첨부', f.videoCount || f.splatCount
+    ? [f.videoCount ? `영상 ${f.videoCount}` : null, f.splatCount ? `3D ${f.splatCount}` : null]
+      .filter(Boolean).join(' · ')
+    : '없음');
 
   $('incidentHint').textContent = '관제 화면에서 지정';
   $('incidentHint').className = 'panel-hint';

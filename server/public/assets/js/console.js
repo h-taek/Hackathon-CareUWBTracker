@@ -11,6 +11,7 @@
 // 화면 구조와 클래스는 index.html · assets/css/console.css를 함께 본다.
 
 import { initOperatorGate, requireOperator, guard } from './operator.js';
+import { pickScene } from './attachments.js';
 
 const $ = (id) => document.getElementById(id);
 const tpl = (id) => $(id).content.firstElementChild;
@@ -505,18 +506,16 @@ async function loadScenes() {
     state.scenes = await Promise.all(incidents.map(async (e) => {
       const kept = before.get(e.eventId);
       const base = {
-        id: e.eventId, name: nameOf(e.tagId), zone: e.zone, ts: e.ts, splat: null, video: null,
+        id: e.eventId, name: nameOf(e.tagId), zone: e.zone, ts: e.ts,
+        splat: null, video: null, source: null,
         expanded: !!kept?.expanded, record: kept?.record ?? null, loading: false,
       };
       if (!e.attachmentCount) return base;
       try {
         const record = await fetch(`/incidents/${encodeURIComponent(e.eventId)}`).then((r) => r.json());
-        const attachments = record.attachments || [];
-        return {
-          ...base,
-          splat: attachments.find((a) => a.kind === 'splat') || null,
-          video: attachments.find((a) => a.kind === 'video') || null,
-        };
+        // 첫 번째가 아니라 최신을 집는다. 같은 사건에 영상을 여러 번 올리므로,
+        // 첫 번째를 집으면 새로 뽑은 3D가 영영 화면에 안 나온다(attachments.js).
+        return { ...base, ...pickScene(record.attachments) };
       } catch {
         return base;
       }
@@ -558,7 +557,7 @@ function renderScenes() {
     node.classList.toggle('is-expanded', !!s.expanded);
     node.querySelector('.scene-name').textContent = `${s.name} · ${fmtClock(s.ts)}`;
     node.querySelector('.scene-detail').textContent = s.zone || '구역 미지정';
-    node.querySelector('.scene-badge').textContent = s.splat ? '3D' : reconLabel(s);
+    node.querySelector('.scene-badge').textContent = sceneBadge(s);
     // 줄을 누르면 상세만 펼친다. 3D와 영상은 상세 안 버튼으로만 연다 —
     // 1.4MB 라이브러리를 받고 GPU를 잡는 일이 목록을 훑는 동작에 딸려오면 안 된다.
     node.querySelector('.scene-open').onclick = () => toggleDetail(s);
@@ -626,7 +625,10 @@ function fillDetail(s) {
   body.appendChild(videoFact);
 
   // 3DGS 맵
-  const recon = video?.recon;
+  //
+  // **성적은 `s.source`에서 읽는다** — 그 3D를 만든 영상이다. 위의 `video`(최신 영상)와
+  // 다를 수 있어, 거기서 읽으면 방금 올린 영상의 진행률이 옛 3D 옆에 붙는다.
+  const recon = s.source?.recon;
   const splatFact = fact('3DGS 맵',
     s.splat
       ? `${mb(s.splat.bytes)}MB · 등록 ${recon?.registeredImages ?? '?'}/${recon?.frames ?? '?'}장 · 점 ${(recon?.points ?? 0).toLocaleString()}`
@@ -764,6 +766,17 @@ function svg(inner, w, h, fit = 'none', cls = '') {
   box.className = `scene-graph ${cls}`.trim();
   box.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="${fit}">${inner}</svg>`;
   return box;
+}
+
+/**
+ * 목록 배지 한 단어. **변환이 도는 중이면 3D가 이미 있어도 그것을 먼저 알린다** —
+ * 3D가 있는 사건에 영상을 다시 올린 참이라 `3D`만 뜨면 새 변환이 도는지 안 도는지
+ * 목록에서 알 수가 없다.
+ */
+function sceneBadge(s) {
+  const status = s.video?.recon?.status;
+  if (status === 'running' || status === 'pending') return reconLabel(s);
+  return s.splat ? '3D' : reconLabel(s);
 }
 
 /** 3D가 아직 없는 건의 상태 한 단어. 변환이 도는 중인지 실패했는지를 구분한다. */
