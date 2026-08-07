@@ -65,7 +65,7 @@ import {
   readReconLogTail,
   serveAttachment,
 } from './events/download.ts';
-import { createReconRunner } from './events/recon/runner.ts';
+import { createReconRunner, recoverInterrupted } from './events/recon/runner.ts';
 import {
   missingTools,
   resolveOpenSplatBin,
@@ -1243,6 +1243,10 @@ server.listen(port, () => {
     + `${retention.config.dryRun ? ' · dry-run' : ''}`
     + ' (UNDO_WINDOW_HOURS / INCIDENT_RETENTION_DAYS / SWEEP_INTERVAL_HOURS)',
   );
+  console.log(
+    `  재구성 찌꺼기  성공 즉시 · 실패·중지는 ${retention.config.deadWorkdirGraceMs / 3_600_000}시간 뒤`
+    + ' 중간물만 파기 (원본 영상·recon.log는 남는다, DEAD_WORKDIR_GRACE_HOURS)',
+  );
   console.log(`  확인자료   ${auditLog.dir} (위치정보법 제16조② · 파기 금지)`);
   console.log(
     `  학습 반출  ${exporter.config.url || '전송 꺼짐 · 큐만 쌓는다 (EXPORT_URL)'}`
@@ -1290,6 +1294,13 @@ server.listen(port, () => {
       + ` ${anchorConfig.singleAnchorBearingDeg}도 방향에 얹어 좌표를 만듭니다.`
       + ' 거리만 실측이고 방향은 가짜이므로 리허설·시연에는 끄고 실행하세요.',
     );
+  }
+  // 지난 실행에서 끊긴 재구성을 먼저 되돌린다. 재구성은 이 프로세스 안에서 도므로
+  // 서버가 죽으면 도구도 죽는데 레코드는 `running`인 채 남는다 — 그대로 두면 화면은
+  // 영영 "변환 중"으로 보이고, 파기도 그 폴더를 `done`이 아니라며 지나친다.
+  // **파기보다 먼저 돌아야 한다** — 되돌려야 아래 sweep이 그 중간물을 거둘 수 있다.
+  for (const id of recoverInterrupted(incidentStore, eventAttachments)) {
+    console.log(`[recon] ⚠ 지난 실행에서 끊긴 재구성을 실패로 되돌렸다 — ${id}`);
   }
   // 기동 시 한 번 훑는다. 서버가 꺼져 있던 사이에 만료된 것을 여기서 거둔다.
   retention.start();

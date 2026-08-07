@@ -365,6 +365,40 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
   return { enqueue, cancel, size: () => queue.length + (active ? 1 : 0), current: () => active, idle };
 }
 
+/**
+ * 기동 시 1회. 서버가 죽으면서 끊긴 재구성을 `failed`로 되돌린다.
+ *
+ * 재구성은 이 프로세스 안에서 돈다 — 서버가 내려가면 도구도 같이 죽는데 레코드는
+ * `running`(또는 큐에서 기다리던 `pending`)인 채로 남는다. **그 상태는 스스로 못 빠져나온다.**
+ * 화면은 계속 "변환 중"으로 보여 다시 걸 수 없고, 파기 엔진은 `done`이 아니라 지나친다.
+ * 실제로 한 건이 사흘째 그렇게 떠 있었다.
+ *
+ * `cancelled`가 아니라 `failed`로 적는다 — 사람이 정한 결말이 아니고, 관제사가 다시
+ * 걸어야 한다는 것을 알아야 한다. 어디까지 갔는지(step)는 그대로 둔다.
+ *
+ * @returns 되돌린 `eventId/attachmentId` 목록
+ */
+export function recoverInterrupted(
+  store: EventStore,
+  attachments: AttachmentStore,
+  now: () => number = Date.now,
+): string[] {
+  const recovered: string[] = [];
+  for (const summary of store.list(Number.MAX_SAFE_INTEGER)) {
+    for (const attachment of attachments.list(summary.eventId)) {
+      const status = attachment.recon?.status;
+      if (status !== 'running' && status !== 'pending') continue;
+      attachments.patchRecon(summary.eventId, attachment.attachmentId, {
+        status: 'failed',
+        finishedAt: now(),
+        error: '서버가 재시작돼 끊겼다 — 다시 걸어야 한다',
+      });
+      recovered.push(`${summary.eventId}/${attachment.attachmentId}`);
+    }
+  }
+  return recovered;
+}
+
 /** 이만큼도 안 나오면 COLMAP이 어차피 못 푼다. 미리 끊어 30분을 아낀다. */
 export const MIN_FRAMES = 10;
 

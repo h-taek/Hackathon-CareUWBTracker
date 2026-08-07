@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 
 import { createEventStore } from '../../server/events/store.ts';
 import { createAttachmentStore } from '../../server/events/attachments.ts';
-import { createReconRunner, MIN_FRAMES, spawnCommand, type RunCommand } from '../../server/events/recon/runner.ts';
+import { createReconRunner, MIN_FRAMES, recoverInterrupted, spawnCommand, type RunCommand } from '../../server/events/recon/runner.ts';
 import { RECON_DEFAULTS, framesDir, modelDir, outputPly, type ReconStep } from '../../server/events/recon/steps.ts';
 import type { EventRecord } from '../../server/events/recorder.ts';
 
@@ -451,4 +451,45 @@ test('중지 신호를 받으면 실제 프로세스가 죽는다', async () => 
   // SIGTERM으로 죽으면 종료코드가 없다. 신호까지 3초 유예를 다 쓰지 않고 끝나야 한다.
   assert.equal(result.code, null);
   assert.ok(Date.now() - started < 2000, '중지가 유예 끝까지 걸렸다 — SIGTERM이 안 먹었다');
+});
+
+// ── 서버 재시작 회수 ───────────────────────────────────────
+//
+// 재구성은 서버 프로세스 안에서 돈다. 서버가 죽으면 도구도 같이 죽는데 레코드는
+// `running`인 채로 남는다. 실제로 한 건이 사흘째 "변환 중"으로 떠 있었다 — 다시 걸
+// 수도 없고(진행 중으로 보인다) 정리 대상도 아니다(done이 아니다).
+
+test('기동 회수: 끊긴 running·pending을 failed로 되돌린다', async () => {
+  const { store, attachments, video } = await setup();
+  const second = await attachments.receive('evt-1', { kind: 'video' }, Readable.from([Buffer.from('둘')]));
+  const third = await attachments.receive('evt-1', { kind: 'video' }, Readable.from([Buffer.from('셋')]));
+
+  attachments.patchRecon('evt-1', video.attachmentId, { status: 'running', startedAt: 1000, step: 'colmap:map' });
+  // second는 받은 그대로 pending이다. third는 이미 끝난 건이라 건드리면 안 된다.
+  attachments.patchRecon('evt-1', third.attachmentId, { status: 'done', outputAttachmentId: 'att-x' });
+
+  const recovered = recoverInterrupted(store, attachments, () => 9000);
+
+  assert.deepEqual(recovered.sort(), [
+    `evt-1/${second.attachmentId}`,
+    `evt-1/${video.attachmentId}`,
+  ].sort());
+
+  const stalled = attachments.get('evt-1', video.attachmentId)!;
+  assert.equal(stalled.recon?.status, 'failed');
+  assert.equal(stalled.recon?.finishedAt, 9000);
+  assert.match(stalled.recon?.error ?? '', /재시작/);
+  // 어디까지 갔는지는 남긴다 — 다시 걸 때 그 자리가 근거다.
+  assert.equal(stalled.recon?.step, 'colmap:map');
+
+  assert.equal(attachments.get('evt-1', second.attachmentId)!.recon?.status, 'failed');
+  assert.equal(attachments.get('evt-1', third.attachmentId)!.recon?.status, 'done');
+});
+
+test('기동 회수: 되돌릴 것이 없으면 아무것도 안 건드린다', async () => {
+  const { store, attachments, video } = await setup();
+  attachments.patchRecon('evt-1', video.attachmentId, { status: 'cancelled', finishedAt: 100 });
+
+  assert.deepEqual(recoverInterrupted(store, attachments, () => 9000), []);
+  assert.equal(attachments.get('evt-1', video.attachmentId)!.recon?.status, 'cancelled');
 });

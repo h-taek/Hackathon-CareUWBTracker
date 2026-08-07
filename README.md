@@ -246,7 +246,7 @@ cp server/.env.example server/.env
 | 서버 | `PORT` `DATA_DIR` | 포트와, 사고 기록·명부·확인자료·반출 큐가 쌓이는 최상위 위치 |
 | 관제사 세션 | `SESSION_TTL_HOURS` | 세션 수명. 발급 시각부터 재는 절대 만료다(3.9절) |
 | 사고 기록 | `EVENT_PRE_MS` `EVENT_POST_MS` `ATTACHMENT_LIMIT_MB` | 기록에 담을 경보 전후 구간과 영상 업로드 한도 |
-| 보관·파기 | `UNDO_WINDOW_HOURS` `SWEEP_INTERVAL_HOURS` `INCIDENT_RETENTION_DAYS` `RETENTION_DRY_RUN` | 보관 기간과 파기 주기(3.8절) |
+| 보관·파기 | `UNDO_WINDOW_HOURS` `SWEEP_INTERVAL_HOURS` `INCIDENT_RETENTION_DAYS` `DEAD_WORKDIR_GRACE_HOURS` `RETENTION_DRY_RUN` | 보관 기간과 파기 주기(3.8절) |
 | 학습 반출 | `EXPORT_URL` `EXPORT_TOKEN` `EXPORT_KEEP_DAYS` | 수신 주소와 인증 토큰. 주소가 없으면 큐에만 적재한다(3.7절) |
 | 낙상 판정 | `FALL_AI` `FALL_IMPACT_G` 외 4항목 | LightGBM 정밀 판정 사용 여부와 고전 감지기 임계값 |
 | 마커 떨림 억제 | `POS_WINDOW` `POS_DEADBAND_M` 외 3항목 | 이동평균 창, 정지 고정 반경, 이상치 판정 기준 |

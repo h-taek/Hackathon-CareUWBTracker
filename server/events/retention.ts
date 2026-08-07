@@ -21,6 +21,11 @@ export interface RetentionConfig {
   incidentRetentionMs: number;
   /** 자동 파기 주기. */
   sweepIntervalMs: number;
+  /**
+   * 실패·중지된 재구성의 중간물을 이만큼 두고 지운다. 원인을 볼 시간이다.
+   * **원본 영상과 recon.log는 이 뒤에도 남는다** — 설정만 바꿔 다시 거는 길이 막히면 안 된다.
+   */
+  deadWorkdirGraceMs: number;
   /** 켜면 지우지 않고 무엇을 지울지만 돌려준다. 정책을 바꿔 볼 때 쓴다. */
   dryRun: boolean;
   /** 시설 자산으로 넘긴 촬영물이 들어가는 자리(spec operation 02 §4.4). */
@@ -37,6 +42,7 @@ export const RETENTION_DEFAULTS: RetentionConfig = {
   undoWindowMs: 24 * HOUR_MS,
   incidentRetentionMs: 1095 * DAY_MS, // 3년
   sweepIntervalMs: 24 * HOUR_MS,
+  deadWorkdirGraceMs: 24 * HOUR_MS,
   dryRun: false,
   facilityDir: '',
 };
@@ -240,10 +246,29 @@ export function createRetention(options: RetentionOptions): Retention {
   }
 
   /**
+   * 이 작업 폴더를 지금 거둘 이유. 없으면 null이고, 그 문장이 그대로 파기 사유가 된다.
+   *
+   * `running`·`pending`은 여기 없다 — 돌고 있는 것을 지우면 그 실행이 죽는다. 서버가
+   * 죽으며 그 상태로 굳은 건은 기동 회수가 `failed`로 되돌린 뒤 이 길로 온다
+   * (recon/runner.ts의 recoverInterrupted).
+   */
+  function purgeReason(recon: { status?: unknown; finishedAt?: unknown } | undefined): string | null {
+    if (recon?.status === 'done') return '재구성 완료';
+    if (recon?.status !== 'failed' && recon?.status !== 'cancelled') return null;
+    // 끝난 시각을 모르면 유예를 셀 수가 없다. 셀 수 없는 것은 지우지 않는다.
+    if (typeof recon.finishedAt !== 'number') return null;
+    if (now() - recon.finishedAt < config.deadWorkdirGraceMs) return null;
+    return recon.status === 'failed' ? '재구성 실패 후 유예 경과' : '재구성 중지 후 유예 경과';
+  }
+
+  /**
    * 재구성 작업 폴더에서 다 쓴 것만 지운다. `recon.log`와 `cameras.json`은 남긴다 —
    * 어떤 설정이 어떤 결과를 냈는지 대조하는 근거이고 합쳐서 1MB 미만이다.
    *
-   * **실패한 건은 건드리지 않는다.** 원인 추적이 아직 목적이라 목적 달성이 아니다.
+   * 성공한 건은 끝나는 즉시, **실패·중지된 건은 유예(기본 24시간)가 지난 뒤** 거둔다.
+   * 실패한 건을 영영 남기던 때 사건 하나가 2.4GB까지 갔다 — 원인은 하루면 보고, 그
+   * 뒤로는 database.db 229MB가 아무 일도 안 한다. 원본 영상은 그대로 두므로 설정만
+   * 바꿔 다시 거는 길은 열려 있다.
    */
   function purgeWorkdir(eventId: string): RetentionAction[] {
     const record = incidents.read(eventId);
@@ -270,9 +295,13 @@ export function createRetention(options: RetentionOptions): Retention {
     };
 
     for (const raw of attachments) {
-      const attachment = raw as { attachmentId?: unknown; recon?: { status?: unknown } };
+      const attachment = raw as {
+        attachmentId?: unknown;
+        recon?: { status?: unknown; finishedAt?: unknown };
+      };
       if (typeof attachment.attachmentId !== 'string') continue;
-      if (attachment.recon?.status !== 'done') continue;
+      const why = purgeReason(attachment.recon);
+      if (!why) continue;
 
       const workDir = path.join(folder, 'recon', attachment.attachmentId);
       let bytes = 0;
@@ -287,7 +316,7 @@ export function createRetention(options: RetentionOptions): Retention {
       done.push({
         eventId,
         action: 'purge-workdir',
-        reason: `${attachment.attachmentId} 재구성 완료 · 중간물 파기`,
+        reason: `${attachment.attachmentId} ${why} · 중간물 파기`,
         bytes,
       });
       if (!config.dryRun) {
@@ -326,6 +355,7 @@ export function retentionOptionsFromEnv(
     undoWindowMs: hours(env.UNDO_WINDOW_HOURS, RETENTION_DEFAULTS.undoWindowMs),
     incidentRetentionMs: days(env.INCIDENT_RETENTION_DAYS, RETENTION_DEFAULTS.incidentRetentionMs),
     sweepIntervalMs: hours(env.SWEEP_INTERVAL_HOURS, RETENTION_DEFAULTS.sweepIntervalMs),
+    deadWorkdirGraceMs: hours(env.DEAD_WORKDIR_GRACE_HOURS, RETENTION_DEFAULTS.deadWorkdirGraceMs),
     dryRun: env.RETENTION_DRY_RUN === '1',
   };
 }
@@ -371,7 +401,11 @@ function days(raw: string | undefined, fallback: number): number {
 
 function stripUndefined(options: RetentionOptions): Partial<RetentionConfig> {
   const picked: Partial<RetentionConfig> = {};
-  for (const key of ['undoWindowMs', 'incidentRetentionMs', 'sweepIntervalMs', 'dryRun', 'facilityDir'] as const) {
+  const keys = [
+    'undoWindowMs', 'incidentRetentionMs', 'sweepIntervalMs',
+    'deadWorkdirGraceMs', 'dryRun', 'facilityDir',
+  ] as const;
+  for (const key of keys) {
     if (options[key] !== undefined) (picked as Record<string, unknown>)[key] = options[key];
   }
   return picked;

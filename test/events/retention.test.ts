@@ -215,8 +215,59 @@ test('레코드가 첨부로 가리키는 것은 무엇이든 안 지운다', ()
   assert.equal(fs.existsSync(path.join(work, 'project', 'out.ply')), true, '첨부를 품은 폴더는 통째로 지킨다');
 });
 
-test('실패한 재구성은 건드리지 않는다 — 원인 추적이 아직 목적이다', () => {
-  const { incidents, retention } = bench();
+/** 실패·중지된 재구성 한 건과 그 작업 폴더. `at`이 끝난 시각이다. */
+function withDeadRun(status: 'failed' | 'cancelled', at: number, now: number) {
+  const { incidents, retention, entries } = bench({ now: () => now });
+  incidents.save(record('evt-1', T0, {
+    outcome: 'confirmed',
+    resolvedAt: T0,
+    attachments: [{
+      attachmentId: 'att-1',
+      eventId: 'evt-1',
+      kind: 'video',
+      path: 'a.mov',
+      recon: { status, finishedAt: at },
+    }],
+  }));
+  const work = path.join(incidents.eventDir('evt-1'), 'recon', 'att-1');
+  fs.mkdirSync(path.join(work, 'frames'), { recursive: true });
+  fs.writeFileSync(path.join(work, 'frames', '001.jpg'), 'x'.repeat(100));
+  fs.writeFileSync(path.join(work, 'database.db'), 'x'.repeat(500));
+  fs.writeFileSync(path.join(work, 'recon.log'), '실패 원인이 여기 있다');
+  return { incidents, retention, entries, work };
+}
+
+test('실패한 재구성은 유예 안에서는 건드리지 않는다 — 원인 추적이 아직 목적이다', () => {
+  const { retention, work } = withDeadRun('failed', T0, T0 + 23 * HOUR);
+
+  assert.deepEqual(retention.purgeWorkdir('evt-1'), []);
+  assert.equal(fs.existsSync(path.join(work, 'database.db')), true);
+});
+
+test('실패한 재구성의 중간물은 유예가 지나면 지우되 로그는 남긴다', () => {
+  const { retention, work, entries } = withDeadRun('failed', T0, T0 + DAY + 1);
+
+  const actions = retention.purgeWorkdir('evt-1');
+
+  assert.deepEqual(actions.map((a) => a.action), ['purge-workdir']);
+  assert.equal(actions[0].bytes, 600);
+  assert.match(actions[0].reason, /실패/);
+  // **원본 영상은 안 지운다.** 설정만 바꿔 다시 거는 길이 막히면 안 된다.
+  assert.deepEqual(fs.readdirSync(work).sort(), ['recon.log']);
+  assert.equal(entries.filter((e) => e.detail.includes('중간물 파기')).length, 1);
+});
+
+test('중지된 재구성도 같은 유예를 따른다', () => {
+  const early = withDeadRun('cancelled', T0, T0 + HOUR);
+  assert.deepEqual(early.retention.purgeWorkdir('evt-1'), []);
+
+  const late = withDeadRun('cancelled', T0, T0 + DAY + 1);
+  assert.equal(late.retention.purgeWorkdir('evt-1').length, 1);
+});
+
+test('끝난 시각을 모르는 옛 실패 기록은 손대지 않는다', () => {
+  // finishedAt이 없으면 유예를 셀 수가 없다. 셀 수 없는 것을 지우지는 않는다.
+  const { incidents, retention } = bench({ now: () => T0 + 365 * DAY });
   incidents.save(record('evt-1', T0, {
     outcome: 'confirmed',
     resolvedAt: T0,
