@@ -170,14 +170,14 @@ export function createReconRunner(options: ReconRunnerOptions): ReconRunner {
       progress: undefined,
       tuning: {
         targetFrames: jobTuning.targetFrames,
-        frameWidth: jobTuning.frameWidth,
+        frameLongSide: jobTuning.frameLongSide,
         numIters: jobTuning.numIters,
         useGpu: jobTuning.useGpu,
       },
     });
     log(`[recon] 시작 ${job.eventId}/${job.attachmentId} → ${workDir}`);
     log(`[recon] ${job.attachmentId} 설정 ${jobTuning.targetFrames}장`
-      + ` · 가로 ${jobTuning.frameWidth > 0 ? `${jobTuning.frameWidth}px` : '원본'}`
+      + ` · 긴 변 ${jobTuning.frameLongSide > 0 ? `${jobTuning.frameLongSide}px` : '원본'}`
       + ` · 학습 ${jobTuning.numIters}회 · COLMAP ${jobTuning.useGpu ? 'GPU' : 'CPU'}`);
 
     const appendLog = (chunk: string) => {
@@ -460,7 +460,7 @@ const KILL_GRACE_MS = 3000;
 
 function stripUndefined(options: ReconRunnerOptions): Partial<ReconTuning> {
   const keys = [
-    'targetFrames', 'frameWidth', 'numIters', 'useGpu',
+    'targetFrames', 'frameLongSide', 'numIters', 'useGpu',
     'openSplatBin', 'colmapBin', 'ffmpegBin', 'ffprobeBin',
   ] as const;
   const picked: Record<string, unknown> = {};

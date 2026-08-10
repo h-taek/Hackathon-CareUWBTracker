@@ -26,11 +26,17 @@ export interface ReconTuning {
    */
   targetFrames: number;
   /**
-   * 프레임 가로 픽셀. **0이면 원본 그대로.** Nerfstudio는 COLMAP에 원본을 넘기고,
+   * 프레임 **긴 변** 픽셀. **0이면 원본 그대로.** Nerfstudio는 COLMAP에 원본을 넘기고,
    * COLMAP 4.x도 `FeatureExtraction.max_image_size = -1`이라 줄이지 않는다.
    * 4K가 느리면 여기서 줄인다.
+   *
+   * **가로가 아니라 긴 변인 이유:** 폰은 세로로 찍는다. 가로를 1920으로 고정하면
+   * 세로 영상에서는 1920이 **짧은** 변이라 긴 변이 3414까지 따라 올라간다
+   * (4K 세로 실측 — 픽셀 수가 원본의 79%라 사실상 축소가 아니었다). 3DGS는 스텝마다
+   * 이미지 한 장을 통째로 렌더링하므로 비용이 픽셀 수에 붙는다. 실측으로 학습이
+   * 2.7배 느렸다(17.6 → 6.4 step/s).
    */
-  frameWidth: number;
+  frameLongSide: number;
   /** 3DGS 학습 반복 수 */
   numIters: number;
   /**
@@ -60,7 +66,7 @@ export interface ReconTuning {
  * | 값 | 출처 |
  * |---|---|
  * | `targetFrames 300` | Nerfstudio `ns-process-data video`의 `num_frames_target` |
- * | `frameWidth 0`(원본) | Nerfstudio는 COLMAP에 원본을 넘긴다. COLMAP 4.x의 `max_image_size`도 -1 |
+ * | `frameLongSide 0`(원본) | Nerfstudio는 COLMAP에 원본을 넘긴다. COLMAP 4.x의 `max_image_size`도 -1 |
  * | `numIters 30000` | OpenSplat `--num-iters` |
  * | `useGpu true` | COLMAP `FeatureExtraction.use_gpu` / `FeatureMatching.use_gpu` |
  *
@@ -72,7 +78,7 @@ export interface ReconTuning {
  */
 export const RECON_DEFAULTS: ReconTuning = {
   targetFrames: 300,
-  frameWidth: 0,
+  frameLongSide: 0,
   numIters: 30000,
   useGpu: true,
   openSplatBin: 'opensplat',
@@ -146,6 +152,26 @@ export function sampleFps(targetFrames: number, durationSec: number | null): num
 /** 길이를 못 쟀을 때 쓰는 값. 1~2분 촬영에서 300장 근처가 나온다. */
 export const FALLBACK_SAMPLE_FPS = 3;
 
+/**
+ * 긴 변을 `longSide`로 맞추는 ffmpeg 필터. **0이면 빈 문자열**(필터를 안 붙인다).
+ *
+ * 자르지 않는다. `longSide`×`longSide` 상자 안에 **원본 비율 그대로** 넣고, 나머지 한 변은
+ * 비율대로 따라온다(세로 영상이면 가로가 따라온다).
+ *
+ * - `force_original_aspect_ratio=decrease` — 상자에 맞춰 넣는다. 비율이 유지되는 자리다.
+ * - `min(longSide, iw/ih)` — 상자를 원본보다 크게 잡지 않는다. 이게 없으면 720p가
+ *   1080p로 부풀어 없는 화질을 만들면서 학습 시간만 늘어난다.
+ * - `force_divisible_by=2` — 홀수 변은 인코더가 거부한다. 예전 `-2`가 하던 일이다.
+ *
+ * **회전 메타데이터가 붙은 영상도 안전하다.** ffmpeg는 자동으로 세운 뒤 필터를 태우므로
+ * `iw`/`ih`는 사람이 보는 방향과 같다.
+ */
+export function scaleFilter(longSide: number): string {
+  if (!(longSide > 0)) return '';
+  return `scale=w='min(${longSide},iw)':h='min(${longSide},ih)'`
+    + ':force_original_aspect_ratio=decrease:force_divisible_by=2';
+}
+
 export function reconSteps(
   paths: ReconPaths,
   tuning: ReconTuning = RECON_DEFAULTS,
@@ -159,9 +185,7 @@ export function reconSteps(
   const sparse = path.join(project, 'sparse');
 
   const fps = sampleFps(tuning.targetFrames, durationSec);
-  // scale의 -2는 가로에 맞춰 세로를 짝수로 자동 계산하라는 뜻이다. 홀수면 인코더가 거부한다.
-  const filters = [`fps=${fps}`];
-  if (tuning.frameWidth > 0) filters.push(`scale=${tuning.frameWidth}:-2`);
+  const filters = [`fps=${fps}`, scaleFilter(tuning.frameLongSide)].filter(Boolean);
 
   return [
     {
@@ -298,7 +322,7 @@ export function missingTools(
 }
 
 /** 화면이 실행마다 넘기는 값. 실행 파일 경로는 여기로 안 받는다 — 브라우저가 정할 일이 아니다. */
-export const TUNABLE_BY_REQUEST = ['targetFrames', 'frameWidth', 'numIters'] as const;
+export const TUNABLE_BY_REQUEST = ['targetFrames', 'frameLongSide', 'numIters'] as const;
 
 /**
  * 질의 문자열 → 이 실행에만 쓸 설정. 없는 값은 빼고 돌려주므로 호출부가 기본값 위에 덮으면 된다.
@@ -307,15 +331,15 @@ export const TUNABLE_BY_REQUEST = ['targetFrames', 'frameWidth', 'numIters'] as 
 export function tuningFromParams(params: URLSearchParams): Partial<ReconTuning> {
   const picked: Partial<ReconTuning> = {};
   const map: Record<(typeof TUNABLE_BY_REQUEST)[number], string> = {
-    targetFrames: 'frames', frameWidth: 'frameWidth', numIters: 'iters',
+    targetFrames: 'frames', frameLongSide: 'longSide', numIters: 'iters',
   };
   for (const key of TUNABLE_BY_REQUEST) {
     const raw = params.get(map[key]);
     if (raw === null || raw === '') continue;
     const value = Number(raw);
     // 음수는 조용히 무시한다. 여기서 400을 내면 화면이 빈칸 하나로 못 돌아간다.
-    // frameWidth만 0을 받는다 — 0이 "원본 그대로"라는 뜻이다.
-    const floor = key === 'frameWidth' ? 0 : 1;
+    // frameLongSide만 0을 받는다 — 0이 "원본 그대로"라는 뜻이다.
+    const floor = key === 'frameLongSide' ? 0 : 1;
     if (Number.isFinite(value) && value >= floor) picked[key] = value;
   }
   const gpu = params.get('gpu');
@@ -328,7 +352,7 @@ export function tuningFromEnv(
 ): Partial<ReconTuning> {
   return {
     targetFrames: num(env, 'RECON_FRAMES', RECON_DEFAULTS.targetFrames),
-    frameWidth: num(env, 'RECON_FRAME_WIDTH', RECON_DEFAULTS.frameWidth, 0),
+    frameLongSide: num(env, 'RECON_FRAME_LONG_SIDE', RECON_DEFAULTS.frameLongSide, 0),
     numIters: num(env, 'RECON_ITERS', RECON_DEFAULTS.numIters),
     useGpu: env.RECON_GPU !== '0',
     openSplatBin: env.OPENSPLAT_BIN || RECON_DEFAULTS.openSplatBin,

@@ -1260,7 +1260,7 @@ server.listen(port, () => {
   console.log(
     `  재구성     ${reconTuning.ffmpegBin} → ${reconTuning.colmapBin} → ${reconTuning.openSplatBin}`
     + ` · 상류 기본 ${reconTuning.targetFrames}장`
-    + ` · 가로 ${reconTuning.frameWidth > 0 ? `${reconTuning.frameWidth}px` : '원본'}`
+    + ` · 긴 변 ${reconTuning.frameLongSide > 0 ? `${reconTuning.frameLongSide}px` : '원본'}`
     + ` · 학습 ${reconTuning.numIters}회 (화면에서 실행마다 바꾼다)`,
   );
   // 도구가 없으면 지금 알려준다. 재구성을 걸고 나서 알면 COLMAP을 몇 분 돌린 뒤다.

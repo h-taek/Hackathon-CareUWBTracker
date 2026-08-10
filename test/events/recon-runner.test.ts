@@ -333,7 +333,7 @@ test('실행마다 넘긴 설정이 서버 기본값을 덮고 기록에 남는�
   const recon = attachments.get('evt-1', video.attachmentId)?.recon;
   assert.equal(recon?.tuning?.targetFrames, 120);
   assert.equal(recon?.tuning?.numIters, 300);
-  assert.equal(recon?.tuning?.frameWidth, RECON_DEFAULTS.frameWidth, '안 넘긴 값은 서버 기본값이다');
+  assert.equal(recon?.tuning?.frameLongSide, RECON_DEFAULTS.frameLongSide, '안 넘긴 값은 서버 기본값이다');
 });
 
 test('진행 단계와 지표가 기록에 실린다 — 화면이 이걸로 표시한다', async () => {

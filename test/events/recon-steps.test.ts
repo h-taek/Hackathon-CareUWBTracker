@@ -13,6 +13,7 @@ import {
   probeStep,
   resolveOpenSplatBin,
   sampleFps,
+  scaleFilter,
   framesDir,
   outputPly,
   projectDir,
@@ -46,11 +47,31 @@ test('상류 기본값은 원본 해상도라 scale 필터를 안 건다', () =>
   assert.equal(frames.args.at(-1), path.join(framesDir(paths.workDir), 'f%04d.jpg'));
 });
 
-test('가로를 지정하면 scale 필터가 붙고 세로는 -2로 자동 계산된다', () => {
-  // 홀수 높이는 인코더가 거부한다. 가로만 정하고 세로는 맡기는 게 맞다.
-  const scaled = reconSteps(paths, { ...RECON_DEFAULTS, frameWidth: 1600 }, 60);
+test('긴 변을 지정하면 scale 필터가 붙는다', () => {
+  const scaled = reconSteps(paths, { ...RECON_DEFAULTS, frameLongSide: 1600 }, 60);
   const vf = scaled.find((s) => s.name === 'frames')!.args;
-  assert.match(vf[vf.indexOf('-vf') + 1], /,scale=1600:-2$/);
+  assert.equal(vf[vf.indexOf('-vf') + 1], `fps=5,${scaleFilter(1600)}`);
+});
+
+test('한 변만 고정하지 않는다 — 방향과 무관하게 긴 변을 맞춘다', () => {
+  // `scale=1920:-2`는 **가로**를 고정한다. 세로 영상에서는 1920이 짧은 변이라
+  // 긴 변이 3414로 따라 올라갔다(4K 세로 실측). 축소하려다 4K를 그대로 먹인 자리다.
+  const filter = scaleFilter(1920);
+  assert.match(filter, /force_original_aspect_ratio=decrease/, '상자에 맞춰 넣어야 비율이 산다');
+  assert.match(filter, /min\(1920,iw\)/);
+  assert.match(filter, /min\(1920,ih\)/);
+  // 홀수 변은 인코더가 거부한다. -2를 못 쓰는 대신 이 옵션이 그 일을 한다.
+  assert.match(filter, /force_divisible_by=2/);
+});
+
+test('원본보다 큰 값을 줘도 확대하지 않는다', () => {
+  // min()이 없으면 상자가 원본보다 커져 720p가 1080p로 부풀고, 없는 화질을 만들면서
+  // 학습 시간만 늘어난다.
+  assert.match(scaleFilter(1920), /w='min\(1920,iw\)':h='min\(1920,ih\)'/);
+});
+
+test('긴 변 0이면 필터를 아예 안 붙인다', () => {
+  assert.equal(scaleFilter(0), '');
 });
 
 test('프레임은 영상 전체에 고르게 편다 — 앞부분만 자르지 않는다', () => {
@@ -193,8 +214,8 @@ test('단계마다 사람이 읽는 설명이 붙어 있다', () => {
 // ── 실행마다 받는 설정 (화면에서 넘어온다) ──
 
 test('질의 문자열에서 이번 실행 설정만 골라낸다', () => {
-  const picked = tuningFromParams(new URLSearchParams('frames=120&frameWidth=1200&iters=300'));
-  assert.deepEqual(picked, { targetFrames: 120, frameWidth: 1200, numIters: 300 });
+  const picked = tuningFromParams(new URLSearchParams('frames=120&longSide=1200&iters=300'));
+  assert.deepEqual(picked, { targetFrames: 120, frameLongSide: 1200, numIters: 300 });
 });
 
 test('안 준 값은 아예 빼서 돌려준다 — 호출부가 기본값 위에 덮는다', () => {
@@ -203,13 +224,13 @@ test('안 준 값은 아예 빼서 돌려준다 — 호출부가 기본값 위�
   assert.deepEqual(tuningFromParams(new URLSearchParams('frames=')), {}, '빈칸은 안 준 것과 같다');
 });
 
-test('가로 0은 받는다 — 0이 원본 그대로라는 뜻이다', () => {
-  assert.deepEqual(tuningFromParams(new URLSearchParams('frameWidth=0')), { frameWidth: 0 });
+test('긴 변 0은 받는다 — 0이 원본 그대로라는 뜻이다', () => {
+  assert.deepEqual(tuningFromParams(new URLSearchParams('longSide=0')), { frameLongSide: 0 });
   assert.deepEqual(tuningFromParams(new URLSearchParams('frames=0')), {}, '장수 0은 뜻이 없다');
 });
 
 test('못 읽는 값은 조용히 무시한다 — 빈칸 하나로 화면이 멈추면 안 된다', () => {
-  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=많이&frameWidth=-5&iters=abc')), {});
+  assert.deepEqual(tuningFromParams(new URLSearchParams('frames=많이&longSide=-5&iters=abc')), {});
 });
 
 test('실행 파일 경로는 질의 문자열로 안 받는다', () => {
@@ -310,7 +331,7 @@ test('화면 폼 기본값과 서버 기본값이 같다', () => {
     return m ? Number(m[1]) : null;
   };
   assert.equal(formValue('frames'), RECON_DEFAULTS.targetFrames);
-  assert.equal(formValue('frameWidth'), RECON_DEFAULTS.frameWidth);
+  assert.equal(formValue('longSide'), RECON_DEFAULTS.frameLongSide);
   assert.equal(formValue('iters'), RECON_DEFAULTS.numIters);
   assert.match(html, /id="gpu"[^>]*checked/, 'GPU 기본 켬도 같아야 한다');
 });

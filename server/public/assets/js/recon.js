@@ -257,7 +257,7 @@ function bindFilePicker() {
 
 function tuningQuery() {
   const params = new URLSearchParams({ kind: 'video' });
-  for (const [id, key] of [['frames', 'frames'], ['frameWidth', 'frameWidth'], ['iters', 'iters']]) {
+  for (const [id, key] of [['frames', 'frames'], ['longSide', 'longSide'], ['iters', 'iters']]) {
     const value = $(id).value.trim();
     if (value !== '') params.set(key, value);
   }
