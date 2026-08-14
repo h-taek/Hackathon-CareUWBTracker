@@ -69,3 +69,7 @@ node_modules/
 # 로컬 설정(server/.env). 기기마다 다르므로 커밋하지 않는다 —
 # 형식과 기본값은 커밋된 server/.env.example에 있다
 .env
+
+# 발표자료 빌드 산출물과 로컬 전용 값. 판(v1·v1_1·v2)마다 _out을 둔다 —
+# 판 구성은 docs/plan/outreach/deck/README.md
+docs/plan/outreach/
