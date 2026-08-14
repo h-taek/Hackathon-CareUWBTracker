@@ -1271,7 +1271,7 @@ server.listen(port, () => {
       + ' 영상 업로드와 3D 조회는 그대로 되고, 변환만 자동으로 걸지 않습니다.',
     );
     console.warn(
-      '    조달·빌드는 tools/recon/README.md, 다른 자리에 있으면'
+      '    조달·빌드는 README.md 1.2절, 다른 자리에 있으면'
       + ' FFMPEG_BIN / FFPROBE_BIN / COLMAP_BIN / OPENSPLAT_BIN으로 지정하세요.',
     );
     console.warn(

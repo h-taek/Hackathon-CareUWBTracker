@@ -12,7 +12,12 @@
 # **문서는 루트 README.md와 프로젝트_기획안.md 둘뿐이다.** 폴더별 문서는 넣지 않는다.
 #
 # 사용법:
-#   tools/make-submission.sh [출력경로.zip] [--name <풀었을 때 나올 폴더명>]
+#   tools/make-submission.sh [출력경로.zip] [--name <풀었을 때 나올 폴더명>] [--videos <디렉터리>]
+#
+# `--videos`를 주면 그 디렉터리의 영상을 제출본의 `videos/`로 넣는다. 저장소에는 넣지
+# 않는다 — .gitignore가 `*.mov` `*.mp4`를 막고 있고, 수백 MB짜리를 이력에 남길 이유가
+# 없기 때문이다. 재구성 파이프라인은 프레임을 긴 변 1920px로 줄이므로, 넣는 영상도
+# 같은 기준으로 줄여 두면 재구성 결과가 원본과 같으면서 용량만 내려간다.
 #
 # 기본 출력은 저장소 밖의 `../<기본이름>-submission.zip`이다. 저장소 안에 만들면
 # 다음번 압축에 자기 자신이 딸려 들어간다.
@@ -24,13 +29,19 @@ DEFAULT_NAME="FrameWorkOn-fall-monitoring"
 
 OUT=""
 NAME=""
+VIDEOS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="${2:-}"; shift 2 ;;
+    --videos) VIDEOS="${2:-}"; shift 2 ;;
     -*) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
     *)  OUT="$1"; shift ;;
   esac
 done
+
+if [ -n "$VIDEOS" ] && [ ! -d "$VIDEOS" ]; then
+  echo "영상 디렉터리가 없다: $VIDEOS" >&2; exit 2
+fi
 
 OUT="${OUT:-$ROOT/../$DEFAULT_NAME-submission.zip}"
 
@@ -100,6 +111,16 @@ fs.rmSync(path.join(pkgDir, 'package-lock.json'), { force: true });
 NODE
 node "$STAGE/adjust.cjs" "$PKG"
 
+# 재구성 기능의 입력 표본. 저장소에는 없고 제출본에만 들어간다(위 --videos 설명 참조).
+if [ -n "$VIDEOS" ]; then
+  mkdir -p "$PKG/videos"
+  find "$VIDEOS" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.ply' \) \
+    -exec cp {} "$PKG/videos/" \;
+  count="$(find "$PKG/videos" -type f | wc -l | tr -d ' ')"
+  [ "$count" -gt 0 ] || { echo "영상이 하나도 안 들어갔다: $VIDEOS" >&2; exit 1; }
+  printf '영상:   %s개, %s\n' "$count" "$(du -sh "$PKG/videos" | cut -f1)"
+fi
+
 # 실행에 필요한 것이 실제로 들어갔는지 본다. 하나라도 없으면 받은 사람이 못 띄운다.
 for required in README.md 프로젝트_기획안.md setup.sh server/.env.example package.json server/server.ts server/map.json \
                 server/detection/model-lgbm.json server/public/index.html \
@@ -123,7 +144,9 @@ if find "$PKG/server/public" -name '*.d.ts' -print -quit | grep -q .; then
 fi
 
 rm -f "$OUT"
-( cd "$STAGE" && zip -qr "$OUT" "$NAME" -x '*/.DS_Store' )
+# `-n`은 이미 압축된 형식을 다시 압축하지 않고 그대로 담게 한다. 영상이 들어가면
+# 줄지도 않는 데이터에 압축을 돌리느라 몇 분이 날아간다.
+( cd "$STAGE" && zip -qr -n .mp4:.mov "$OUT" "$NAME" -x '*/.DS_Store' )
 
 printf '압축본: %s\n' "$OUT"
 printf '크기:   %s\n' "$(du -h "$OUT" | cut -f1)"

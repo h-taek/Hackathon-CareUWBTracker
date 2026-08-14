@@ -256,7 +256,7 @@ export function reconSteps(
   ];
 }
 
-/** 빌드 절차가 만드는 자리(tools/recon/README.md). 서버 폴더 기준 상대 경로다. */
+/** 빌드 절차가 만드는 자리(README.md 1.2절). 서버 폴더 기준 상대 경로다. */
 export const BUNDLED_OPENSPLAT = '../tools/recon/OpenSplat/build/opensplat';
 
 /**
