@@ -9,7 +9,7 @@
 # (test/)와 모델 학습 파이프라인(ml/)을 뺀다. 학습이 끝난 모델 자체는 런타임이 읽으므로
 # `server/detection/model-lgbm.json`으로 남는다 — 낙상 판정은 그대로 동작한다.
 #
-# **문서는 루트 README.md와 프로젝트_기획안.md 둘뿐이다.** 폴더별 문서는 넣지 않는다.
+# **문서는 루트 README.md 하나뿐이다.** 폴더별 문서는 넣지 않는다.
 #
 # 사용법:
 #   tools/make-submission.sh [출력경로.zip] [--name <풀었을 때 나올 폴더명>] [--videos <디렉터리>]
@@ -122,7 +122,7 @@ if [ -n "$VIDEOS" ]; then
 fi
 
 # 실행에 필요한 것이 실제로 들어갔는지 본다. 하나라도 없으면 받은 사람이 못 띄운다.
-for required in README.md 프로젝트_기획안.md setup.sh server/.env.example package.json server/server.ts server/map.json \
+for required in README.md setup.sh server/.env.example package.json server/server.ts server/map.json \
                 server/detection/model-lgbm.json server/public/index.html \
                 tools/export-sink.ts; do
   [ -e "$PKG/$required" ] || { echo "빠졌다: $required" >&2; exit 1; }
